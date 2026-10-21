@@ -577,33 +577,161 @@ h5.dc-md-h {
 }
 .dc-jump-btn:hover { border-color: var(--input); color: var(--foreground); }
 
-/* One row of the twelve tracked fields: name, value, evidence.
- *
- * The value column is capped rather than elastic. A formatted figure needs about
- * 20 characters and a phase name about 12, so letting it take a third of a
- * 1500px page would put a 12-character word in a 500px box and push the sentence
- * that evidences it off to the right. The sentence is the part that wants the
- * room, so `1fr` goes there. */
-.dc-field-row {
-  display: grid;
-  grid-template-columns: 132px minmax(0, 22ch) minmax(0, 1fr);
-  gap: 20px; align-items: baseline;
-}
+.dc-jump-btn.is-closed { border-style: dashed; }
 
-/* Below this the three columns are narrower than the content, so they stack —
-   name above value above evidence, which is what the drawer always did and is
-   correct when there is no width to spend. */
-@media (max-width: 1000px) {
-  .dc-field-row { grid-template-columns: 132px minmax(0, 1fr); }
-  .dc-field-row > :last-child { grid-column: 2; }
+/* ---- The project page, rewritten for reading (client review, 2026-10-21) ----
+ *
+ * Sections whose heading opens and closes them; the summary an investor reads
+ * first; the twelve fields as two columns of one-line facts; obstacles one line
+ * each. What each is for is in `app.js`, beside `PAGE_SECTIONS`. */
+.dc-sec { display: grid; gap: 12px; scroll-margin-top: 80px; }
+.dc-sec-title {
+  margin: 0; font-family: var(--font-display); font-size: 21px; font-weight: 500;
+  letter-spacing: -0.01em; line-height: 1.25;
+}
+.dc-sec-count {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 400;
+  color: var(--muted-foreground); margin-left: 9px; letter-spacing: 0;
+}
+.dc-sec-toggle {
+  display: inline-flex; align-items: baseline; gap: 0; padding: 0; border: 0;
+  background: none; cursor: pointer; font: inherit; color: inherit; text-align: left;
+}
+.dc-sec-toggle:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: 6px; }
+.dc-sec-chev {
+  display: inline-block; width: 18px; color: var(--muted-foreground);
+  transform: rotate(90deg); transition: transform var(--duration-fast) var(--ease-swift);
+}
+.dc-sec.is-closed .dc-sec-chev { transform: none; }
+.dc-sec.is-closed { gap: 3px; }
+.dc-sec.is-closed .dc-sec-title { font-size: 17px; color: var(--muted-foreground); }
+.dc-sec-toggle:hover .dc-sec-chev { color: var(--foreground); }
+.dc-sec-hint, .dc-sec-blurb {
+  margin: 0 0 0 18px; font-size: 12.5px; line-height: 18px; color: var(--muted-foreground); max-width: 86ch;
+}
+.dc-sec-blurb { margin-top: -6px; }
+.dc-sec-body { display: grid; gap: 14px; }
+.dc-quiet { color: var(--muted-foreground); }
+
+/* The summary's key figures: six across on a wide page, wrapping as it narrows. */
+.dc-summary { display: grid; gap: 14px; }
+.dc-kfs {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px;
+  background: var(--border); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+}
+.dc-kf { display: grid; align-content: start; gap: 3px; padding: 12px 15px 13px; background: var(--surface); min-width: 0; }
+.dc-kf-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-foreground);
+}
+.dc-kf-zh { margin-left: 6px; text-transform: none; letter-spacing: 0; opacity: .8; }
+.dc-kf-value {
+  font-family: var(--font-display); font-size: 24px; font-weight: 500; line-height: 1.2;
+  letter-spacing: -0.015em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.dc-kf-hint { font-size: 12px; line-height: 17px; color: var(--muted-foreground); }
+.dc-kf-more { justify-self: start; font-size: 12px; }
+
+/* Facts: a name and a value to a line, two columns of them on a wide page. */
+.dc-facts {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px;
+  margin: 0; padding: 4px 20px 8px;
+}
+.dc-facts--summary { padding: 0 2px; }
+.dc-fact {
+  display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: 12px; align-items: baseline;
+  padding: 8px 0; border-top: 1px solid var(--border); min-width: 0;
+}
+.dc-facts > .dc-fact:nth-child(-n+2) { border-top: 0; }
+.dc-fact--wide { grid-column: 1 / -1; }
+.dc-fact > dt { display: grid; gap: 0; font-size: 13px; font-weight: 600; line-height: 18px; min-width: 0; }
+.dc-fact > dd {
+  margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  font-size: 14px; line-height: 21px; min-width: 0; overflow-wrap: anywhere;
+}
+.dc-fact-zh { font-size: 11.5px; font-weight: 400; line-height: 16px; color: var(--muted-foreground); }
+.dc-facts--summary .dc-fact-zh { margin-left: 6px; }
+.dc-facts--summary .dc-fact { grid-template-columns: 176px minmax(0, 1fr); }
+.dc-facts--summary .dc-fact > dt { display: block; }
+.dc-fact-unit { font-weight: 400; color: var(--muted-foreground); }
+.dc-fact-open {
+  padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: inherit; text-align: left;
+}
+.dc-fact-open:hover { text-decoration: underline; text-underline-offset: 3px; }
+.dc-fact-open:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
+.dc-fact.is-picked > dt .dc-fact-open { color: var(--primary); }
+.dc-fact-tier { height: 20px !important; font-size: 11px !important; padding: 0 7px !important; }
+.dc-fact-claims, .dc-fact-note { font-size: 12px; color: var(--muted-foreground); }
+.dc-fact-meta { font-size: 12.5px; color: var(--muted-foreground); }
+
+/* One field's evidence, opened under the grid. */
+.dc-evidence {
+  display: grid; gap: 8px; margin: 0 20px 16px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--muted);
+}
+.dc-evidence-head { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; }
+.dc-evidence-key { font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground); }
+.dc-evidence-why { margin: 0; font-size: 12.5px; line-height: 18px; color: var(--danger); }
+.dc-evidence-quote { margin: 0; font-size: 13.5px; line-height: 20px; max-width: 92ch; white-space: pre-line; }
+.dc-evidence-quote.is-exact { border-left: 2px solid var(--primary); padding-left: 10px; }
+.dc-evidence-src { margin: 0; font-size: 12px; color: var(--muted-foreground); }
+
+/* The delay risk and its reasons. */
+.dc-riskcard {
+  display: grid; gap: 8px; padding: 12px 16px; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--surface);
+}
+.dc-riskcard-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dc-riskcard-note { font-size: 12px; color: var(--muted-foreground); }
+.dc-riskcard-list { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13.5px; line-height: 20px; }
+.dc-riskcard-none { margin: 0; font-size: 13px; color: var(--muted-foreground); }
+
+/* Obstacles, one line each; the sentence opens under its line. */
+.dc-obstacles { display: grid; gap: 8px; }
+.dc-risk-list {
+  list-style: none; margin: 0; padding: 0; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--surface); overflow: hidden;
+}
+.dc-risk-list > li + li { border-top: 1px solid var(--border); }
+.dc-risk-list.is-history { opacity: .85; }
+.dc-risk > summary {
+  display: grid; grid-template-columns: auto 132px minmax(0, 1fr) auto auto; gap: 12px;
+  align-items: baseline; padding: 8px 14px; cursor: pointer; list-style: none;
+}
+.dc-risk > summary::-webkit-details-marker { display: none; }
+.dc-risk > summary:hover { background: color-mix(in oklab, var(--muted) 45%, transparent); }
+.dc-risk > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.dc-risk.is-blocking > summary { box-shadow: inset 3px 0 0 var(--danger); }
+.dc-risk-sev { height: 20px !important; font-size: 11px !important; padding: 0 7px !important; }
+.dc-risk-cat { font-size: 13px; font-weight: 600; }
+.dc-risk-text { font-size: 13.5px; line-height: 20px; min-width: 0; }
+.dc-risk-uncited { font-family: var(--font-mono); font-size: 11px; color: var(--warning); }
+.dc-risk-when { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.dc-risk-body { display: grid; gap: 6px; padding: 0 14px 12px 14px; }
+.dc-risk-quote {
+  margin: 0; font-size: 13.5px; line-height: 20px; padding: 8px 12px; background: var(--muted);
+  border-left: 2px solid var(--primary); border-radius: 0 10px 10px 0; max-width: 96ch;
+}
+.dc-risk-quote.is-missing {
+  background: none; border-left: 0; padding: 0; color: var(--warning); font-family: var(--font-mono); font-size: 12px;
+}
+.dc-risk-meta { margin: 0; font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground); }
+
+@media (max-width: 900px) {
+  .dc-facts { grid-template-columns: minmax(0, 1fr); }
+  .dc-facts > .dc-fact:nth-child(2) { border-top: 1px solid var(--border); }
+  .dc-risk > summary { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .dc-risk-cat { grid-column: 2; }
+  .dc-risk-text { grid-column: 1 / -1; }
+  .dc-risk-uncited, .dc-risk-when { grid-row: 1; grid-column: 3; }
 }
 @media (max-width: 640px) {
-  .dc-field-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-  .dc-field-row > :last-child { grid-column: 1; }
+  .dc-fact { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .dc-facts { padding: 4px 14px 8px; }
+  .dc-kf-value { font-size: 21px; }
 }
 
-/* One milestone: date, what it was, the sentence behind it. Same three-column
-   reasoning as `.dc-field-row` — the evidence is what wants the room. */
+/* One milestone: date, what it was, the sentence behind it. The value column is
+   capped rather than elastic, because the sentence is what wants the room. */
 .dc-milestone-row {
   display: grid;
   grid-template-columns: 104px minmax(0, 40ch) minmax(0, 1fr);

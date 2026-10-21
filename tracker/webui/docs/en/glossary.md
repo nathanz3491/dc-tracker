@@ -20,7 +20,7 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Default** — a value shown because nobody stated one and the field cannot be empty; in practice a phase of *announced*. See [Where a value came from](provenance).
 
-**Delay risk** — on a [company page](companies), how likely a campus is to miss its date, read from evidence on its page: *high* for a passed date with nothing running, two or more slips, or an obstacle that stopped work; *elevated* for one slip, an obstacle that moved the schedule, or a date within a year with no construction reported; otherwise *low*. A reading, not a forecast.
+**Delay risk** — on a [company page](companies) and a [project's page](project-page), how likely a campus is to miss its date, read from evidence on its page: *high* for a passed date with nothing running, two or more slips, or an obstacle that stopped work; *elevated* for one slip, an obstacle that moved the schedule, or a date within a year with no construction reported; otherwise *low*. A reading, not a forecast.
 
 **Derived** — a value looked up or worked out rather than reported: Census geography, compute from megawatts.
 

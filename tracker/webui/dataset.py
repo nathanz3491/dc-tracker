@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from tracker import __version__
 from tracker import delays as delays_mod
+from tracker import parties as parties_mod
 from tracker import required as required_list
 from tracker.confidence import SOURCE_WEIGHTS
 from tracker.dedup import company_key, company_slug, customer_key
@@ -28,6 +29,7 @@ from tracker.export import fetch_projects, iso, to_json_object
 from tracker.gaps import measure as measure_gaps
 from tracker.gaps import worst as worst_gaps
 from tracker.models import IngestUrl
+from tracker.supply import delay_risk, still_to_come
 from tracker.tracks import RISK_TRACK, TRACK_LABELS, TRACK_MILESTONES, TRACKS
 from tracker.upsert import blocker_rationale
 from tracker.vocab import (
@@ -545,6 +547,27 @@ def project_payload(project: Any, *, claims: bool = False, names: Any = None) ->
     # the project page shows them beside the name when they differ.
     payload["company_name"] = names.company(project.company)
     payload["customer_name"] = names.customer(project.customer)
+    # The page's summary (client review, 2026-10-21): how likely the campus is to
+    # miss its date, and every buyer the site names. Both are the readings the
+    # company page and Capex already make — `supply.delay_risk` and
+    # `parties.named_buyers` — so the project page cannot call a campus low risk
+    # while its company's supply table calls it high, or name one buyer where
+    # Capex declined to choose between three.
+    today = delays_mod.as_of()
+    late = delays_mod.suspected_delay(project, today=today)
+    payload["delay_risk"] = delay_risk(project, today=today, suspected=late).as_json()
+    payload["still_to_come"] = still_to_come(project, today=today, suspected=late)
+    # The online date as its source stated it ("Q3 2026"), which the page cannot
+    # rebuild from a stored first-of-the-period day without guessing the period.
+    payload["expected_online_stated"] = (
+        delays_mod.stated(project.expected_online, project.expected_online_precision)
+        if project.expected_online is not None
+        else None
+    )
+    payload["buyers"] = [
+        {"name": names.customer(party.name), "slug": company_slug(customer_key(party.name))}
+        for party in parties_mod.named_buyers(project.parties)
+    ]
     _split_serving(payload)
     return payload
 
@@ -624,8 +647,9 @@ __all__ = ["build"]
 #: Measured by reading every consumer, not by guessing: `events` is the project
 #: page's timeline, `blocks`/`sections`/`serving`/`accounting` are its tranche
 #: tab, `parties` its who-is-involved card, `basis` has no reader in the browser
-#: at all (only `tracker/tui/data.py`), and `blocker_rationale` is the sentence
-#: under the obstacle on the page. All of them arrive with `/api/project`.
+#: at all (only `tracker/tui/data.py`), `blocker_rationale` is the sentence
+#: under the obstacle on the page, and `delay_risk`, `buyers`, `still_to_come`
+#: and `expected_online_stated` are the page's summary. All of them arrive with `/api/project`.
 #:
 #: `notes` is the project's audit log — every duplicate warning and derivation
 #: the write path explained — and nothing in the browser reads it. It was the
@@ -646,6 +670,10 @@ LIST_OMITS: tuple[str, ...] = (
     "blocker_rationale",
     "claims_by_field",
     "notes",
+    "delay_risk",
+    "buyers",
+    "still_to_come",
+    "expected_online_stated",
 )
 
 #: The four fields the table's obstacle filters and the map's markers read. The

@@ -31,7 +31,7 @@ Hover any value to see the sentence behind it. The value's style tells you how f
 
 ## 5. One campus, in full — the project page
 
-Click a row to open [its page](project-page): the headline figures, who is involved, all twelve tracked fields with their sources, how the campus is split into buildings or phases, open obstacles, every citation, and a timeline of milestones.
+Click a row to open [its page](project-page): a summary of the figures an investor reads first — capacity, what is still to come and when, delay risk, investment, buyers — then how the campus is split into buildings or phases, who is involved, obstacles, all twelve tracked fields with their sources, and, one click away, a timeline of milestones and every citation.
 
 Click the operator's name for its [company page](companies): its megawatts by stage, the next three years of its supply, and any large campus in that supply that could slip.
 

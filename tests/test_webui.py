@@ -5377,3 +5377,31 @@ def test_the_projects_table_fits_the_page_and_pins_its_header():
     assert "position: sticky" in header and "var(--dc-header-h" in header
     assert 'containerClassName=${fit ? "dc-fit" : ""}' in app
     assert 'className=${fit ? "dc-fit-table" : ""}' in app
+
+
+def test_the_project_page_reads_in_an_investors_order():
+    """Client review, 2026-10-21: the page was eight modules in the order they were
+    built, "very long", with twelve narrow fields taking a screen and a half. It now
+    opens with the summary, then capacity, parties and delay risk, then the evidence,
+    and the history, comparisons and citations start closed. The twelve fields are
+    two columns of one-line facts rather than three-column rows."""
+    app = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+    css = (assets.STATIC_ROOT / "app.css").read_text(encoding="utf-8")
+    block = re.search(r"const PAGE_SECTIONS = \[(.*?)\n\];", app, re.S)
+    assert block, "PAGE_SECTIONS is gone from app.js"
+    ids = re.findall(r'id: "([a-z]+)"', block.group(1))
+    assert ids == [
+        "summary",
+        "tranches",
+        "parties",
+        "risk",
+        "fields",
+        "progress",
+        "context",
+        "citations",
+    ]
+    closed = set(re.findall(r'\{ id: "([a-z]+)"[^}]*closed: true', block.group(1)))
+    assert closed == {"progress", "context", "citations"}
+    assert "dc-field-row" not in app and ".dc-field-row" not in css
+    facts = re.search(r"\.dc-facts\s*\{([^}]*)\}", css)
+    assert facts and "repeat(2, minmax(0, 1fr))" in facts.group(1)

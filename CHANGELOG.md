@@ -12,6 +12,41 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A project's page is rewritten for reading: a summary first, sections in an
+  investor's order, the low-value ones closed** (`tracker/webui/static/app.js`,
+  `tracker/webui/static/app.css`, `tracker/webui/dataset.py`, `tracker/supply.py`,
+  reader docs *A project's page*, *Company pages*, *Release notes*, *Tour*, *Numbers and
+  dates*, *Glossary*). The client's review of 2026-10-21 found the page "very long, with
+  many modules" and asked which of it matters for investment and how to show it; it also
+  found the twelve fields "tabulated", narrow values taking tall rows, and the page loose
+  and hard to read (batch 3 of the plan). The page now opens with **six figures** —
+  planned, running, still to come and when, expected online, delay risk with its first
+  reason, and investment with its cost per planned MW — then the buyers (all of them;
+  several named means Capex credits none), operator, utility, what to watch for, the
+  biggest obstacle and how well the row is sourced. Each figure answers a hover with
+  its sentence, as the table does. Below it: capacity by tranche (the first twelve
+  sections, then *show N more*), who is involved, **delay risk and obstacles** (every
+  reason, then the obstacles **one line each**, the sentence when a line is opened,
+  resolved ones folded away, and the model's inferred analysis), and **fields and
+  evidence** — the twelve fields as **two columns of one-line facts**, named in English
+  and Chinese with their tier; opening a field shows its sentence, its source, its
+  stored name and every rival claim with why one was kept. *Progress and timeline*, *In
+  context* and *Citations* start closed; a heading opens or closes its section and the
+  page remembers the choice in the browser, while a jump from the section bar opens a
+  closed one for that visit only. Measured at 1,456 px on a copy of production, the page
+  is 60–66% shorter: Abilene 12,228 → 4,190 px, Hyperion 10,788 → 4,026, NTT Gainesville
+  7,917 → 3,134, Englewood 6,224 → 2,486. The summary decides nothing in the browser:
+  `dataset.project_payload` now carries the campus's delay risk (`supply.delay_risk`),
+  its buyers (`parties.named_buyers`), what is still to come and when
+  (`supply.still_to_come`, the company page's supply reading for one campus: its own
+  date while the period is open, overdue when it is a suspected delay, else the next
+  tranche's year) and its online date as the source stated it, so the project page
+  cannot call a campus low risk while its company's supply table calls it high —
+  `tests/test_surfaces_agree.py` holds them together, and `tests/test_webui.py` pins the
+  section order and which sections start closed. The order is our reading of what an
+  investor looks at first, held in one list (`PAGE_SECTIONS`) so the client's review can
+  move it.
+
 - **The release notes end with this changelog, by month and week, loaded as it is
   read** (`tracker/webui/docsite.py`, `tracker/webui/server.py`,
   `tracker/webui/static/docs/docs.js`, `tracker/webui/static/docs/markdown.js`,

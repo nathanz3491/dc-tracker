@@ -199,3 +199,29 @@ def test_a_late_campus_reads_late_everywhere(fleet):
     assert row["suspected_delay"] == page["suspected_delay"]
     meta = company.profile(fleet, "meta")
     assert late.id in meta["suspected_delays"]["project_ids"]
+
+
+def test_a_project_pages_summary_reads_the_campus_as_its_company_page_does(fleet):
+    """The summary's delay risk and still-to-come are the company page's supply row.
+
+    Client review, 2026-10-21: the project page now opens with both, and a campus
+    that read high risk on its company's page and low on its own would be the
+    disagreement Batch 1 was about, moved to a new place.
+    """
+    late = next(p for p in _projects(fleet) if p.name == "Late Campus")
+    page = dataset.project_payload(late)
+    rows = {row["id"]: row for row in company.profile(fleet, "meta")["supply"]["campuses"]}
+    assert page["delay_risk"] == rows[late.id]["risk"]
+    assert page["delay_risk"]["level"] == "high"
+    assert page["still_to_come"]["mw"] == rows[late.id]["mw"] == 400.0
+    assert page["still_to_come"]["overdue"] is rows[late.id]["overdue"] is True
+    stated = page["suspected_delay"]["stated"]
+    assert page["still_to_come"]["when"] == page["expected_online_stated"] == stated
+
+
+def test_a_campus_naming_several_buyers_lists_every_one_on_its_page(fleet):
+    """The summary names them all, as Capex declines to choose between them."""
+    frontier = next(p for p in _projects(fleet) if p.name == "Frontier")
+    page = dataset.project_payload(frontier)
+    assert sorted(b["name"] for b in page["buyers"]) == ["OpenAI", "Oracle"]
+    assert all(b["slug"] for b in page["buyers"])

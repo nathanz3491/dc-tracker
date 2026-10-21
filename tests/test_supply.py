@@ -195,6 +195,27 @@ def test_a_large_campus_at_risk_is_called_out_by_its_share():
     assert got["high_risk_mw"] == 400.0
 
 
+def test_still_to_come_is_planned_less_running_with_the_supply_tables_year():
+    """The project page's summary reads one campus the way the supply table does."""
+    due = _campus(1, expected=dt.date(2027, 7, 1), precision="half", built=100.0)
+    due.mw_planned = 400.0
+    assert supply.still_to_come(due, today=TODAY) == {
+        "mw": 300.0,
+        "year": 2027,
+        "overdue": False,
+        "when": "H2 2027",
+        "from": "campus",
+    }
+    late = _campus(2, expected=dt.date(2025, 7, 1), precision="quarter")
+    late.mw_planned = 600.0
+    got = supply.still_to_come(late, today=TODAY)
+    assert (got["year"], got["overdue"], got["when"]) == (2026, True, "Q3 2025")
+    done = _campus(3, phase="operational", expected=dt.date(2024, 1, 1), built=50.0)
+    done.mw_planned = 50.0
+    assert supply.still_to_come(done, today=TODAY)["mw"] == 0.0
+    assert supply.still_to_come(_campus(4), today=TODAY) is None  # no planned figure
+
+
 def test_a_passed_date_with_a_tranche_still_to_come_is_that_tranches_year_not_overdue():
     """Overdue means a suspected delay and nothing else, so the two lists agree."""
     tranche = SimpleNamespace(

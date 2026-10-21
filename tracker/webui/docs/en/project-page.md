@@ -2,7 +2,11 @@
 
 Every campus has its own page at `/projects/<number>`, opened from any row of [Projects](projects), a card on [Updates](updates) or [Monitor](monitor), a [company page](companies) or the [Map](map). It holds everything the tracker knows about the campus and what each piece rests on.
 
-**← every project** goes back to the table. A sticky bar of links jumps between the sections: Figures, Who is involved, The twelve fields, In context, Tranches, Obstacles, Citations, Timeline. Sections with nothing in them are left out.
+The page reads in an investor's order: what the campus is and when it delivers first, then how its capacity splits, who is involved and what could make it late, then the evidence behind every value, and last the history, the comparisons and the citations.
+
+**← every project** goes back to the table. A sticky bar of links jumps between the sections: Summary, Capacity by tranche, Who is involved, Delay risk, Fields and evidence, Progress and timeline, In context, Citations. Sections with nothing in them are left out.
+
+**Progress and timeline**, **In context** and **Citations** start closed. Click a section's heading to open or close it; the page remembers that choice in your browser, for every campus. Jumping to a closed section from the bar opens it for that visit only.
 
 ## The header
 
@@ -10,24 +14,43 @@ Every campus has its own page at `/projects/<number>`, opened from any row of [P
 - The operator, linked to its [company page](companies), and **for** the buyer when that is a different company. Each is shown under the company's one name, the same on every page; when the campus's sources spell it differently, their spelling follows in small type — *filed as “Amazon Web Services”* — so the header can be matched against the citations.
 - Where it is, and the regional grid operator area where known.
 - Its phase, its **confidence** (0–3; see [Confidence](confidence)) and how many obstacles are open — click that to jump to them.
-- **Suspected delay**, in amber, when the campus's own online date has passed and nothing reported since says it is running — for example *Suspected delay — expected online Q3 2025, passed 385 days ago, no news of going live*. The date is shown as the source stated it, and the days count from the end of the period it names. Hover it for the reason in one sentence; [Numbers and dates](numbers-and-dates) gives the full rule.
+- **suspected delay · N days past its date**, in amber, when the campus's own online date has passed and nothing reported since says it is running. Hover it for the reason in one sentence; the summary below gives the date, and [Numbers and dates](numbers-and-dates) the full rule.
 
-## The figures
+## Summary
 
-Five cards: planned capacity, capacity in service, compute, announced investment and open obstacles.
+Six figures across the top. Hover over a figure, or tap it, for the sentence it rests on.
 
-The capacity cards name the **kind** of megawatt the source gave: *IT capacity* (the computing load), *Facility power* (the whole site's draw) or *Generator rating*; plain *Capacity* when the source did not say. See [Numbers and dates](numbers-and-dates). **Compute** is the capacity restated as NVIDIA H200 accelerators; it is worked out from the megawatts unless a source states a chip count.
+- **Planned** and **Running** — the campus's capacity at full build and what a source says is in service, with the value's [tier](tiers) and, when the source said which kind of megawatt it measured, *facility power* or *generator rating* (see [Numbers and dates](numbers-and-dates)). Running also says what share of planned it is.
+- **Still to come** — planned less running: arithmetic on the two, not a cited figure. Under it, when the rest is due, read the way a [company page](companies)'s *Supply* reads it: the campus's own date while the period it names is open; *its date has passed*, in amber, when the campus is a suspected delay; otherwise the next tranche still to come.
+- **Expected online** — as the source stated it (*Q3 2026*, *2027*). In amber when the campus is a suspected delay, with how long ago the date passed.
+- **Delay risk** — *High*, *Elevated* or *Low*, with the first reason; **+N more reasons** jumps to the Delay risk section, which lists them all.
+- **Investment** — the announced figure for this site, and the cost per planned megawatt it implies (derived).
+
+Under the figures, one line each:
+
+- **Buyer** — every company a source names as buying the campus's capacity. When there are several, the line says so: [Capex](capex) then credits none of them rather than choosing.
+- **Operator**, linked to its company page.
+- **Power** — the utility a source confirms, and the grid operator area.
+- **Watch for** — the next milestone that would show the campus moving.
+- **Biggest obstacle** — the most serious open obstacle, and how many are open; click the count to jump to them.
+- **Evidence** — the row's confidence, how many sources it rests on and the date of the newest, and how many of the twelve fields are filled.
 
 ### AI overview
 
-**✦ AI overview** is a short written reading of the campus — where the build stands, what would move it, how far to trust the row — written by a language model from the values on this page. It starts on its own and appears as it is written; **Rewrite** asks again.
-
-### Inferred analysis
-
-**◈ Inferred analysis** asks a model what could obstruct the campus and what news would show it is still moving. It runs only when you press **Run analysis**. Each answer has a five-step meter of the model's confidence.
+**✦ AI overview**, under the summary, is a short written reading of the campus — where the build stands, what would move it, how far to trust the row — written by a language model from the values on this page. It starts on its own and appears as it is written; **Rewrite** asks again.
 
 > [!WARNING]
-> Both panels are a model's reading, not evidence. Nothing they say is stored, nothing they say changes any value, and they can be wrong. Each one costs money to run, so they are switched on per account. When they are off, the panel says why: switched off on this console, or not switched on for your account — in which case an administrator can turn them on.
+> The AI overview and the inferred analysis (under Delay risk) are a model's reading, not evidence. Nothing they say is stored, nothing they say changes any value, and they can be wrong. Each one costs money to run, so they are switched on per account. When they are off, the panel says why: switched off on this console, or not switched on for your account — in which case an administrator can turn them on.
+
+## Capacity by tranche
+
+Many campuses are built in pieces: buildings, phases, halls. Each is a **tranche** with its own capacity, state, tenant and date.
+
+- The headline says how many megawatts are delivering out of the campus total, across how many tranches. It is the campus's running figure — the same number as *Running* in the summary — because sources often describe a campus once as a whole and again building by building, and adding up every tranche marked live would count the same megawatts twice. When the tranches add up to more than the campus, a line under the bar says so, with both figures. A campus with no running figure counts its cited live tranches instead, never past the campus total, so the headline can read 0 even when buildings are running.
+- A bar shows the tranches by state.
+- The table lists each section of the campus — its name, megawatts, state, customer and online date, with notes such as *also called…*, *was due* or *two sources confirm A and B — two figures, not one* — the first twelve, then **show N more**. *Was due*, in amber, marks a tranche whose whole stated period is over with nothing saying it runs; a paused or cancelled tranche is never marked, and neither is one dated "2026" before 2026 has ended.
+- The reconciliation rows account for every megawatt of the campus: cited per tranche, not yet itemised, stated but unconfirmed, not tied to a named building, out of scale, counted twice over. Capacity that is not counted in the total gets its own line rather than vanishing.
+- **Power serving this campus** lists the utility's plant — substations, gas or solar generation — which is never added to the campus's own figures.
 
 ## Who is involved
 
@@ -36,39 +59,40 @@ The companies named in connection with the campus, one line per role — operato
 - A **dashed outline** means no source stated the role outright: it is inferred from the operator or buyer column. An **amber** name was offered with a sentence that would not support the role (**待确认**, with the reason).
 - **new** marks a company first named by one of the campus's sources in the last 30 days. They are listed again at the top, under **Newly mentioned**, with the date.
 
-## The twelve fields
+## Delay risk and obstacles
 
-All twelve tracked fields, each with its value, its label, and the sentence it rests on. Each field is named in English and in Chinese, with its unit, and its internal name (for example `mw_planned`) in small type beneath; the [Field dictionary](fields) explains each one.
+The delay risk first — the level and every reason for it, each something you can check on this page. It is the same reading the company page's *Supply* gives the campus; see [Company pages](companies) for what each level rests on. A campus that is running is read the same way while it still has capacity to deliver; once nothing is left to deliver, or when it is paused or cancelled, the risk is low.
 
-- **not this site's figure** marks a number that was found to belong to something larger, such as a company's whole programme.
-- **excerpt, not this field's sentence** means the source's excerpt is shown because no sentence was recorded for this field specifically.
-- The biggest-obstacle row says why that obstacle was chosen; when two were equally serious it says the choice was arbitrary.
+Then the obstacles, one line each: how serious, what kind, what it is, and when it was first seen (and resolved). *uncited* marks a summary nobody could quote. Click a line to open the sentence it rests on, its status, the progress track it holds up and what would show it clearing. Open obstacles come first, the most serious first, twelve at a time; resolved ones are behind **N resolved or set aside**.
 
-**N other claims** opens what the other sources said about the field: each value, which one was **kept**, why, and a link to each source with its type and weight. When sources disagree, this is where you see it.
+**◈ Inferred analysis** asks a model what could obstruct the campus and what news would show it is still moving. It runs only when you press **Run analysis**. Each answer has a five-step meter of the model's confidence.
 
-## In context
+## Fields and evidence
 
-How this campus compares: its share of what is tracked in its state and overall, investment per megawatt (against a typical band of about $8–15 million per MW), compute, and how much of its capacity is broken down into buildings or phases.
+The twelve tracked fields in two columns, one line each: the field's name in English and Chinese with its unit, the value, and its [tier](tiers) — *quoted*, *derived*, *待确认*, *inferred*, *default*. The [Field dictionary](fields) explains each field.
+
+- Hover over a value, or tap it, for the sentence it rests on.
+- **not this site's figure** marks a number found to belong to something larger, such as a company's whole programme.
+- **disputed** means the quoted claims say a different value from the one stored, or none supports it.
+- **N claims** — more than one source gave a value.
+
+Click a field's name to open its evidence under the grid: the sentence and the site it is from, why a 待确认 value is unconfirmed, the field's internal name (for example `mw_planned`), and every claim the sources made about it — each value, which one was **kept**, why, and a link to each source with its type and weight. For the biggest obstacle it also says why that obstacle was chosen; when two were equally serious it says the choice was arbitrary.
+
+## Progress and timeline
+
+Starts closed.
 
 **Five independent tracks** shows where the campus stands on each progress track — site control, permits, power, construction, customer & finance — what it is waiting for next, and any obstacle holding a track up. See [Phases and progress](progress).
 
-## Tranches
+The timeline is a chart of the milestones reached on each track along one time axis, with a dashed line for today and one for the expected online date. A filled dot is cited, a hollow one implied by a later milestone, an amber one reported but not cited. **Every milestone, with what it rests on** lists them by track. When sources give different dates for one milestone, it says so and shows the earliest, choosing neither. **show every recorded event** lists the raw events, including expected ones, marked *expected, not reported done*.
 
-Many campuses are built in pieces: buildings, phases, halls. Each is a **tranche** with its own capacity, state, tenant and date.
+## In context
 
-- The headline says how many megawatts are delivering out of the campus total, across how many tranches. It is the campus's running figure — the same number as the *capacity in service* card above — because sources often describe a campus once as a whole and again building by building, and adding up every tranche marked live would count the same megawatts twice. When the tranches add up to more than the campus — the whole site and its buildings listed as separate tranches, or one building under two names — a line under the bar says so, with both figures. A campus with no running figure counts its cited live tranches instead, never past the campus total, so the headline can read 0 even when buildings are running.
-- A bar shows the tranches by state.
-- The table lists each tranche: its name, megawatts, state, customer and online date, with notes such as *also called…*, *was due* or *two sources confirm A and B — two figures, not one*. *Was due*, in amber, marks a tranche whose whole stated period is over with nothing saying it runs; a paused or cancelled tranche is never marked, and neither is one dated "2026" before 2026 has ended.
-- The reconciliation rows account for every megawatt of the campus: cited per tranche, not yet itemised, stated but unconfirmed, not tied to a named building, out of scale, counted twice over. Capacity that is not counted in the total gets its own line rather than vanishing.
-- **Power serving this campus** lists the utility's plant — substations, gas or solar generation — which is never added to the campus's own figures.
-
-## Obstacles
-
-Open obstacles first, up to twelve at a time (**show N more** for the rest). Each shows its kind, severity and status, when it was first seen and resolved, a summary, the sentence it rests on — or *uncited* when the summary is a paraphrase nobody could quote — and which track it holds up and what would show it clearing.
+Starts closed. How this campus compares: its share of what is tracked in its state and overall, investment per megawatt (against a typical band of about $8–15 million per MW), compute — the capacity restated as NVIDIA H200 accelerators — and how much of its capacity is broken down into buildings or phases. Every figure here is worked out from two stored values and labelled as derived.
 
 ## Citations
 
-The first five sources, then **View all N citations →**, which opens `/projects/<number>/sources` with every one.
+Starts closed. The first five sources, then **View all N citations →**, which opens `/projects/<number>/sources` with every one.
 
 Each citation shows:
 
@@ -79,12 +103,6 @@ Each citation shows:
 - *reference data* for a lookup such as Census geography, which corroborates nothing.
 
 To read an article with its quoted sentences highlighted, use [Sources](sources).
-
-## Timeline
-
-A chart of the milestones reached on each of the five tracks along one time axis, with a dashed line for today and one for the expected online date. A filled dot is cited, a hollow one implied by a later milestone, an amber one reported but not cited.
-
-**Every milestone, with what it rests on** lists them by track. When sources give different dates for one milestone, it says so and shows the earliest, choosing neither. **show every recorded event** lists the raw events, including expected ones, marked *expected, not reported done*.
 
 ## A number that is not there
 

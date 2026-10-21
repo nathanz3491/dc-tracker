@@ -1452,44 +1452,98 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
 
 //: The page's sections, in reading order, for the jump nav.
 //:
-//: Identity, then the numbers, then what is wrong — an analyst's first three
-//: questions in that order. `when` decides whether a section exists at all: an
-//: empty "Tranches" heading on the 88% of the database with no blocks would read
-//: as "this campus has one tranche", which is the opposite of what a missing
-//: backfill means.
+//: An investor's order, not the order the modules were built in (client review,
+//: 2026-10-21, which found the page "very long, with many modules" and asked
+//: which parts matter for investment). What the campus is and when it delivers —
+//: the summary — then how its capacity splits, who is buying and building, and
+//: what could make it late; then the evidence behind every value; and last the
+//: history, the comparisons and the citations, which start closed. A reader who
+//: opens one keeps it open on every project (`useSections`).
+//:
+//: `when` decides whether a section exists at all: an empty "Tranches" heading on
+//: the 88% of the database with no blocks would read as "this campus has one
+//: tranche", which is the opposite of what a missing backfill means.
 const PAGE_SECTIONS = [
-  { id: "figures", label: "Figures", when: () => true },
-  { id: "parties", label: "Who is involved", when: (p) => (p.parties || []).length > 0 },
-  { id: "fields", label: "The twelve fields", when: () => true },
-  { id: "context", label: "In context", when: () => true },
-  { id: "tranches", label: "Tranches",
+  { id: "summary", label: "Summary", when: () => true, fixed: true },
+  { id: "tranches", label: "Capacity by tranche",
     when: (p) => (p.blocks || []).length || (p.serving || []).length },
-  { id: "obstacles", label: "Obstacles", when: (p) => (p.risks || []).length > 0 },
-  { id: "citations", label: "Citations", when: (p) => (p.sources || []).length > 0 },
-  { id: "timeline", label: "Timeline", when: () => true },
+  { id: "parties", label: "Who is involved", when: (p) => (p.parties || []).length > 0 },
+  { id: "risk", label: "Delay risk", when: () => true },
+  { id: "fields", label: "Fields and evidence", when: () => true },
+  { id: "progress", label: "Progress and timeline", when: () => true, closed: true },
+  { id: "context", label: "In context", when: (p) => p.mw_planned != null, closed: true },
+  { id: "citations", label: "Citations", when: (p) => (p.sources || []).length > 0, closed: true },
 ];
 
 function scrollToSection(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+/* Which sections are open, and the reader's own choices kept across projects.
+ *
+ * A section a reader opens or closes stays that way on the next campus, in this
+ * browser only. Only the sections actually toggled are stored, so a default
+ * changed later still reaches everyone who never touched that one. A jump from the
+ * nav opens a closed section for this visit without storing anything: following a
+ * link is not a preference. Storage that throws (a private window, blocked site
+ * data) leaves the defaults. */
+const SECTIONS_KEY = "dc.project.sections";
+
+function storedSectionChoices() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SECTIONS_KEY) || "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function useSections(projectId) {
+  const [choices, setChoices] = useState(storedSectionChoices);
+  const [visiting, setVisiting] = useState(() => new Set());
+  // A jump opened a section on one campus; the next campus starts from the choices.
+  useEffect(() => { setVisiting(new Set()); }, [projectId]);
+  const isOpen = useCallback(
+    (s) => s.fixed || visiting.has(s.id) || (s.id in choices ? !!choices[s.id] : !s.closed),
+    [choices, visiting]);
+  const toggle = useCallback((id, open) => {
+    setVisiting((current) => { const next = new Set(current); next.delete(id); return next; });
+    setChoices((current) => {
+      const next = { ...current, [id]: open };
+      try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(next)); } catch { /* defaults stand */ }
+      return next;
+    });
+  }, []);
+  const visit = useCallback((id) => {
+    setVisiting((current) => (current.has(id) ? current : new Set(current).add(id)));
+    // After the section has rendered open, or there is nothing yet to scroll to.
+    requestAnimationFrame(() => scrollToSection(id));
+  }, []);
+  return { isOpen, toggle, visit };
+}
+
 /* One section: a heading the jump nav can reach, and its content.
  *
  * The heading carries its count where there is one, so a reader deciding whether
- * to scroll does not have to scroll to find out. */
-function Section({ id, title, count, blurb, children }) {
+ * to open or scroll does not have to do either to find out. A section that can
+ * close has its heading as the button (the accordion pattern: the button inside
+ * the heading, so the outline stays a list of headings), and a closed section
+ * renders nothing below it — the timeline is not drawn for a reader who never
+ * opens it. */
+function Section({ id, title, count, blurb, hint, open = true, onToggle = null, children }) {
+  const label = html`${title}${count != null && html`<span class="dc-sec-count dc-num">${count}</span>`}`;
   return html`
-    <section id=${id} style=${{ display: "grid", gap: 12, scrollMarginTop: 80 }}>
-      <div style=${{ display: "grid", gap: 3 }}>
-        <h2 style=${{ margin: 0, fontFamily: "var(--font-display)", fontSize: 21, fontWeight: 500,
-                      letterSpacing: "-0.01em" }}>
-          ${title}${count != null && html`<span class="dc-num" style=${{ fontSize: 13,
-              fontWeight: 400, color: "var(--muted-foreground)", marginLeft: 9 }}>${count}</span>`}
-        </h2>
-        ${blurb && html`<p style=${{ margin: 0, fontSize: 12.5, lineHeight: "18px",
-                                     color: "var(--muted-foreground)", maxWidth: "86ch" }}>${blurb}</p>`}
-      </div>
-      ${children}
+    <section id=${id} class=${`dc-sec${open ? "" : " is-closed"}`}>
+      <h2 class="dc-sec-title">
+        ${onToggle
+          ? html`<button type="button" class="dc-sec-toggle" aria-expanded=${open}
+                         aria-controls=${`${id}-body`} onClick=${() => onToggle(!open)}>
+                   <span class="dc-sec-chev" aria-hidden="true">›</span>${label}</button>`
+          : label}
+      </h2>
+      ${!open && hint && html`<p class="dc-sec-hint">${hint}</p>`}
+      ${open && blurb && html`<p class="dc-sec-blurb">${blurb}</p>`}
+      ${open && html`<div id=${`${id}-body`} class="dc-sec-body">${children}</div>`}
     </section>`;
 }
 
@@ -1514,6 +1568,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
    * this page is where somebody goes to *check* a figure. */
   const [state, setState] = useState({ loading: true, project: null, error: null });
   const [quote, showQuote] = useQuote();
+  const sectionsState = useSections(id);
 
   useEffect(() => {
     let cancelled = false;
@@ -1565,10 +1620,17 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
   const open = (p.risks || []).filter((r) => r.status === "open");
   const populated = TRACKED.filter((k) => p[k] != null).length;
   const sections = PAGE_SECTIONS.filter((s) => s.when(p));
-  const has = (key) => sections.some((s) => s.id === key);
+  const { isOpen, toggle, visit } = sectionsState;
+  // Everything one section needs to be drawn: whether it exists, whether it is open,
+  // and the button that opens or closes it.
+  const at = (key) => {
+    const s = sections.find((x) => x.id === key);
+    return s ? { open: isOpen(s), onToggle: s.fixed ? null : (v) => toggle(key, v) } : null;
+  };
+  const risk = p.delay_risk || { level: "low", reasons: [] };
 
   return html`
-    <div class="dc-view dc-rise" style=${{ display: "grid", gap: 24, padding: "22px 26px 72px" }}>
+    <div class="dc-view dc-rise dc-project" style=${{ display: "grid", gap: 22, padding: "22px 26px 72px" }}>
       ${back}
 
       ${/* Identity first. A real heading rather than a dialog label: this is a
@@ -1605,73 +1667,91 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
           <span style=${chip(p.confidence >= 3 ? "--success" : p.confidence === 2 ? "--chart-1" : "--warning")}
                 title="How much to trust this row without going and checking it yourself. 3 needs two independent sources, or a person signing it off.">
             confidence ${p.confidence}</span>
-          <${DelayChip} delay=${p.suspected_delay} />
+          ${p.suspected_delay && html`
+            <span style=${chip("--warning")} title=${p.suspected_delay.reason}>
+              suspected delay · ${daysText(p.suspected_delay.days_late)} past its date</span>`}
           ${open.length > 0 && html`
             <button type="button" style=${{ ...chip(open.some((r) => r.severity === "blocking")
                       ? "--danger" : "--warning"), cursor: "pointer", border: "none" }}
-                    onClick=${() => scrollToSection("obstacles")}
+                    onClick=${() => visit("risk")}
                     title="jump to the obstacles">
               ${open.length} open obstacle${open.length === 1 ? "" : "s"}</button>`}
         </div>
       </header>
 
-      ${/* Sticky jump nav. The page is long by design — the whole point of
-            leaving the drawer was to stop hiding sections behind tabs — and a
-            long page needs a way to skip, not a way to hide. */ ""}
+      ${/* Sticky jump nav. A closed section opens when it is jumped to — for this
+            visit, without becoming the reader's stored choice. */ ""}
       <nav class="dc-jump" aria-label="Sections of this project">
         ${sections.map((s) => html`
-          <button key=${s.id} type="button" class="dc-jump-btn"
-                  onClick=${() => scrollToSection(s.id)}>${s.label}</button>`)}
+          <button key=${s.id} type="button" class=${`dc-jump-btn${isOpen(s) ? "" : " is-closed"}`}
+                  onClick=${() => visit(s.id)}>${s.label}</button>`)}
       </nav>
 
-      <${Section} id="figures" title="The figures"
-        blurb="Capacity, money and compute, each with what it rests on. A marked capacity is not the kind of megawatt the column is defined as, so it is not comparable with the unmarked ones.">
-        <${StatsTab} data=${data} p=${p} populated=${populated} open=${open}
-          onQuote=${showQuote} onTab=${() => scrollToSection("obstacles")}
-          claims=${p.claims_by_field} allowAi=${data.allow_ai} aiOff=${data.ai_off} />
+      <${Section} id="summary" title="Summary" ...${at("summary")}>
+        <${ProjectSummary} p=${p} data=${data} onQuote=${showQuote} onOpenCompany=${onOpenCompany}
+          onJump=${visit} populated=${populated} open=${open} />
+        ${/* The model's reading, under the figures it is a reading *of*: a
+              reader meets the evidence first and the paraphrase after. */ ""}
+        <${InsightPanel} project=${p} allowAi=${data.allow_ai} aiOff=${data.ai_off} />
       <//>
 
-      ${has("parties") && html`
-        <${Section} id="parties" title="Who is involved" count=${(p.parties || []).length}
-          blurb="One site usually has several companies attached — one builds it, one owns it, one occupies it, one sells it power. Each role is only as good as the sentence behind it.">
-          <${PartyList} p=${p} />
-        <//>`}
-
-      <${Section} id="fields" title="The twelve tracked fields" count=${`${populated} of 12`}
-        blurb="Every field the PRD requires, what each value rests on, and the sentence behind it. A utility's generation, transmission or storage figure is a different quantity and is never added to the megawatts here.">
-        ${/* `onTab` is what the blocker row's "see all N" calls. The page used to
-              render this without it, so the link was there and did nothing. */ ""}
-        <${TrackedFields} p=${p} populated=${populated} onQuote=${showQuote}
-          claims=${p.claims_by_field} onTab=${() => scrollToSection("obstacles")} />
-      <//>
-
-      <${Section} id="context" title="In context"
-        blurb="How this campus compares with the rest of the database, and the five things that have to happen in parallel for it to be built.">
-        <${ProjectContext} p=${p} data=${data} />
-      <//>
-
-      ${has("tranches") && html`
-        <${Section} id="tranches" title="Tranches" count=${(p.blocks || []).length}
-          blurb="A modern campus is several states at once — one phase energised and serving a buyer, the next under construction, a third planned with nobody named. One phase column cannot say that.">
+      ${at("tranches") && html`
+        <${Section} id="tranches" title="Capacity by tranche" count=${(p.blocks || []).length}
+          hint="Which part of the campus is running, building or planned, and for whom."
+          blurb="A modern campus is several states at once — one phase energised and serving a buyer, the next under construction, a third planned with nobody named."
+          ...${at("tranches")}>
           <${BlocksTab} p=${p} />
         <//>`}
 
-      ${has("obstacles") && html`
-        <${Section} id="obstacles" title="Obstacles" count=${(p.risks || []).length}
-          blurb="What could stop this being built, and which of the five tracks each one sits on. Most projects have none, and that is usually the truth rather than a gap in our reading.">
-          <${RisksTab} data=${data} p=${p} />
+      ${at("parties") && html`
+        <${Section} id="parties" title="Who is involved" count=${(p.parties || []).length}
+          hint="The companies building, owning, buying and powering this campus."
+          blurb="Names by role. Hover or tap a name for the sentence behind it."
+          ...${at("parties")}>
+          <${PartyList} p=${p} />
         <//>`}
 
-      ${has("citations") && html`
-        <${Section} id="citations" title="Citations" count=${(p.sources || []).length}
-          blurb="Every article this row rests on, what each one supports, and what its publisher is worth.">
-          <${SourcesTab} data=${data} p=${p} limit=${CITATIONS_ON_PAGE} onAll=${onAllSources} />
-        <//>`}
+      <${Section} id="risk" title="Delay risk and obstacles"
+        count=${open.length ? `${open.length} open` : null}
+        hint=${`${RISK_WORD[risk.level] || risk.level} delay risk${open.length ? ` · ${open.length} open obstacle${open.length === 1 ? "" : "s"}` : ""}.`}
+        ...${at("risk")}>
+        <${DelayRiskCard} p=${p} risk=${risk} />
+        <${RisksTab} data=${data} p=${p} />
+        ${/* The model's answer to the same question, behind its own button: it
+              costs a call per click and nothing it says is evidence. */ ""}
+        <${InferPanel} project=${p} allowAi=${data.allow_ai} aiOff=${data.ai_off} />
+      <//>
 
-      <${Section} id="timeline" title="Timeline"
-        blurb="Dated milestones, and where several articles restated one fact.">
+      <${Section} id="fields" title="Fields and evidence" count=${`${populated} of 12`}
+        hint="The twelve tracked fields, each with its tier and the sentence behind it."
+        blurb="The twelve fields every campus is tracked on. Hover or tap a value for its sentence; open a field for every claim made about it and why this one was kept."
+        ...${at("fields")}>
+        <${TrackedFields} p=${p} populated=${populated} onQuote=${showQuote}
+          claims=${p.claims_by_field} onJump=${visit} />
+      <//>
+
+      <${Section} id="progress" title="Progress and timeline"
+        hint="The five tracks a campus moves along — land, power, permits, construction, buyer — and its dated milestones."
+        blurb="Five things happen in parallel, not in a line: a campus can own its land and still wait four years for power. The next milestone on a stuck track is the thing to watch for."
+        ...${at("progress")}>
+        <${TracksCard} p=${p} data=${data} />
         <${Timeline} p=${p} data=${data} />
       <//>
+
+      ${at("context") && html`
+        <${Section} id="context" title="In context"
+          hint="Share of its state and of everything tracked, cost per megawatt, compute — derived, not cited."
+          ...${at("context")}>
+          <${InContext} p=${p} data=${data} />
+        <//>`}
+
+      ${at("citations") && html`
+        <${Section} id="citations" title="Citations" count=${(p.sources || []).length}
+          hint="Every article this row rests on, and what each one supports."
+          blurb="Every article this row rests on, what each one supports, and what its publisher is worth."
+          ...${at("citations")}>
+          <${SourcesTab} data=${data} p=${p} limit=${CITATIONS_ON_PAGE} onAll=${onAllSources} />
+        <//>`}
 
       <${QuotePopover} quote=${quote} />
     </div>`;
@@ -2861,8 +2941,8 @@ function Timeline({ p, data }) {
  * `decided_by` is only set when a real rival exists. The browser sorts nothing and
  * decides nothing — three claims at different scopes are not a disagreement, and
  * saying "credibility won" there would be a plausible sentence and the wrong one. */
-function ClaimTable({ claims, field }) {
-  const [open, setOpen] = useState(false);
+function ClaimTable({ claims, field, initiallyOpen = false }) {
+  const [open, setOpen] = useState(initiallyOpen);
   /* Fetched per drawer rather than shipped with the list — it was 48% of a 19 MB
      payload for a table that renders one project at a time. Absent means still in
      flight, and rendering nothing is right: the row above already carries the
@@ -2970,204 +3050,331 @@ function basisOf(basis) {
   return BASIS[basis] || { label: "Capacity", hint: "no source records which kind of megawatt" };
 }
 
-function StatsTab({ data, p, populated, open, onQuote, allowAi, aiOff, onTab, claims }) {
-  const worst = open.slice().sort((a, b) => SEV_ORDER.indexOf(b.severity) - SEV_ORDER.indexOf(a.severity))[0];
-  // The label follows the basis rather than asserting one. See `basisOf`.
-  const plannedBasis = basisOf(p.mw_planned_basis);
-  const builtBasis = basisOf(p.mw_built_basis);
-  const stats = [
-    { label: plannedBasis.label + ", planned", value: p.mw_planned == null ? "—" : p.mw_planned.toLocaleString() + " MW",
-      hint: p.mw_planned == null ? "no source cited one"
-          : TIER[tierOf(p, "mw_planned")][0] + " · " + plannedBasis.hint },
-    { label: builtBasis.label + " in service", value: p.mw_built == null ? "—" : p.mw_built.toLocaleString() + " MW",
-      hint: p.mw_built == null ? "nothing built, or nothing read"
-          : TIER[tierOf(p, "mw_built")][0] + " · " + builtBasis.hint },
-    { label: "Compute", value: fmt("h200_equivalent", p.h200_equivalent),
-      hint: p.h200_equivalent == null ? "no capacity cited, so nothing to convert"
-          : p.h200_equivalent === h200FromMw(p.mw_built || p.mw_planned)
-          ? "H200-equivalent, derived from MW" : "H200-equivalent, as cited" },
-    { label: "Announced investment", value: fmtUSD(p.investment_usd),
-      hint: p.investment_usd == null ? "the hardest field to source" : TIER[tierOf(p, "investment_usd")][0] },
-    { label: "Open obstacles", value: String(open.length),
-      hint: worst ? "worst: " + worst.severity : "none reported" },
-  ];
-  const label = (key) => (data.tracks.find((t) => t.key === key) || {}).label || key;
+/* ---- The summary an investor reads first ---------------------------------
+ *
+ * Client review, 2026-10-21: the page had grown to eight modules in the order they
+ * were built, and the reviewer asked which of it matters for investment and how to
+ * show that. The answer at the top: how big, how much runs, how much is still to
+ * come and when, how likely it is to slip, what it costs, who is buying, and what
+ * would show it moving — in one place, each figure a hover away from the sentence
+ * behind it.
+ *
+ * Nothing here is decided in the browser. Each figure is a value the sections
+ * below carry with their evidence, or arithmetic on two of them that says so; the
+ * delay risk and the buyers are the server's readings, the same ones the company
+ * page and Capex make (`dataset.project_payload`). */
 
+//: A delay-risk level in a reader's words. The colours are the company page's
+//: (`RISK_TONE`), so a campus reads the same on both.
+const RISK_WORD = { high: "High", elevated: "Elevated", low: "Low" };
+
+//: A stored date at the precision its source gave it: "2026" for a year, a
+//: quarter or a half, "Jan 2026" otherwise. The table cuts dates the same way.
+function whenText(p, key) {
+  const v = p[key];
+  if (!v) return null;
+  const precision = axesOf(p, key)?.date_precision;
+  return precision === "year" || precision === "quarter" || precision === "half"
+    ? String(v).slice(0, 4) : fmtMonth(v);
+}
+
+//: "14 Oct 2026", for a timestamp a reader wants as a day.
+function fmtDay(iso) {
+  if (!iso) return null;
+  const [y, m, d] = String(iso).slice(0, 10).split("-");
+  return MONTHS[Number(m) - 1] ? `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}` : String(iso).slice(0, 10);
+}
+
+//: Why a campus has no delay risk, said for its phase rather than as one
+//: sentence that would call a cancelled campus "on schedule".
+function noRiskText(p) {
+  if (p.phase === "operational") {
+    return p.still_to_come?.mw > 0
+      ? "Running, and nothing recorded says the rest is slipping."
+      : "Operating — no date left to miss.";
+  }
+  if (p.phase === "paused" || p.phase === "cancelled") return `The campus is ${p.phase}; a delay reading does not apply.`;
+  return "No slipped date, no date passed and no open obstacle a source says moved the schedule.";
+}
+
+function KeyFigure({ label, zh, value, hint, tone, title, children }) {
   return html`
-    <div style=${{ display: "grid", gap: 18 }}>
-      <div style=${{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
-        ${stats.map((s) => html`<${StatCard} key=${s.label} label=${s.label} value=${s.value} hint=${s.hint} />`)}
-      </div>
-
-      ${/* In the flow, under the numbers, scrolling with everything else. It was
-            briefly pinned above the tab strip, which made it the one block in the
-            drawer you could not scroll past — and put a model's reading in front
-            of the figures it is a reading *of*. A card, like the rest. */ ""}
-      <${InsightPanel} project=${p} allowAi=${allowAi} aiOff=${aiOff} />
-
-      ${/* Under the briefing, because it answers the next question: the overview
-            says what this row is, and this says what could stop it. Both are a
-            model's words and both carry the same tint; only this one costs a call
-            per click, so only this one has a button. */ ""}
-      <${InferPanel} project=${p} allowAi=${allowAi} aiOff=${aiOff} />
+    <div class="dc-kf" title=${title}>
+      <span class="dc-kf-label">${label}${zh && html`<span class="dc-kf-zh">${zh}</span>`}</span>
+      <span class="dc-kf-value" style=${tone ? { color: `var(${tone})` } : undefined}>${value}</span>
+      ${hint && html`<span class="dc-kf-hint">${hint}</span>`}
+      ${children}
     </div>`;
 }
 
-/* The twelve tracked fields, lifted out of `StatsTab` to have a page section and
- * the whole page's width.
- *
- * It was one cell of a two-column grid with a 330px minimum, beside a card a
- * tenth its height — so the row was as tall as this table, the short card sat at
- * the top of it, and the rest of that column was empty. That gap is what made
- * the drawer look broken, and widening the column would only have moved it.
- *
- * At full width the quote under each value has room to be a sentence instead of
- * wrapping every four words, which is the actual point: the sentence is the
- * evidence, and the reason this console exists.
- */
-function TrackedFields({ p, populated, onQuote, claims, onTab }) {
-  return html`
-    <${Card}>
-      <${CardHeader}>
-        <${CardTitle}>The twelve tracked fields<//>
-        <${CardDescription}>${populated} of 12 populated. A utility's generation,
-          transmission or storage figure is a different quantity and is never added to the
-          megawatts here — and where a citation says which kind of megawatt it measured, the
-          capacity cards above say so rather than assuming.<//>
-      <//>
-      <div style=${{ display: "grid", gap: 0 }}>
-        ${TRACKED.map((key) => {
-          const tier = tierOf(p, key);
-          const q = quoteOf(p, key);
-          const quoted = tier === "reported" || tier === "derived" || tier === "inferred";
-          return html`
-            ${/* Three columns, and the third is why this section wanted the width.
-                 Stacked in a 330px cell, every row was: field name, then a value
-                 on its own line, then a quote wrapping every four words. Given
-                 the page, the name stays narrow, the value gets the room a
-                 formatted number needs, and the sentence sits BESIDE the figure
-                 it evidences rather than under it — which is the whole claim
-                 this console makes about itself.
+function ProjectSummary({ p, onQuote, onOpenCompany, onJump, populated, open }) {
+  const planned = p.mw_planned;
+  const built = p.mw_built;
+  const late = p.suspected_delay;
+  const risk = p.delay_risk || { level: "low", reasons: [] };
+  const due = late ? late.stated : p.expected_online_stated || whenText(p, "expected_online");
+  // Planned less running, and when the rest is due — the server's reading, the one
+  // the company page's supply table makes (`supply.still_to_come`).
+  const rest = p.still_to_come;
+  const restWhen = !rest || rest.mw === 0 ? (rest ? "all of it running" : "no planned figure")
+    : rest.overdue ? `its date (${rest.when}) has passed`
+    : rest.from === "tranche" ? `next tranche due ${rest.when}`
+    : rest.when ? `expected ${rest.when}` : "no date stated";
+  const perMw = p.investment_usd && planned ? p.investment_usd / planned : null;
+  // The kind of megawatt, when the source said (`BASIS`); "Capacity" says nothing.
+  const basis = (key) => {
+    const b = p[`${key}_basis`];
+    return b && b !== "unspecified" ? ` · ${basisOf(b).label}` : "";
+  };
+  // A figure that answers a hover with the sentence behind it, as in the table.
+  const figure = (key, text) => html`<${Value} project=${p} field=${key} onQuote=${onQuote} text=${text} />`;
+  const mw = (key) => figure(key, p[key] == null ? "—" : `${withBound(fmt(key, p[key]), axesOf(p, key)?.bound)} MW`);
 
-                 `minmax(0, …)` on both flexible tracks: without it a long
-                 unbroken quote sets the column's min-content width and pushes
-                 the table wider than the page. */ ""}
-            <div key=${key} class="dc-field-row"
-                 style=${{ padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-              <span style=${{ display: "grid", gap: 1, minWidth: 0 }} title=${(COLUMN[key] || {}).why || key}>
-                <span style=${{ fontSize: 13, fontWeight: 600, lineHeight: "18px" }}>
-                  ${columnLabel(key)}${(COLUMN[key] || {}).unit && html`<span
-                    style=${{ fontWeight: 400, color: "var(--muted-foreground)" }}> · ${COLUMN[key].unit}</span>`}</span>
-                <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--muted-foreground)" }}>
-                  ${(COLUMN[key] || {}).zh || ""}</span>
-                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 10.5, lineHeight: "15px",
-                                color: "var(--muted-foreground)", opacity: .75 }}>${key}</span>
-              </span>
-              <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
-                <div style=${{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
-                  <span style=${{ fontSize: 16, lineHeight: "24px",
-                    ...(tier === "missing" ? { color: "var(--muted-foreground)", opacity: .7 } : { fontWeight: 500 }),
-                    ...(RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : {}) }}>
-                    ${fmt(key, p[key])}</span>
-                  <span style=${chip(tier === "reported" ? "--foreground" : tier === "unconfirmed" ? "--warning"
-                    : tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${TIER[tier][0]}</span>
-                  ${whyUnconfirmed(p, key) && html`
-                    <span style=${chip("--danger")}>not this site's figure</span>`}
-                  ${q.exact === false && !!provOf(p, key)?.quote && html`
-                    <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--muted-foreground)" }}>
-                      excerpt, not this field's sentence</span>`}
-                </div>
-              </div>
-              <div style=${{ display: "grid", gap: 5, minWidth: 0 }}>
-                ${whyUnconfirmed(p, key) && html`
-                  <p style=${{ margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--danger)" }}>
-                    ${whyUnconfirmed(p, key).note}</p>`}
-                <p style=${{ margin: 0, fontSize: 12.5, lineHeight: "19px", color: "var(--muted-foreground)",
-                  maxWidth: "88ch",
-                  ...(q.exact ? { borderLeft: "2px solid var(--primary)", paddingLeft: 9 } : {}),
-                  ...(tier === "missing" ? { opacity: .75 } : {}) }}>
-                  ${quoted && q.exact ? `“${q.text}”` : q.text}</p>
-                ${key === "blocker" && html`<${BlockerWhy} why=${p.blocker_rationale} onTab=${onTab} />`}
-                <${ClaimTable} claims=${claims} field=${key} />
-              </div>
-            </div>`;
-        })}
+  const blocking = open.filter((r) => r.severity === "blocking").length;
+  const utilityParties = (p.parties || []).filter((x) => x.role === "utility");
+  const utilities = [...new Set(utilityParties.filter((x) => !x.unconfirmed).map((x) => x.name))];
+  const newest = (p.sources || [])
+    .map((s) => s.published_at || s.fetched_at).filter(Boolean).sort().pop();
+  const company = (name, slug) => (slug && onOpenCompany
+    ? html`<button type="button" class="dc-linkish" onClick=${() => onOpenCompany(slug)}>${name}</button>`
+    : html`<span>${name}</span>`);
+  const buyers = p.buyers || [];
+
+  return html`
+    <div class="dc-summary">
+      <div class="dc-kfs">
+        <${KeyFigure} label="Planned" zh="规划容量" value=${mw("mw_planned")}
+          hint=${planned == null ? "no source cited one" : TIER[tierOf(p, "mw_planned")][0] + basis("mw_planned")} />
+        <${KeyFigure} label="Running" zh="运行容量" value=${mw("mw_built")}
+          hint=${built != null && planned
+            ? `${Math.round((built / planned) * 100)}% of planned${basis("mw_built")}`
+            : built != null ? TIER[tierOf(p, "mw_built")][0] + basis("mw_built")
+            : p.phase === "operational" ? "operating; no running figure cited" : "nothing reported running"} />
+        <${KeyFigure} label="Still to come" zh="待交付"
+          title="Planned minus running: arithmetic on the two figures beside it, not a cited value."
+          value=${rest ? `${fmt("mw_planned", rest.mw)} MW` : "—"}
+          tone=${rest?.overdue ? "--warning" : null}
+          hint=${restWhen} />
+        <${KeyFigure} label="Expected online" zh="预计上线"
+          value=${figure("expected_online", due || "—")}
+          tone=${late ? "--warning" : null}
+          hint=${late ? `passed ${daysText(late.days_late)} ago — no news of going live`
+            : p.phase === "operational" ? "in service"
+            : p.first_announced ? `announced ${whenText(p, "first_announced")}` : null} />
+        <${KeyFigure} label="Delay risk" zh="延期风险"
+          value=${RISK_WORD[risk.level] || risk.level}
+          tone=${risk.level === "low" ? null : RISK_TONE[risk.level]}
+          hint=${risk.reasons[0] || noRiskText(p)}>
+          ${risk.reasons.length > 1 && html`
+            <button type="button" class="dc-linkish dc-kf-more" onClick=${() => onJump("risk")}>
+              +${risk.reasons.length - 1} more reason${risk.reasons.length === 2 ? "" : "s"}</button>`}
+        <//>
+        <${KeyFigure} label="Investment" zh="投资" value=${figure("investment_usd")}
+          hint=${perMw ? `$${(perMw / 1e6).toFixed(1)}M per planned MW, derived`
+            : p.investment_usd == null ? "no figure confirmed for this site"
+            : TIER[tierOf(p, "investment_usd")][0]} />
       </div>
-    <//>
-`;
+
+      <dl class="dc-facts dc-facts--summary">
+        <div class="dc-fact">
+          <dt>${buyers.length > 1 ? "Buyers" : "Buyer"}<span class="dc-fact-zh">买方</span></dt>
+          <dd>
+            ${buyers.length
+              ? html`<span>${buyers.map((b, i) => html`${i ? ", " : ""}${company(b.name, b.slug)}`)}</span>`
+              : p.customer
+              ? figure("customer", customerName(p))
+              : html`<span class="dc-quiet">none named</span>`}
+            ${buyers.length > 1 && html`
+              <span class="dc-fact-note">several named, so Capex credits none of them</span>`}
+          </dd>
+        </div>
+        <div class="dc-fact">
+          <dt>Operator<span class="dc-fact-zh">运营商</span></dt>
+          <dd>${company(companyName(p), p.company_slug)}</dd>
+        </div>
+        <div class="dc-fact">
+          <dt>Power<span class="dc-fact-zh">电力</span></dt>
+          <dd>${utilities.length || p.iso
+            ? [utilities.join(", "), p.iso].filter(Boolean).join(" · ")
+            : html`<span class="dc-quiet">${utilityParties.length
+              ? "none confirmed — see Who is involved" : "no utility named"}</span>`}</dd>
+        </div>
+        <div class="dc-fact">
+          <dt>Watch for<span class="dc-fact-zh">关注</span></dt>
+          <dd>${p.standing?.watch_for || html`<span class="dc-quiet">nothing outstanding</span>`}</dd>
+        </div>
+        <div class="dc-fact dc-fact--wide">
+          <dt>Biggest obstacle<span class="dc-fact-zh">最大障碍</span></dt>
+          <dd>
+            ${p.blocker ? figure("blocker", p.blocker) : html`<span class="dc-quiet">none recorded</span>`}
+            ${open.length > 0 && html`
+              <button type="button" class="dc-linkish dc-fact-note" onClick=${() => onJump("risk")}>
+                ${open.length} open${blocking ? `, ${blocking} blocking` : ""}</button>`}
+          </dd>
+        </div>
+        <div class="dc-fact dc-fact--wide">
+          <dt>Evidence<span class="dc-fact-zh">证据</span></dt>
+          <dd class="dc-num dc-fact-meta">
+            confidence ${p.confidence} of 3 · ${(p.sources || []).length} source${(p.sources || []).length === 1 ? "" : "s"}${newest ? `, newest ${fmtDay(newest)}` : ""} · ${populated} of 12 fields
+          </dd>
+        </div>
+      </dl>
+    </div>`;
 }
 
-/* Where this campus sits, and the five tracks it is moving along.
+/* The delay risk, with every reason it rests on — the summary shows the first.
+ * The reasons are sentences the server wrote from evidence on this page: the
+ * passed date, the recorded slips, the obstacles a quote says moved the schedule. */
+function DelayRiskCard({ p, risk }) {
+  const tone = RISK_TONE[risk.level] || "--muted-foreground";
+  return html`
+    <div class="dc-riskcard">
+      <div class="dc-riskcard-head">
+        <span style=${chip(tone)}>${RISK_WORD[risk.level] || risk.level} delay risk</span>
+        <span class="dc-riskcard-note">read from the evidence on this page, the same reading the
+          company page gives this campus</span>
+      </div>
+      ${risk.reasons.length
+        ? html`<ul class="dc-riskcard-list">${risk.reasons.map((r) => html`<li key=${r}>${r}</li>`)}</ul>`
+        : html`<p class="dc-riskcard-none">${noRiskText(p)}</p>`}
+    </div>`;
+}
+
+/* The twelve tracked fields, dense (client review, 2026-10-21).
  *
- * Two short cards, so a two-column grid is right here in a way it was not for
- * the table above — neither is taller than the other by an order of magnitude.
- */
-function ProjectContext({ p, data }) {
+ * They were a three-column table — name, value, the sentence — one field to a row,
+ * so twelve narrow values took a screen and a half, and the reviewer found the
+ * page loose and hard to read. Now two columns of one-line facts: the name in
+ * English and Chinese, the value, its tier. The sentence is a hover or a tap on the
+ * value, as in the table; opening a field — its name is a button — shows the
+ * sentence, the source, and every rival claim with why this one was kept, below the
+ * grid. That is also the keyboard's way to the evidence, now that the quotes are no
+ * longer printed. */
+function TrackedFields({ p, onQuote, claims, onJump }) {
+  const [picked, setPicked] = useState(null);
+  useEffect(() => { setPicked(null); }, [p.id]);
+  return html`
+    <${Card}>
+      <dl class="dc-facts dc-facts--fields">
+        ${TRACKED.map((key) => {
+          const tier = tierOf(p, key);
+          const env = (claims || {})[key];
+          const rivals = env ? env.claims.length - 1 : 0;
+          const unit = (COLUMN[key] || {}).unit;
+          return html`
+            <div key=${key} class=${`dc-fact${key === "blocker" ? " dc-fact--wide" : ""}${picked === key ? " is-picked" : ""}`}>
+              <dt>
+                <button type="button" class="dc-fact-open" aria-expanded=${picked === key}
+                        title=${(COLUMN[key] || {}).why || key}
+                        onClick=${() => setPicked(picked === key ? null : key)}>
+                  ${columnLabel(key)}${unit && html`<span class="dc-fact-unit"> · ${unit}</span>`}</button>
+                <span class="dc-fact-zh">${(COLUMN[key] || {}).zh || ""}</span>
+              </dt>
+              <dd>
+                <${Value} project=${p} field=${key} onQuote=${onQuote}
+                  text=${key === "company" ? companyName(p) : key === "customer" ? customerName(p) : undefined}
+                  extra=${RIGHT.has(key) ? { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" } : undefined} />
+                <span class="dc-fact-tier" style=${chip(tier === "reported" ? "--foreground" : tier === "unconfirmed" ? "--warning"
+                  : tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${TIER[tier][0]}</span>
+                ${whyUnconfirmed(p, key) && html`<span class="dc-fact-tier" style=${chip("--danger")}>not this site's figure</span>`}
+                ${(env?.stored_unsupported || env?.stored_differs) && html`
+                  <span class="dc-fact-tier" style=${chip(env.stored_unsupported ? "--danger" : "--warning")}>disputed</span>`}
+                ${rivals > 0 && html`
+                  <button type="button" class="dc-linkish dc-fact-claims" onClick=${() => setPicked(picked === key ? null : key)}>
+                    ${rivals + 1} claims</button>`}
+              </dd>
+            </div>`;
+        })}
+      </dl>
+      ${picked && html`
+        <${FieldEvidence} p=${p} field=${picked} claims=${claims} onJump=${onJump}
+          onClose=${() => setPicked(null)} />`}
+    <//>`;
+}
+
+/* One field's evidence, opened from the grid: the sentence, where it is from, why a
+ * 待确认 figure is one, and every claim any citation made with the one kept. */
+function FieldEvidence({ p, field, claims, onJump, onClose }) {
+  const q = quoteOf(p, field);
+  const why = whyUnconfirmed(p, field);
+  const excerpt = q.exact === false && !!provOf(p, field)?.quote;
+  let host = null;
+  try { host = q.url ? new URL(q.url).hostname.replace(/^www\./, "") : null; } catch { host = null; }
+  return html`
+    <div class="dc-evidence" role="region" aria-label=${`Evidence for ${columnLabel(field)}`}>
+      <div class="dc-evidence-head">
+        <strong>${columnLabel(field)}</strong>
+        <span class="dc-fact-zh">${(COLUMN[field] || {}).zh || ""}</span>
+        ${/* The stored name, for whoever is reading the export or the API beside
+              the page — out of the grid, where it was what the client saw first. */ ""}
+        <code class="dc-evidence-key">${field}</code>
+        <span style=${{ flex: 1 }} />
+        <button type="button" class="dc-linkish" onClick=${onClose}>close</button>
+      </div>
+      ${why && html`<p class="dc-evidence-why">${why.note}</p>`}
+      <p class=${`dc-evidence-quote${q.exact ? " is-exact" : ""}`}>${q.exact ? `“${q.text}”` : q.text}</p>
+      ${(host || excerpt) && html`
+        <p class="dc-evidence-src">
+          ${host && html`<a href=${q.url} target="_blank" rel="noopener noreferrer">${host}</a>`}
+          ${excerpt && html`<span>${host ? " · " : ""}from the source excerpt, not this field's own sentence</span>`}
+        </p>`}
+      ${field === "blocker" && html`<${BlockerWhy} why=${p.blocker_rationale} onTab=${() => onJump("risk")} />`}
+      <${ClaimTable} claims=${claims} field=${field} initiallyOpen=${true} />
+    </div>`;
+}
+
+/* The five tracks a campus moves along: where each stands, what blocks it, and the
+ * next milestone to watch for. */
+function TracksCard({ p, data }) {
   // The five tracks are named by the dataset, not here, so the card and the
   // strip in the table cannot disagree about what a track is called.
   const label = (key) => (data.tracks.find((t) => t.key === key) || {}).label || key;
   return html`
-    <div style=${{ display: "grid", gap: 18 }}>
-      <${InContext} p=${p} data=${data} />
-
-      <${Card}>
-        <${CardHeader}>
-          <${CardTitle}>Five independent tracks<//>
-          <${CardDescription}>Five things happen in parallel, not in a line. A campus can own its
-            land and still wait four years for power. Look at whichever track is stuck — the next
-            milestone on it is the thing to watch for.<//>
-        <//>
-        <div style=${{ display: "grid", gap: 0 }}>
-          ${p.standing.tracks.map((t) => {
-            const onlyImplied = t.reached.length > 0 && t.reached.every((m) => t.implied.includes(m));
-            /* `complete` means the ladder is exhausted, NOT that the work is
-               finished — so it is said as the milestone reached rather than as
-               a verdict. "construction: complete" beside a campus under
-               construction is the sentence that made this worth changing. */
-            const status = t.complete ? `reached ${t.status.replace(/_/g, " ")}`
-              : t.blockers.length ? "blocked" : t.reached.length === 0 ? "not started" : "in progress";
-            return html`
-              <div key=${t.track} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px",
-                   gap: 12, alignItems: "center", padding: "11px 20px", borderTop: "1px solid var(--border)" }}>
-                <div style=${{ display: "grid", gap: 3, minWidth: 0 }}>
-                  <span style=${{ fontSize: 14, fontWeight: 600 }}>${label(t.track)}</span>
-                  <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
-                    color: t.blockers.length ? "var(--danger)" : t.complete ? "var(--success)" : "var(--muted-foreground)" }}>
-                    ${status}${onlyImplied ? " (implied)" : ""} — ${t.next_milestone ? "watch for " + t.next_milestone
-                      : t.blockers.length ? "nothing further on this ladder" : "nothing outstanding"}
-                  </span>
-                  ${/* WHICH obstacle. `blockers` holds bare category names, so
-                        every surface could say a track was obstructed and none
-                        could say by what — leaving a reader to guess which of
-                        twenty-eight recorded risks was meant. */
-                    (t.blocking_risks || []).length > 0 && html`
-                    <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--danger)" }}>
-                      blocked by #${t.blocking_risks[0].id} (${t.blocking_risks[0].category}):
-                      ${" "}${t.blocking_risks[0].summary}
-                      ${t.blocking_risks.length > 1
-                        ? html`<span style=${{ color: "var(--muted-foreground)" }}>
-                            ${" "}+${t.blocking_risks.length - 1} more</span>`
-                        : null}
-                    </span>`}
-                </div>
-                <div style=${{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
-                  ${((data.tracks.find((x) => x.key === t.track) || {}).milestones || []).map((m, i) => html`
-                    <span key=${m} style=${{ "--i": i }} class=${`dc-seg-cell ${
-                      t.reached.includes(m) ? (t.implied.includes(m) ? "dc-seg-cell--implied" : "dc-seg-cell--reached")
-                      : t.blockers.length ? "dc-seg-cell--blocked" : "dc-seg-cell--todo"}`} />`)}
-                </div>
-              </div>`;
-          })}
-        </div>
-        ${p.standing.watch_for && html`
-          <div style=${{ padding: "12px 20px 18px", borderTop: "1px solid var(--border)" }}>
-            <span style=${{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em",
-                            color: "var(--muted-foreground)" }}>watch for</span>
-            <p style=${{ margin: "4px 0 0", fontSize: 14, lineHeight: "21px" }}>${p.standing.watch_for}</p>
-          </div>`}
-      <//>
-    </div>
-`;
+    <${Card}>
+      <div style=${{ display: "grid", gap: 0 }}>
+        ${p.standing.tracks.map((t, n) => {
+          const onlyImplied = t.reached.length > 0 && t.reached.every((m) => t.implied.includes(m));
+          /* `complete` means the ladder is exhausted, NOT that the work is
+             finished — so it is said as the milestone reached rather than as
+             a verdict. "construction: complete" beside a campus under
+             construction is the sentence that made this worth changing. */
+          const status = t.complete ? `reached ${t.status.replace(/_/g, " ")}`
+            : t.blockers.length ? "blocked" : t.reached.length === 0 ? "not started" : "in progress";
+          return html`
+            <div key=${t.track} style=${{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 90px",
+                 gap: 12, alignItems: "center", padding: "10px 20px",
+                 borderTop: n ? "1px solid var(--border)" : "none" }}>
+              <div style=${{ display: "grid", gap: 3, minWidth: 0 }}>
+                <span style=${{ fontSize: 14, fontWeight: 600 }}>${label(t.track)}</span>
+                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 12,
+                  color: t.blockers.length ? "var(--danger)" : t.complete ? "var(--success)" : "var(--muted-foreground)" }}>
+                  ${status}${onlyImplied ? " (implied)" : ""} — ${t.next_milestone ? "watch for " + t.next_milestone
+                    : t.blockers.length ? "nothing further on this ladder" : "nothing outstanding"}
+                </span>
+                ${/* WHICH obstacle. `blockers` holds bare category names, so
+                      every surface could say a track was obstructed and none
+                      could say by what — leaving a reader to guess which of
+                      twenty-eight recorded risks was meant. */
+                  (t.blocking_risks || []).length > 0 && html`
+                  <span style=${{ fontSize: 12, lineHeight: "17px", color: "var(--danger)" }}>
+                    blocked by #${t.blocking_risks[0].id} (${t.blocking_risks[0].category}):
+                    ${" "}${t.blocking_risks[0].summary}
+                    ${t.blocking_risks.length > 1
+                      ? html`<span style=${{ color: "var(--muted-foreground)" }}>
+                          ${" "}+${t.blocking_risks.length - 1} more</span>`
+                      : null}
+                  </span>`}
+              </div>
+              <div style=${{ display: "flex", gap: 3, justifyContent: "flex-end" }}>
+                ${((data.tracks.find((x) => x.key === t.track) || {}).milestones || []).map((m, i) => html`
+                  <span key=${m} style=${{ "--i": i }} class=${`dc-seg-cell ${
+                    t.reached.includes(m) ? (t.implied.includes(m) ? "dc-seg-cell--implied" : "dc-seg-cell--reached")
+                    : t.blockers.length ? "dc-seg-cell--blocked" : "dc-seg-cell--todo"}`} />`)}
+              </div>
+            </div>`;
+        })}
+      </div>
+    <//>`;
 }
 
 //: Block status to a colour token. `serving` and `energized` are the two that mean
@@ -3291,6 +3498,9 @@ function BlocksTab({ p }) {
    * `Building 2` are one building is a judgement, and the browser draws judgements
    * rather than making them. */
   const rows = p.sections || [];
+  // The first twelve, and the rest on request: Abilene's sources describe thirty
+  // sections, five screens of them, between the summary and everything below.
+  const [listed, moreRows] = useCapped(rows);
 
   const cited = acct && acct.total != null ? acct.total : null;
   const campusTotal =
@@ -3446,7 +3656,7 @@ function BlocksTab({ p }) {
           <span style=${{ textAlign: "right" }}>Online</span>
         </div>
 
-        ${rows.map((sec, i) => {
+        ${listed.map((sec, i) => {
           const state = blockState(sec.status);
           const when = sec.energized_on || sec.expected_online;
           const cap = sec.capacity;
@@ -3529,6 +3739,7 @@ function BlocksTab({ p }) {
               </div>
             </div>`;
         })}
+        ${moreRows}
 
         <!-- The arithmetic, closed. Every megawatt of the campus sits on one of these
              lines, which is the point: a reader who cannot make the parts reach the
@@ -3608,57 +3819,63 @@ function useCapped(rows, cap = LIST_CAP) {
   return [shown, more];
 }
 
-function RisksTab({ data, p }) {
-  // Open obstacles first: a resolved one is history, and a reader capped at
-  // twelve rows should be shown the live ones rather than whichever sorted first.
-  const ordered = (p.risks || []).slice().sort(
-    (a, b) => (a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1));
-  const [rows, more] = useCapped(ordered);
-  const label = (key) => (data.tracks.find((t) => t.key === key) || {}).label || key;
-  const nextOn = (trackKey) => {
-    const t = p.standing.tracks.find((x) => x.track === trackKey);
-    return t ? (t.next_milestone || "track complete") : "—";
-  };
+/* The obstacles, one line each (client review, 2026-10-21).
+ *
+ * Each used to be a card — category, chips, the summary at 16px, the quote in a
+ * shaded block, the track — about 200px apiece, and Abilene carries 24. Now a row:
+ * how bad, what kind, what it is, when it was seen; the sentence and the track it
+ * sits on open under it. Open obstacles come first, worst first; resolved ones are
+ * history and fold away behind their count. Obstacles are rows, not a sentence, so
+ * a campus can carry several and each can be cleared on its own — an article that
+ * stops mentioning one does not clear it. */
+const SEV_RANK = { blocking: 0, material: 1, watch: 2 };
+
+function RiskRow({ r, data, p }) {
+  const track = data.riskTrack[r.category];
+  const trackLabel = (key) => (data.tracks.find((t) => t.key === key) || {}).label || key;
+  const next = track && (p.standing.tracks.find((x) => x.track === track) || {}).next_milestone;
   return html`
-    <div style=${{ display: "grid", gap: 14 }}>
-      <p style=${{ margin: 0, fontSize: 14, lineHeight: "22px", color: "var(--muted-foreground)", maxWidth: "88ch" }}>
-        Obstacles are rows, not a sentence, so a project can carry several at once and each can be cleared
-        on its own. An article that stops mentioning one does not clear it.
-      </p>
-      ${rows.map((r, i) => {
-        const track = data.riskTrack[r.category];
-        return html`
-          <${Card} key=${i} style=${{ padding: "16px 20px",
-            borderColor: r.status === "open" && r.severity === "blocking"
-              ? "color-mix(in oklab, var(--danger) 34%, var(--border))" : undefined }}>
-            <div style=${{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-              <span style=${{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 500 }}>${r.category}</span>
-              <span style=${chip(SEV_TOKEN[r.severity])}>${r.severity}</span>
-              <span style=${chip(r.status === "open" ? "--danger" : "--success")}>${r.status}</span>
-              <span style=${{ flex: 1 }} />
-              <span class="dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-                ${r.first_seen || "—"}${r.resolved_at ? " → " + r.resolved_at : ""}${r.delay_days ? "  +" + r.delay_days + "d" : ""}
-              </span>
-            </div>
-            <p style=${{ margin: "0 0 10px", fontSize: 16, lineHeight: "24px" }}>${r.summary}</p>
-            <p style=${{ margin: 0, fontSize: 14, lineHeight: "21px",
-              ...(r.quote ? { padding: "10px 13px", background: "var(--muted)",
-                              borderLeft: "2px solid var(--primary)", borderRadius: "0 10px 10px 0" }
-                          : { color: "var(--warning)", fontFamily: "var(--font-mono)", fontSize: 12 }) }}>
-              ${r.quote ? `“${r.quote}”`
-                : "uncited — the summary is a paraphrase and no verified sentence carries wording for this category."}
-            </p>
-            <div style=${{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap",
-                           fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--muted-foreground)" }}>
-              <span>track ${track ? label(track) : "unplaced"}</span><span>·</span>
-              <span>next signal ${track ? nextOn(track) : "—"}</span>
-            </div>
-          <//>`;
-      })}
+    <li>
+      <details class=${`dc-risk${r.status === "open" && r.severity === "blocking" ? " is-blocking" : ""}`}>
+        <summary>
+          <span class="dc-risk-sev" style=${chip(r.status === "open" ? SEV_TOKEN[r.severity] : "--muted-foreground")}>${r.severity}</span>
+          <span class="dc-risk-cat">${riskLabel(r.category)}</span>
+          <span class="dc-risk-text">${r.summary}</span>
+          ${!r.quote && html`<span class="dc-risk-uncited" title="No verified sentence carries wording for this obstacle; the summary is a paraphrase.">uncited</span>`}
+          <span class="dc-risk-when dc-num">${r.first_seen || ""}${r.resolved_at ? " → " + r.resolved_at : ""}${r.delay_days ? ` +${r.delay_days}d` : ""}</span>
+        </summary>
+        <div class="dc-risk-body">
+          <p class=${r.quote ? "dc-risk-quote" : "dc-risk-quote is-missing"}>
+            ${r.quote ? `“${r.quote}”`
+              : "Uncited — the summary is a paraphrase and no verified sentence carries wording for this category."}</p>
+          <p class="dc-risk-meta">
+            ${r.status} · track ${track ? trackLabel(track) : "unplaced"}${track ? ` · next signal ${next || "track complete"}` : ""}</p>
+        </div>
+      </details>
+    </li>`;
+}
+
+function RisksTab({ data, p }) {
+  const risks = p.risks || [];
+  const bySeverity = (a, b) => (SEV_RANK[a.severity] ?? 3) - (SEV_RANK[b.severity] ?? 3);
+  const open = risks.filter((r) => r.status === "open").sort(bySeverity);
+  const closed = risks.filter((r) => r.status !== "open");
+  const [rows, more] = useCapped(open);
+  const [history, setHistory] = useState(false);
+  return html`
+    <div class="dc-obstacles">
+      ${open.length > 0
+        ? html`<ul class="dc-risk-list">${rows.map((r, i) => html`<${RiskRow} key=${i} r=${r} data=${data} p=${p} />`)}</ul>`
+        : html`<p class="dc-quiet" style=${{ margin: 0, fontSize: 13 }}>
+            No open obstacle. Nothing read about this campus reports one; if one appears it lands
+            here with the sentence that stated it.</p>`}
       ${more}
-      ${p.risks.length === 0 && html`
-        <${EmptyState} variant="dashed" title="No open obstacle"
-          description="Nothing read about this project reports one. If an obstacle appears later it lands here with the sentence that stated it." />`}
+      ${closed.length > 0 && html`
+        <button type="button" class="dc-linkish" style=${{ justifySelf: "start", fontSize: 12.5 }}
+                aria-expanded=${history} onClick=${() => setHistory(!history)}>
+          ${history ? "hide the resolved ones" : `${closed.length} resolved or set aside`}</button>`}
+      ${history && html`
+        <ul class="dc-risk-list is-history">${closed.map((r, i) => html`<${RiskRow} key=${i} r=${r} data=${data} p=${p} />`)}</ul>`}
     </div>`;
 }
 

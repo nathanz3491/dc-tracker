@@ -213,6 +213,41 @@ def delay_risk(
     return DelayRisk(LOW)
 
 
+def still_to_come(
+    project: Any,
+    *,
+    today: dt.date,
+    suspected: delays.SuspectedDelay | None = None,
+) -> dict[str, Any] | None:
+    """The capacity one campus has still to deliver, and when it is expected.
+
+    The project page's summary, read the way the supply table above reads a whole
+    company: planned less running, filed under the year `_year_of` gives it — the
+    campus's own date while the period it names is still open, *overdue* when the
+    campus is a suspected delay, otherwise the next tranche still to come, and no
+    year at all when nothing says. `when` is that date as the source stated it
+    ("Q3 2026"), or the tranche's year. None when no planned figure is cited.
+    """
+    planned = getattr(project, "mw_planned", None)
+    if planned is None:
+        return None
+    remaining = max(float(planned) - float(getattr(project, "mw_built", None) or 0.0), 0.0)
+    if suspected is None:
+        suspected = delays.suspected_delay(project, today=today)
+    year, overdue = _year_of(project, today, suspected) if remaining > 0 else (None, False)
+    expected = _as_date(getattr(project, "expected_online", None))
+    precision = getattr(project, "expected_online_precision", None)
+    own = expected is not None and (overdue or delays.period_end(expected, precision) >= today)
+    when = None if year is None else delays.stated(expected, precision) if own else str(year)
+    return {
+        "mw": remaining,
+        "year": year,
+        "overdue": overdue,
+        "when": when,
+        "from": None if year is None else "campus" if own else "tranche",
+    }
+
+
 @dataclass(frozen=True)
 class Credited:
     """One campus as the company page counts it: the project and its credited MW."""
@@ -339,5 +374,6 @@ __all__ = [
     "DelayRisk",
     "delay_risk",
     "slips",
+    "still_to_come",
     "supply",
 ]

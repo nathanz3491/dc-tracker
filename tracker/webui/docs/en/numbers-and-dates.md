@@ -12,7 +12,7 @@ A data center's "megawatts" can be any of three quantities, which routinely diff
 | **Facility power** | The whole site's draw: IT load plus cooling and everything else. Usually 10–30% above IT load. | ◒ |
 | **Nameplate** | A power plant's rated output. Not a data-center quantity at all. | ⚡ |
 
-Most articles write "a 200 MW campus" without saying which they mean, so an unmarked figure is either IT load or not stated — and "not stated" is the usual case. A figure marked ◒ or ⚡ is **not comparable** with an unmarked one. On a [project's page](project-page) the capacity cards name the kind: *IT capacity*, *Facility power*, *Generator rating*, or plain *Capacity*.
+Most articles write "a 200 MW campus" without saying which they mean, so an unmarked figure is either IT load or not stated — and "not stated" is the usual case. A figure marked ◒ or ⚡ is **not comparable** with an unmarked one. On a [project's page](project-page) the summary names the kind under the planned and running figures when the source gave one: *IT capacity*, *Facility power* or *Generator rating*.
 
 ## One building or the whole campus
 

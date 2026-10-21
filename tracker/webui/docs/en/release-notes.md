@@ -4,6 +4,14 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## 21 October 2026
 
+### A project's page, rewritten for reading
+
+- **A summary first**: planned, running, how much is still to come and when, the expected online date, the delay risk with its reasons, and the investment with its cost per megawatt; then the buyers, operator, power, what to watch for, the biggest obstacle and how well sourced the row is. Hover a figure for the sentence behind it. See [A project's page](project-page).
+- **Sections in an investor's order.** Progress and timeline, In context and Citations start closed; click a heading to open or close a section, and the page remembers.
+- **The twelve fields in two columns**, one line each. The sentence is a hover away, and opening a field shows every claim made about it.
+- **Obstacles one line each**, the sentence when you open one, resolved ones folded away. A tranche list shows its first twelve sections.
+- **A running campus with capacity still to come is read for delay risk** on its slips and obstacles — on its page and on its company's — rather than counted as low because part of it runs.
+
 ### Numbers that agree on every page
 
 - **Running capacity is never more than planned.** When the two disagree, the better-supported figure decides which one describes something else. Englewood no longer reads "18 MW planned, 6,750 MW running": the 6,750 was kilowatts written as megawatts, and such a figure is now set aside. See [Numbers and dates](numbers-and-dates).
@@ -25,7 +33,7 @@ Changes a reader of the console will notice, newest first. The console's version
 ### Project pages and Projects
 
 - **Who is involved is a list of names**, one line per role. Hover a name for the sentence behind it; **new** marks a company first named in the last 30 days.
-- **Fields are named in words**, in English and Chinese — *Planned · MW, 规划容量* — with the stored name in small type.
+- **Fields are named in words**, in English and Chinese — *Planned · MW, 规划容量* — with the stored name shown when a field is opened.
 - **The Projects table fits the window** and its column names stay in view as you scroll. Town and state are one **Location** column, and the columns run in reading order.
 
 ## September–October 2026
