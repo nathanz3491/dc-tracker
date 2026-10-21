@@ -39,7 +39,7 @@ import datetime as _dt
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import Any
 
@@ -371,7 +371,23 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
         for key, entry in by_key.items()
     ]
     claimed = sum(s.mw_planned for s in shares)
-    return shares, max(0.0, float(project.mw_planned or 0.0) - claimed)
+    planned = float(project.mw_planned or 0.0)
+    if project.mw_planned is not None and claimed > planned + 0.5:
+        # The tranches naming buyers describe more than the campus — the campus and
+        # its buildings, or one building under two names — so they are not a
+        # partition of it, and summing them credited buyers past the campus: 7,870 MW
+        # across nine campuses on the 10-21 copy, Doña Ana's 2,500 MW crediting
+        # Oracle 4,500 (`invariants.company_sums_campuses`). One buyer named across
+        # them holds the campus, no more; several cannot be told apart without a
+        # ratio nobody stated, so the campus is credited whole, the way `attribute`
+        # credits a campus without tranches. Until tranches nest in a hierarchy
+        # (Batch 4), this is the most that can be said without inventing.
+        if len(shares) == 1:
+            only = shares[0]
+            running = float(project.mw_built) if project.mw_built is not None else planned
+            return [replace(only, mw_planned=planned, mw_built=min(only.mw_built, running))], 0.0
+        return [], planned
+    return shares, max(0.0, planned - claimed)
 
 
 def campus_split(project: Project) -> tuple[list[BlockShare], float, float]:

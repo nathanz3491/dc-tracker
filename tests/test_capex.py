@@ -500,6 +500,36 @@ def test_the_campus_total_is_conserved_not_replaced(session):
     assert total == 750.0
 
 
+def test_one_buyers_overlapping_tranches_credit_it_the_campus_and_no_more(session):
+    """Doña Ana's 2,500 MW campus credited Oracle 4,500 MW (10-21 copy): its tranches
+    describe the campus and its buildings both, so they are not a partition of it."""
+    project = _project(
+        session, company="BorderPlex", customer=None, mw_planned=400.0, mw_built=100.0
+    )
+    _block(session, project, label="Campus", mw=400.0, customer="CoreWeave", status="serving")
+    _block(session, project, label="Building 1", mw=400.0, customer="CoreWeave", status="serving")
+    session.refresh(project)
+
+    shares, leftover = capex.block_shares(project)
+    assert [(s.key, s.mw_planned, s.mw_built) for s in shares] == [("coreweave", 400.0, 100.0)]
+    assert leftover == 0.0
+    assert sum(planned for planned, _ in capex.credits(project).values()) == 400.0
+
+
+def test_several_buyers_overlapping_tranches_leave_the_campus_whole(session):
+    """Abilene credited 3,872 MW to three buyers on a 1,200 MW campus. Which part is
+    whose cannot be told without a ratio nobody stated, so the campus is credited
+    whole, the way a campus without tranches is."""
+    project = _project(session, company="Crusoe", customer="Oracle", mw_planned=1200.0)
+    _block(session, project, label="Campus", mw=1200.0, customer="OpenAI", status="planned")
+    _block(session, project, label="Building 1", mw=672.0, customer="Microsoft", status="planned")
+    session.refresh(project)
+
+    shares, leftover = capex.block_shares(project)
+    assert shares == [] and leftover == 1200.0
+    assert capex.credits(project) == {"oracle": (1200.0, 0.0)}
+
+
 def test_an_unconfirmed_tranche_capacity_is_never_attributed(session):
     """Same rule as the rollup: a figure nobody stated is not a buyer's position."""
     project = _project(session, company="Someone", customer=None, mw_planned=100.0)

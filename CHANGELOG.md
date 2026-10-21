@@ -757,6 +757,20 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Capex no longer credits buyers past the campus they buy** (`tracker/capex.py`,
+  reader docs *Capex*, `tests/test_capex.py`). A campus's tranches that name buyers were
+  summed as though they divided the campus, but where they describe it more than once
+  — the campus and its buildings both listed — buyers were credited every description:
+  7,870 MW across nine campuses on the 10-21 copy, Doña Ana's 2,500 MW campus crediting
+  Oracle 4,500 and Abilene's 1,200 MW crediting OpenAI, Microsoft and Oracle 3,872.
+  Found by the new invariant that a company is the sum of its campuses. Now one buyer
+  named across overlapping tranches gets the campus and no more, and several are not
+  told apart — the campus is credited whole, as `attribute` credits one without
+  tranches. Capex planned capacity falls from 272,402 to 264,532 MW: OpenAI −3,100 MW,
+  Oracle −2,460, Fluidstack −1,446, Microsoft −672, CoreWeave −666, Core42 −221,
+  Cerebras −105, the stray "OpenAI, Oracle" row −1,000, and *(no named customer)*
+  +1,800.
+
 - **A campus's own power plant is no longer added into its capacity arithmetic**
   (`tracker/blocks.py`, `tracker/webui/static/app.js`). The reconciliation under the
   tranches counted the utility's plant — the gas, solar and substations built to serve
