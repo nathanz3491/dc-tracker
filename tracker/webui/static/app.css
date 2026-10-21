@@ -1367,6 +1367,10 @@ h5.dc-md-h {
   align-items: baseline; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px;
 }
 .dc-recon-row.is-total { font-weight: 600; border-top-width: 2px; }
+.dc-recon-sub {
+  margin: 12px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted-foreground);
+}
 .dc-recon-row > :last-child { font-size: 12px; font-weight: 400; }
 
 @media (max-width: 900px) {

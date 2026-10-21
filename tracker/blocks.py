@@ -502,9 +502,17 @@ class Accounting:
 
     @property
     def accounted_mw(self) -> float:
-        """What the displayed lines add up to. Equals `total` by construction."""
+        """What the lines inside the total add up to. Equals `total` by construction.
+
+        A utility's plant (`generation`) and a figure too large to be the campus's
+        (`out_of_scale`) are named beside the arithmetic and kept out of it. Adding the
+        plant in made seven campuses fail to close on the 10-21 copy — Newark's 279 MW
+        cogeneration read as 558 MW accounted for a 279 MW campus — and nothing noticed,
+        because no check ran this across the database until the invariants register did.
+        """
+        outside = ("overlap", "out_of_scale", "generation")
         over = sum(r.mw for r in self.residuals if r.reason == "overlap")
-        rest = sum(r.mw for r in self.residuals if r.reason not in ("overlap", "out_of_scale"))
+        rest = sum(r.mw for r in self.residuals if r.reason not in outside)
         return self.counted_mw + rest - over
 
     @property

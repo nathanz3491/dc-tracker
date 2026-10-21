@@ -3583,6 +3583,10 @@ function BlocksTab({ p }) {
   const describedOver = shown > campusTotal + 0.5;
   const barTone = (key) => (key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone);
   const barLabel = (key) => (key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label);
+  // The reconciliation's lines inside the total, and the two named beside it.
+  const OUTSIDE = ["generation", "out_of_scale"];
+  const inside = ((acct && acct.residuals) || []).filter((r) => !OUTSIDE.includes(r.reason));
+  const outside = ((acct && acct.residuals) || []).filter((r) => OUTSIDE.includes(r.reason));
 
   return html`
     <div class="dc-tranches">
@@ -3639,20 +3643,24 @@ function BlocksTab({ p }) {
       ${acct && html`
         <details class="dc-fold">
           <summary>How the ${fmtMw(acct.total)} MW adds up
-            <span class="dc-quiet">${` — ${fmtMw(acct.counted_mw)} MW cited per tranche, the rest on ${acct.residuals.length} line${acct.residuals.length === 1 ? "" : "s"} of its own`}</span></summary>
+            <span class="dc-quiet">${` — ${fmtMw(acct.counted_mw)} MW cited per tranche, the rest on ${inside.length} line${inside.length === 1 ? "" : "s"} of its own`}</span></summary>
           <div class="dc-fold-body">
             <${ReconRow} label="Cited per tranche" mw=${fmtMw(acct.counted_mw)}
               note="capacity a quote confirms for a named tranche" />
-            ${acct.residuals.map((r, i) => html`
+            ${inside.map((r, i) => html`
               <${ReconRow} key=${i}
                 label=${RECON_LABEL[r.reason] || r.reason}
-                mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note}
-                tone=${r.reason === "out_of_scale" ? "--danger"
-                  /* Generation is not a defect: the line is the arithmetic working. */
-                  : r.reason === "generation" ? null : "--warning"} />`)}
+                mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note} tone="--warning" />`)}
             <${ReconRow} strong label=${acct.total_is_floor ? "Accounted for (at least)" : "Accounted for"}
               mw=${fmtMw(acct.total)}
               note=${acct.total_is_floor ? "no source states a campus figure — this is the sum of the parts" : ""} />
+            ${/* Named, and kept out of the sum above: the column adds up to the total
+                  only without them (`blocks.Accounting.accounted_mw`). */ ""}
+            ${outside.length > 0 && html`
+              <p class="dc-recon-sub">Not part of the total</p>
+              ${outside.map((r, i) => html`
+                <${ReconRow} key=${`o${i}`} label=${RECON_LABEL[r.reason] || r.reason} mw=${fmtMw(r.mw)}
+                  note=${r.note} tone=${r.reason === "out_of_scale" ? "--danger" : null} />`)}`}
             ${uncited.length > 0 && html`
               <p class="dc-tr-note" style=${{ marginTop: 8 }}>
                 <strong style=${{ color: "var(--warning)" }}>待确认</strong> marks a capacity the article states

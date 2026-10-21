@@ -615,6 +615,9 @@ def test_generation_is_not_the_campus(session):
 
     accounting = blocks_mod.account(row)
     assert any(r.reason == "generation" for r in accounting.residuals)
+    # Named beside the arithmetic, not inside it: the lines still add up to the
+    # campus. Counted in, seven campuses failed to close (Newark: 558 of 279 MW).
+    assert accounting.closes, (accounting.accounted_mw, accounting.total)
 
 
 def test_a_utility_energising_its_own_plant_is_not_the_campus_going_live(session):

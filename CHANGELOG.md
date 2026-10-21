@@ -757,6 +757,16 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus's own power plant is no longer added into its capacity arithmetic**
+  (`tracker/blocks.py`, `tracker/webui/static/app.js`). The reconciliation under the
+  tranches counted the utility's plant — the gas, solar and substations built to serve
+  a campus — among the lines that make up the campus total, so on seven campuses the
+  column did not add up: Newark read 279 MW of cogeneration plus 279 MW unitemised as
+  "accounted for" 279 MW, Hyperion 5,962 MW over. Found by measuring, for Batch 4 of the
+  client plan, which of the data's relationships close across the whole database. The
+  plant is now named beside the total, under *Not part of the total* with any
+  out-of-scale tranche, and every campus's lines add up to it.
+
 - **The AI overview asks again when the model provider refuses, and says why when it
   still cannot** (`tracker/llm.py`, `tracker/overview.py`, `tracker/webui/server.py`,
   reader docs *A project's page*). On 2026-10-21 OpenCode Go answered 503 "Endpoint is
