@@ -180,10 +180,15 @@ def _phase_not_behind_tranches(projects: list[Any], _context: Any) -> list[Viola
     for p in projects:
         if (p.phase or "") not in _BEFORE_ANY_TRANCHE_LIVE:
             continue
+        # Named tranches only, as `blocks.phase_after_blocks` reads them when it sets
+        # the phase: an unnamed "Phase 1" says nothing about which facility it is,
+        # and Switch's The Rock carries two from a city page that put another
+        # operator's building on it.
         live = [
             b
             for b in (p.blocks or ())
             if b.status in blocks_mod.LIVE_STATUSES
+            and not getattr(b, "generic", False)
             and not blocks_mod.is_generation(b.label, getattr(b, "parent", None))
         ]
         if live:
@@ -228,16 +233,33 @@ def _residual(projects: list[Any], context: Any, reason: str) -> list[tuple[Any,
 
 
 def _tranche_le_campus(projects: list[Any], context: Any) -> list[Violation]:
-    return [
-        Violation(
-            p.id,
-            _name(p),
-            f"{', '.join(r.labels[:3])} — {_mw(r.mw)} against a {_mw(got.total)} campus; "
-            "left out of every figure",
-            r.mw,
+    """Out-of-scale tranches whose figure still stands as a confirmed one.
+
+    The nightly `audit resolve` marks such a figure 待确认 when the tranche's own label
+    states the real capacity ("2.4 MW Lease" holding 2,400) — the durable record that
+    it cannot be counted. One so marked is settled, and counting it here would keep
+    the register reporting work the loop has already done.
+    """
+    out = []
+    for p, got, r in _residual(projects, context, "out_of_scale"):
+        open_ = [
+            b
+            for b in (p.blocks or ())
+            if b.label in r.labels and blocks_mod.mw_is_confirmed(b) and b.mw is not None
+        ]
+        if not open_:
+            continue
+        mw = sum(b.mw for b in open_)
+        out.append(
+            Violation(
+                p.id,
+                _name(p),
+                f"{', '.join(sorted(b.label for b in open_)[:3])} — {_mw(mw)} against a "
+                f"{_mw(got.total)} campus; left out of every figure",
+                mw,
+            )
         )
-        for p, got, r in _residual(projects, context, "out_of_scale")
-    ]
+    return out
 
 
 def _tranches_once(projects: list[Any], context: Any) -> list[Violation]:
