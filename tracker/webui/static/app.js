@@ -3586,6 +3586,7 @@ function BlocksTab({ p }) {
 
   return html`
     <div class="dc-tranches">
+      <div class="dc-tr-card">
       <div class="dc-tr-head">
         <div class="dc-tr-headline">
           <span class="dc-tr-big dc-num">${fmtMw(headline)} MW</span>
@@ -3628,11 +3629,12 @@ function BlocksTab({ p }) {
         </div>`}
 
       ${rejected.length > 0 && html`
-        <p class="dc-tr-note">
+        <p class="dc-tr-note dc-tr-foot">
           <strong style=${{ color: "var(--danger)" }}>Out of scale:</strong>
           ${" "}${rejected.map((b) => `${b.label} ${fmtMw(b.mw)} MW`).join(", ")}
           ${" "}${rejected.length === 1 ? "is" : "are"} larger than this whole campus and left out of the
           figures — almost always kilowatts read as megawatts.</p>`}
+      </div>
 
       ${acct && html`
         <details class="dc-fold">

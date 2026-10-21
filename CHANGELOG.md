@@ -373,8 +373,8 @@ initial build of the v1 PRD.
   `tracker/webui/static/app.css`, reader docs *A project's page*, *Release notes*). Left
   out of the rewrite the same day and pointed out by the user: it was still a 30px
   headline over a five-column table whose rows ran to three lines with their notes,
-  then seven reconciliation rows and two paragraphs. Now the headline and the state bar
-  at the summary's size, one line per section in a bordered list like the obstacles —
+  then seven reconciliation rows and two paragraphs. Now one card holds the headline and
+  the state bar at the summary's size and one line per section, like the obstacles —
   state, name under its facility, what it delivers of what it holds, customer, *since*
   or amber *was due* — with "· N notes" opening the other names, an unsettled section,
   a figure two sources disagree on or an unquoted 待确认 capacity, and the arithmetic

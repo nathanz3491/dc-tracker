@@ -5406,5 +5406,7 @@ def test_the_project_page_reads_in_an_investors_order():
     # The tranches follow the same layout: one line per section, notes behind it.
     assert "dc-blockrow" not in app and ".dc-blockrow" not in css
     assert re.search(r"\.dc-tr-line\s*\{", css) and "function TrancheRow(" in app
+    # ...and the headline, bar and list sit in one card, like the summary's figures.
+    assert re.search(r"\.dc-tr-card\s*\{[^}]*border:", css) and 'class="dc-tr-card"' in app
     facts = re.search(r"\.dc-facts\s*\{([^}]*)\}", css)
     assert facts and "repeat(2, minmax(0, 1fr))" in facts.group(1)

@@ -1302,7 +1302,10 @@ h5.dc-md-h {
  * folded. Five columns need about 600px; under 900 the customer and the date drop
  * under the name, the pairing of a section with its megawatts kept on one line. */
 .dc-tranches { display: grid; gap: 12px; }
-.dc-tr-head { display: grid; gap: 8px; }
+/* One card: the headline, the bar and the list read as one thing, as the summary's
+   figures do — the headline floating on the page above a boxed list did not. */
+.dc-tr-card { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.dc-tr-head { display: grid; gap: 8px; padding: 14px 14px 12px; }
 .dc-tr-headline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 13.5px; }
 .dc-tr-big {
   font-family: var(--font-display); font-size: 24px; font-weight: 500; letter-spacing: -0.015em;
@@ -1316,7 +1319,8 @@ h5.dc-md-h {
 .dc-tr-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
 .dc-tr-note { margin: 0; font-size: 12px; line-height: 18px; color: var(--muted-foreground); max-width: 92ch; }
 
-.dc-tr-table { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.dc-tr-table { border-top: 1px solid var(--border); }
+.dc-tr-foot { padding: 10px 14px 12px; border-top: 1px solid var(--border); }
 .dc-tr-line {
   display: grid; grid-template-columns: 148px minmax(0, 1fr) 150px minmax(0, 170px) 104px;
   gap: 12px; align-items: baseline; padding: 8px 14px;
@@ -1345,7 +1349,7 @@ h5.dc-md-h {
   display: grid; gap: 3px; margin: 0; padding: 0 14px 10px 174px; list-style: none;
   font-size: 12.5px; line-height: 18px; color: var(--muted-foreground);
 }
-.dc-tranches > .dc-tr-table > button { padding: 8px 14px 10px !important; }
+.dc-tr-table > button { padding: 8px 14px 10px !important; }
 
 /* A section folded under a summary line: the arithmetic, the utility's plant. */
 .dc-fold { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
