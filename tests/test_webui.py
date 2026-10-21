@@ -5355,3 +5355,25 @@ def test_the_reader_sends_the_projects_own_user_agent(monkeypatch):
     monkeypatch.setattr(httpx, "get", fake_get)
     article._get("https://news.example.com/a")
     assert sent["user-agent"] == "dc-tracker/test (+https://example.com/crawler)"
+
+
+def test_the_projects_table_fits_the_page_and_pins_its_header():
+    """The client's reader scrolled sideways on a 1,456px screen and lost the column
+    names a screen down (2026-10-21). The default table now fits: it is not a
+    sideways scroller, its layout is fixed, and its header sticks under the app
+    header. A scroll container would make the sticky header stick to it instead of
+    the page, so the wrapper's `overflow: visible` is what the pin rests on."""
+    css = (assets.STATIC_ROOT / "app.css").read_text(encoding="utf-8")
+    app = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
+
+    def rule(selector: str) -> str:
+        match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+        assert match, f"{selector} is gone from app.css"
+        return match.group(1)
+
+    assert "overflow: visible" in rule(".dc-fit.mrd-table-wrap")
+    assert "table-layout: fixed" in rule(".dc-fit-table")
+    header = rule(".dc-fit-table thead th")
+    assert "position: sticky" in header and "var(--dc-header-h" in header
+    assert 'containerClassName=${fit ? "dc-fit" : ""}' in app
+    assert 'className=${fit ? "dc-fit-table" : ""}' in app

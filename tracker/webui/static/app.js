@@ -54,6 +54,43 @@ const withLateColumn = (keys) => {
   return at < 0 ? [...keys, LATE_COL] : [...keys.slice(0, at + 1), LATE_COL, ...keys.slice(at + 1)];
 };
 
+/* The projects table, fitted to the page (2026-10-21).
+ *
+ * The default view used to run 1,538px wide inside a 1,387px card on a 1,456px
+ * screen, so a reader scrolled sideways, and because the card was a sideways
+ * scroller the header could not stay pinned either. It now fits: a fixed layout
+ * with set widths for the short columns, the two names sharing what is left and
+ * cut with an ellipsis, town and state in one column, and the columns in reading
+ * order — who, where, how far along, how big, when — rather than ranked by how
+ * often each is filled, which put State before Phase and Running before Planned.
+ * The "all fields" view keeps the old sideways-scrolling table: its twenty
+ * columns cannot fit, and it is opened for checking data rather than reading. */
+const LOCATION_COL = "location";
+const TABLE_ORDER = ["name", "company", "customer", LOCATION_COL, "city", "state", "phase",
+  LATE_COL, "mw_planned", "mw_built", "investment_usd", "first_announced", "expected_online",
+  "blocker"];
+//: px, measured against the widest header and value of each on a production copy:
+//: a capacity header ("PLANNED", its sort mark, "MW" under it) is wider than any
+//: figure in the column. A column not listed (the names, the obstacle) shares
+//: what is left.
+const FIT_WIDTH = {
+  id: 64, company: 170, customer: 150, [LOCATION_COL]: 150, city: 130, state: 76,
+  phase: 112, [LATE_COL]: 80, mw_planned: 122, mw_built: 122, investment_usd: 122,
+  first_announced: 124, expected_online: 116, filled: 72, tracks: 108,
+};
+const sortKeyOf = (key) => (key === LOCATION_COL ? "state" : key);
+//: The class a fitted column carries, so app.css can let it go on a narrow window.
+const fitClass = (key) => (key === "first_announced" || key === "expected_online" ? "dc-col-date" : "");
+
+function fitColumns(visible) {
+  const keys = withLateColumn(visible);
+  const placed = keys.includes("city") && keys.includes("state")
+    ? keys.filter((k) => k !== "state").map((k) => (k === "city" ? LOCATION_COL : k))
+    : keys;
+  const rank = (k) => (TABLE_ORDER.indexOf(k) < 0 ? TABLE_ORDER.length : TABLE_ORDER.indexOf(k));
+  return ["id", ...[...placed].sort((a, b) => rank(a) - rank(b))];
+}
+
 /*: Column heading, unit, and the tooltip that says what the number is OF.
  *
  * The table used to head every column with its own database field name —
@@ -78,6 +115,7 @@ const COLUMN = {
   company: { label: "Operator", zh: "运营商", why: "Who runs the site. Other parties — the developer, the landowner, the tenant, the utility — are in the project drawer." },
   customer: { label: "Buyer", zh: "买方", why: "Who occupies the site and pays for the compute. Empty is often correct: a hyperscaler building for itself has no external tenant." },
   city: { label: "City", zh: "城市" },
+  location: { label: "Location", zh: "地点", why: "The town and state the campus is filed under. Sorts by state." },
   county: { label: "County", zh: "县" },
   state: { label: "State", zh: "州" },
   phase: { label: "Phase", zh: "阶段", why: "The furthest stage any source puts the campus at." },
@@ -248,9 +286,11 @@ const chip = (token, outline) => {
  * one-sentence reason. */
 const daysText = (n) => `${Number(n).toLocaleString()} day${n === 1 ? "" : "s"}`;
 
-function DelayChip({ delay, compact = false }) {
+function DelayChip({ delay, compact = false, short = false }) {
   if (!delay) return null;
-  const text = compact
+  // `short` is the fitted table's column: "81d", the reason on hover.
+  const text = short ? `${Number(delay.days_late).toLocaleString()}d`
+    : compact
     ? daysText(delay.days_late)
     : `Suspected delay — expected online ${delay.stated}, passed ${daysText(delay.days_late)} ago, no news of going live`;
   // The long form wraps: it is a sentence, and a pill that cannot wrap pushes the
@@ -1126,7 +1166,8 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
     useProjectPage(f, sort);
   const sentinel = useSentinel(more, hasMore && !loading && !error);
 
-  const columns = ["id", ...withLateColumn(cols.visible), ...(wide ? AUDIT : [])];
+  const fit = !wide;
+  const columns = fit ? fitColumns(cols.visible) : ["id", ...withLateColumn(cols.visible), ...AUDIT];
   const clean = JSON.stringify(f) === JSON.stringify(BLANK_FILTERS);
   // The fleet's count, from the light index the shell already holds, so the switch
   // says how many it would keep before anybody turns it on.
@@ -1296,23 +1337,35 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
              cannot also be sticky. */ ""}
         <div style=${{ minWidth: 0 }}>
           <div class=${`dc-paged${stale ? " dc-paged--stale" : ""}`}>
-          <${Table} density="compact">
+          <${Table} density="compact" containerClassName=${fit ? "dc-fit" : ""}
+                    className=${fit ? "dc-fit-table" : ""}>
+            ${fit && html`
+              <colgroup>
+                ${columns.map((key) => html`
+                  <col key=${key} class=${fitClass(key)}
+                       style=${FIT_WIDTH[key] ? { width: FIT_WIDTH[key] } : undefined} />`)}
+                <col class="dc-col-filled" style=${{ width: FIT_WIDTH.filled }} />
+                <col class="dc-col-tracks" style=${{ width: FIT_WIDTH.tracks }} />
+              </colgroup>`}
             <${TableHeader}><${TableRow}>
               ${columns.map((key, i) => html`
-                <${TableHead} key=${key}
+                <${TableHead} key=${key} className=${fit ? fitClass(key) : ""}
                   align=${RIGHT.has(key) ? "right" : "left"}
                   sortable=${key !== "id"}
-                  sortDirection=${sort.key === key ? sort.dir : null}
-                  onSort=${() => setSort((s) => ({ key, dir: s.key === key && s.dir === "desc" ? "asc" : "desc" }))}
-                  style=${i < 2 ? { position: "sticky", left: i === 0 ? 0 : ID_COL_W, zIndex: 4,
+                  sortDirection=${sort.key === sortKeyOf(key) ? sort.dir : null}
+                  onSort=${() => setSort((s) => {
+                    const by = sortKeyOf(key);
+                    return { key: by, dir: s.key === by && s.dir === "desc" ? "asc" : "desc" };
+                  })}
+                  style=${fit ? undefined : i < 2 ? { position: "sticky", left: i === 0 ? 0 : ID_COL_W, zIndex: 4,
                                     background: "var(--surface)",
                                     ...(i === 0 ? { width: ID_COL_W, minWidth: ID_COL_W } : {}) } : undefined}>
                   <span title=${(COLUMN[key] || {}).why || key}>${columnLabel(key)}</span>
                   ${(COLUMN[key] || {}).unit && html`<span style=${{ display: "block", fontWeight: 400,
                       fontSize: 9.5, letterSpacing: ".06em", textTransform: "none",
                       color: "var(--muted-foreground)" }}>${COLUMN[key].unit}</span>`}<//>`)}
-              <${TableHead} align="right">filled<//>
-              <${TableHead}>tracks<//>
+              <${TableHead} align="right" className="dc-col-filled">filled<//>
+              <${TableHead} className="dc-col-tracks">tracks<//>
             <//><//>
             <${TableBody}>
               ${rows.map((p, i) => html`
@@ -1322,17 +1375,20 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
                     aria-label=${`${companyName(p)} ${p.name}, ${place(p)}, confidence ${p.confidence}`}
                     onClick=${() => onOpen(p.id)}
                     onKeyDown=${(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(p.id); } }}>
-                  <td class="dc-sticky" style=${{ left: 0, whiteSpace: "nowrap", width: ID_COL_W, minWidth: ID_COL_W }}>
+                  <td class=${fit ? "" : "dc-sticky"}
+                      style=${fit ? { whiteSpace: "nowrap" } : { left: 0, whiteSpace: "nowrap", width: ID_COL_W, minWidth: ID_COL_W }}>
                     <${WatchButton} id=${p.id} watch=${watch} onGoto=${onGoto} />
                     <span class="dc-v dc-num" style=${{ fontSize: 12, color: "var(--muted-foreground)" }}
                           title=${p.dedup_key}>#${p.id}</span>
                   </td>
                   ${columns.slice(1).map((key, i) => html`
                     <td key=${key}
-                        class=${`dc-cell${["name", "company", "blocker"].includes(key) ? " dc-cell--wide" : ""}${i === 0 ? " dc-sticky" : ""}`}
-                        style=${i === 0 ? { left: ID_COL_W } : undefined}>
+                        class=${`dc-cell${["name", "company", "blocker"].includes(key) ? " dc-cell--wide" : ""}${i === 0 && !fit ? " dc-sticky" : ""}${fit && fitClass(key) ? ` ${fitClass(key)}` : ""}`}
+                        style=${i === 0 && !fit ? { left: ID_COL_W } : undefined}>
                       ${key === LATE_COL
-                        ? html`<${DelayChip} delay=${p.suspected_delay} compact=${true} />`
+                        ? html`<${DelayChip} delay=${p.suspected_delay} compact=${true} short=${fit} />`
+                        : key === LOCATION_COL
+                        ? html`<${Value} project=${p} field="city" text=${place(p)} onQuote=${showQuote} />`
                         : html`<${Value} project=${p} field=${key} onQuote=${showQuote}
                         text=${key === "company" ? companyName(p) : key === "customer" ? customerName(p) : undefined}
                         extra=${{
@@ -1340,12 +1396,12 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
                           ...(key === "name" || key === "company" ? { fontWeight: 600 } : {}),
                         }} />`}
                     </td>`)}
-                  <td class="dc-num" title=${`${p.filled} of the 12 tracked fields are populated`}
+                  <td class="dc-num dc-col-filled" title=${`${p.filled} of the 12 tracked fields are populated`}
                       style=${{ fontSize: 12, whiteSpace: "nowrap",
                                 color: p.filled >= 9 ? "var(--success)"
                                      : p.filled >= 6 ? "var(--muted-foreground)" : "var(--warning)" }}>
                     ${p.filled}/12</td>
-                  <td><${TrackStrip} standing=${p.standing} tracks=${data.tracks} /></td>
+                  <td class="dc-col-tracks"><${TrackStrip} standing=${p.standing} tracks=${data.tracks} /></td>
                 </tr>`)}
               ${first && html`<${SkeletonRows} columns=${columns.length + 2} count=${8} />`}
               ${appending && html`<${SkeletonRows} columns=${columns.length + 2} count=${2} />`}

@@ -819,20 +819,44 @@ h5.dc-md-h {
    twenty projects" when there are 124, because the page moves and the rows do
    not.
 
-   The column headers therefore scroll away, and that is a real cost accepted for
-   a real reason rather than an oversight. `.mrd-table-wrap` needs `overflow-x:
-   auto` so a 13-column table scrolls sideways in its own box instead of widening
-   the page; CSS then computes the *other* axis to `auto` as well, which makes the
-   wrapper a scroll container, and a `position: sticky` header inside one sticks
-   to that container rather than to the viewport. You can have the horizontal
-   scroller or the sticky header, not both, without restructuring the table into
-   two synchronised elements.
+   A sideways scroller and a pinned header cannot share one box: `overflow-x:
+   auto` makes CSS compute the other axis to `auto` too, so the wrapper becomes a
+   scroll container and a `position: sticky` header inside it sticks to the
+   wrapper, not the viewport. So the default view fits the page instead
+   (`.dc-fit`, 2026-10-21): no sideways scroll, a fixed layout whose names cut
+   with an ellipsis, and a header that stays under the app header as the page
+   scrolls. The client's reader scrolled sideways on a 1,456px screen and lost the
+   column names a screen down.
 
-   Row identity survives regardless: the id and company columns stay pinned while
-   you scroll sideways, which is the axis that actually loses you. --dc-header-h
-   is still measured and published for anything else that needs to sit clear of
-   the app header. */
+   As the window narrows, the columns a reader can most spare go first, each at
+   the width where the project name would otherwise drop below ~180px: the track
+   strip at 1,400px, the filled count at 1,260px, the dates at 1,190px. Below
+   1,068px nothing more can go, so the table scrolls sideways in its own box
+   again and the header stops pinning; under 720px it becomes cards.
+
+   The "all fields" view keeps the sideways scroller, with the id and name pinned
+   while you scroll across, and its header scrolls away: twenty columns cannot fit,
+   and that view is for checking data rather than reading it. */
 :root { --dc-header-h: 60px; }
+
+.dc-fit.mrd-table-wrap { overflow: visible; }
+.dc-fit-table { table-layout: fixed; }
+.dc-fit-table thead th {
+  position: sticky; top: var(--dc-header-h, 60px); z-index: 3;
+  background: var(--surface);
+  /* A collapsed border stays behind when the header sticks; a shadow travels. */
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+.dc-fit-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-fit-table .dc-cell, .dc-fit-table .dc-cell--wide { max-width: none; }
+@media (max-width: 1400px) { .dc-fit-table .dc-col-tracks { display: none; } }
+@media (max-width: 1260px) { .dc-fit-table .dc-col-filled { display: none; } }
+@media (max-width: 1190px) { .dc-fit-table .dc-col-date { display: none; } }
+@media (max-width: 1068px) {
+  .dc-fit.mrd-table-wrap { overflow-x: auto; }
+  .dc-fit-table { table-layout: auto; }
+  .dc-fit-table thead th { position: static; box-shadow: none; }
+}
 
 /* ---- Updates ---------------------------------------------------------------
    One column, bands in decreasing importance. Deliberately not a grid of equal

@@ -24,14 +24,16 @@ The obstacle and severity filters are checked separately: a row passes if it has
 
 ## Columns
 
-The table always starts with **#** — the campus's number, with its ☆ watch button — followed by the tracked fields. Which fields show by default depends on how well filled they are: a field filled for at least half of the campuses is shown, the rest are behind **Show N sparser fields**. So the default columns can change as the data grows.
+The table always starts with **#** — the campus's number, with its ☆ watch button — followed by the tracked fields, in reading order: who, where, how far along, how big, when. Which fields show by default depends on how well filled they are: a field filled for at least half of the campuses is shown, the rest are behind **Show N sparser fields**. So the default columns can change as the data grows.
+
+The default table fits the width of the window, so there is nothing to scroll sideways, and its column names stay pinned under the console's header as you scroll down. Names too long for their column end in "…"; hover one for the full value. On a narrower window the columns a reader can most spare make room for the names: the **tracks** strip goes below about 1,400 pixels wide, the **filled** count below 1,260, the dates below 1,190. Narrower than about 1,070 the table scrolls sideways in its own box again and the column names scroll away; on a phone it becomes a list of cards.
 
 | Column | Meaning |
 | --- | --- |
 | **Project** | The campus's name. |
 | **Operator** | The company building and running it. |
 | **Buyer** | The tenant that will use it, if a source names one. |
-| **City**, **State** | Where it is. |
+| **Location** | Where it is: the town (or county) and state. Sorting it sorts by state. With **All fields** on, City and State are separate columns. |
 | **Phase** | How far along it is. |
 | **Late** | For a suspected delay, how many days ago its online date's period ended, in amber; hover for the reason. Empty for every other campus. Always shown, beside Phase. |
 | **Planned (MW)** | Planned capacity, in megawatts. |
@@ -43,7 +45,7 @@ The table always starts with **#** — the campus's number, with its ☆ watch b
 
 **Operator** and **Buyer** show each company under one name, however a campus's source spelled it: AWS, Amazon Web Services and Amazon Data Services all read *Amazon*, and RagingWire reads *NTT*. The name is the one on the tracker's list of operators, otherwise the spelling most campuses use, and every page of the console uses the same one. A campus's own page shows its source's spelling beside the name when the two differ. A tenant described without a name, such as "a Fortune 100 company", is shown as written.
 
-With **All fields** on you also get **Compute (H200-eq)**, **County**, **Lat**, **Lon**, **Confidence (0-3)** and **Verified**. Every field is defined in the [Field dictionary](fields).
+With **All fields** on you also get **Compute (H200-eq)**, **County**, **Lat**, **Lon**, **Confidence (0-3)** and **Verified**. That table is too wide for any window, so it scrolls sideways in its own box, keeping each row's number and name in view as you scroll across; its column names do not stay pinned. Every field is defined in the [Field dictionary](fields).
 
 Two columns at the end are summaries and cannot be sorted:
 

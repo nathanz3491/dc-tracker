@@ -318,6 +318,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The projects table fits the window and keeps its column names in view**
+  (`tracker/webui/static/app.js`, `tracker/webui/static/app.css`, reader docs
+  *Projects*). Reported 2026-10-21: on a 1,456-pixel screen the table ran 1,538 pixels
+  wide inside a 1,387-pixel card, so a reader scrolled sideways, and because the card
+  was a sideways scroller its header could not stay pinned either — the column names
+  were gone a screen down. The default table now fits: fixed column widths measured
+  against each column's widest header and value, the two names sharing what is left
+  and cut with "…", town and state in one **Location** column, and the columns in
+  reading order (who, where, how far along, how big, when) rather than ranked by how
+  well filled they are, which had put State before Phase and Running before Planned.
+  Its header now stays under the console's own as the page scrolls. On a narrower
+  window the track strip, then the filled count, then the dates make room for the
+  names; below about 1,070 pixels the table scrolls sideways in its own box again.
+  The **All fields** view, twenty-two columns, keeps scrolling sideways with each
+  row's number and name pinned.
+
 - **The companies on a project page are names, not paragraphs, and new ones stand
   out; every tracked field is named in words** (`tracker/webui/static/app.js`,
   `tracker/parties.py`, `tracker/export.py`, reader docs *The project page*). From
