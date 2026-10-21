@@ -1294,48 +1294,85 @@ h5.dc-md-h {
   text-decoration: underline;
 }
 
-/* --- capacity blocks -------------------------------------------------------
+/* ---- Capacity by tranche ---------------------------------------------------
  *
- * Five columns of tranche data need about 400px and a phone drawer gives 346, so
- * the grid is declared here rather than inline: only a media query can rebuild it
- * for a narrow screen, and an overflowing table is unreadable in a way a stacked
- * one is not.
- *
- * On a phone the tranche and its megawatts stay side by side — that pairing is the
- * whole point of the table — and state, customer and date drop onto their own
- * lines, each prefixed with the column heading it lost. */
-.dc-blockrow {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 108px 156px minmax(0, 1fr) 84px;
-  gap: 12px;
-  align-items: baseline;
+ * The page's other lists, applied to the tranches (client review, 2026-10-21): a
+ * headline at the summary's size, one line per section in a bordered list like the
+ * obstacles, notes opened from the line, the arithmetic and the utility's plant
+ * folded. Five columns need about 600px; under 900 the customer and the date drop
+ * under the name, the pairing of a section with its megawatts kept on one line. */
+.dc-tranches { display: grid; gap: 12px; }
+.dc-tr-head { display: grid; gap: 8px; }
+.dc-tr-headline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 13.5px; }
+.dc-tr-big {
+  font-family: var(--font-display); font-size: 24px; font-weight: 500; letter-spacing: -0.015em;
 }
+.dc-tr-meta { font-size: 12.5px; color: var(--muted-foreground); }
+.dc-tr-barfull {
+  display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; background: var(--border);
+}
+.dc-tr-barfull > span { display: block; height: 100%; }
+.dc-tr-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted-foreground); }
+.dc-tr-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.dc-tr-note { margin: 0; font-size: 12px; line-height: 18px; color: var(--muted-foreground); max-width: 92ch; }
 
-@media (max-width: 720px) {
-  .dc-blockrow {
-    grid-template-columns: minmax(0, 1fr) 96px;
-    row-gap: 5px;
-  }
-  /* The heading row cannot label columns that are no longer columns. */
-  .dc-blockhead > :nth-child(n + 3) {
-    display: none;
-  }
-  .dc-blockrow > .dc-bmeta {
-    grid-column: 1 / -1;
-    text-align: left !important;
-  }
-  .dc-blockrow > .dc-bmeta::before {
-    content: attr(data-label) " ";
-    text-transform: uppercase;
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    color: var(--muted-foreground);
-    margin-right: 6px;
-  }
-  /* Its own heading is already in the ::before above. */
-  .dc-blockrow > .dc-bmeta > .dc-bmeta-label {
-    display: none;
-  }
+.dc-tr-table { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); overflow: hidden; }
+.dc-tr-line {
+  display: grid; grid-template-columns: 148px minmax(0, 1fr) 150px minmax(0, 170px) 104px;
+  gap: 12px; align-items: baseline; padding: 8px 14px;
+}
+.dc-tr-cols {
+  padding-top: 9px; padding-bottom: 7px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--muted-foreground);
+}
+.dc-tr-cols > :nth-child(3), .dc-tr-cols > :nth-child(5) { text-align: right; }
+.dc-tr-list { list-style: none; margin: 0; padding: 0; }
+.dc-tr-list > li { border-top: 1px solid var(--border); }
+.dc-tr > summary { cursor: pointer; list-style: none; }
+.dc-tr > summary::-webkit-details-marker { display: none; }
+.dc-tr > summary:hover { background: color-mix(in oklab, var(--muted) 45%, transparent); }
+.dc-tr > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.dc-tr-state { justify-self: start; height: 20px !important; font-size: 11px !important; padding: 0 8px !important; }
+.dc-tr-name { min-width: 0; font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
+.dc-tr-parent { margin-right: 5px; font-weight: 400; color: var(--muted-foreground); }
+.dc-tr-count { font-size: 11.5px; font-weight: 400; color: var(--muted-foreground); white-space: nowrap; }
+.dc-tr-mw { display: grid; gap: 3px; font-size: 13px; text-align: right; }
+.dc-tr-bar { display: block; height: 2px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.dc-tr-bar > b { display: block; height: 100%; }
+.dc-tr-cust { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.dc-tr-when { font-size: 12px; text-align: right; color: var(--muted-foreground); white-space: nowrap; }
+.dc-tr-notes {
+  display: grid; gap: 3px; margin: 0; padding: 0 14px 10px 174px; list-style: none;
+  font-size: 12.5px; line-height: 18px; color: var(--muted-foreground);
+}
+.dc-tranches > .dc-tr-table > button { padding: 8px 14px 10px !important; }
+
+/* A section folded under a summary line: the arithmetic, the utility's plant. */
+.dc-fold { border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.dc-fold > summary { padding: 10px 14px; cursor: pointer; list-style: none; font-size: 13.5px; }
+.dc-fold > summary::-webkit-details-marker { display: none; }
+.dc-fold > summary::before {
+  content: "\203A"; display: inline-block; width: 14px; color: var(--muted-foreground);
+  transition: transform var(--duration-fast) var(--ease-swift);
+}
+.dc-fold[open] > summary::before { transform: rotate(90deg); }
+.dc-fold > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: 14px; }
+.dc-fold-body { display: grid; padding: 0 14px 12px; }
+.dc-recon-row {
+  display: grid; grid-template-columns: minmax(0, 230px) 104px minmax(0, 1fr); gap: 12px;
+  align-items: baseline; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px;
+}
+.dc-recon-row.is-total { font-weight: 600; border-top-width: 2px; }
+.dc-recon-row > :last-child { font-size: 12px; font-weight: 400; }
+
+@media (max-width: 900px) {
+  .dc-tr-line { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 3px; }
+  .dc-tr-cols { display: none; }
+  .dc-tr-cust { grid-column: 2; font-size: 12.5px; color: var(--muted-foreground); }
+  .dc-tr-when { grid-column: 3; }
+  .dc-tr-notes { padding-left: 14px; }
+  .dc-recon-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .dc-recon-row > :last-child { grid-column: 1 / -1; }
 }
 
 /* ---- Sources page and the article modal -----------------------------------

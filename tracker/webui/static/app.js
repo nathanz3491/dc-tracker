@@ -21,8 +21,8 @@ const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
 /* A fragment, so one loop iteration can emit a group header plus its row without
-   wrapping them in a div — the 5-column `dc-blockrow` grid is a direct child of the
-   table container, and an extra element between them breaks the alignment. */
+   wrapping them in a div, which would break a grid that wants them as direct
+   children. */
 const Frag = React.Fragment;
 const NS = window.MeridianDesignSystem_6e9015 || {};
 const {
@@ -3412,379 +3412,269 @@ function fmtMonth(iso) {
   return MONTHS[Number(m) - 1] ? `${MONTHS[Number(m) - 1]} ${y}` : iso;
 }
 
-//: One row of the reconciliation under the tranches. Kept as table rows rather than
-//: a paragraph so the megawatt column is a single column a reader can add up — the
-//: whole complaint was that the numbers did not visibly add up.
+/* ---- Capacity by tranche ----------------------------------------------------
+ *
+ * Rewritten with the rest of the page (client review, 2026-10-21). The headline
+ * and the state bar at the summary's size; one line per section, like the
+ * obstacles — its state, name, what it delivers of what it holds, its customer and
+ * its date — with what a reader checks only now and then (other names, a figure two
+ * sources disagree on, one nobody quoted) opened from the line; and the arithmetic
+ * and the utility's plant folded underneath. It was a 30px headline over a table of
+ * three-line rows, which on Abilene ran to five screens.
+ *
+ * The figures are unchanged. Every one comes from the server's accounting
+ * (`blocks.account`, `webui/dataset.py`), and the browser decides nothing about
+ * which tranche counts: a second sum here is how this panel once read 132 MW at the
+ * top and 36,126 at the bottom. */
+
+const RESIDUAL_LABEL = {
+  unconfirmed: "Stated, unconfirmed",
+  unplaceable: "Not tied to a facility",
+  unitemised: "Not yet itemised",
+};
+const RESIDUAL_TONE = {
+  unconfirmed: "--warning",
+  unplaceable: "--chart-5",
+  unitemised: "--border",
+};
+const RECON_LABEL = {
+  unitemised: "Not yet itemised",
+  unconfirmed: "Stated, unconfirmed",
+  unplaceable: "Not tied to a facility",
+  out_of_scale: "Out of scale, excluded",
+  generation: "Power serving the campus",
+  overlap: "Counted twice over",
+};
+
+//: One line of the arithmetic. A column of megawatts a reader can add up, because
+//: the complaint that started this panel was that the numbers did not visibly add up.
 function ReconRow({ label, mw, note, strong, tone }) {
+  const colour = tone ? { color: `var(${tone})` } : undefined;
   return html`
-    <div class="dc-blockrow" style=${{ padding: "9px 4px", borderTop: "1px solid var(--border)" }}>
-      <span style=${{ fontSize: 13, fontWeight: strong ? 600 : 400,
-             color: tone ? `var(${tone})` : "inherit" }}>${label}</span>
-      <span class="dc-num" style=${{ fontSize: 13, textAlign: "right", fontWeight: strong ? 600 : 400,
-             color: tone ? `var(${tone})` : "inherit" }}>${mw}</span>
-      <span style=${{ fontSize: 12, color: "var(--muted-foreground)", gridColumn: "3 / -1" }}>${note || ""}</span>
+    <div class=${`dc-recon-row${strong ? " is-total" : ""}`}>
+      <span style=${colour}>${label}</span>
+      <span class="dc-num" style=${{ ...colour, textAlign: "right" }}>${mw}</span>
+      <span class="dc-quiet">${note || ""}</span>
     </div>`;
 }
 
-/* The utility's plant, folded away under the campus it serves.
- *
- * Kept on the page rather than dropped: Entergy building 2,262 MW of gas *for
- * Hyperion* is one of the most important facts about that campus. It is simply
- * not the campus's capacity — a plant's nameplate output and a data center's IT
- * load are different quantities, and generation to serve a site normally runs
- * larger than the load it serves. So it gets its own heading saying whose it is,
- * and it is never added to the numbers above.
- *
- * The split is made in `webui/dataset.py` with the same predicate the sums use.
- * The page does not decide what counts as generation. */
-function ServingInfrastructure({ rows, mw }) {
-  const [open, setOpen] = useState(false);
-  if (!rows.length) return null;
-  return html`
-    <${Card}>
-      <button type="button" class="dc-disclose" aria-expanded=${open}
-              onClick=${() => setOpen(!open)}>
-        <span style=${{ display: "grid", gap: 3 }}>
-          <span style=${{ fontSize: 14, fontWeight: 500 }}>
-            Power serving this campus <span class="dc-num">${fmtMw(mw)} MW</span></span>
-          <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
-            ${rows.length} generation or grid asset${rows.length === 1 ? "" : "s"} — the utility's,
-            measured as generating output. Never added to the campus figures above.</span>
-        </span>
-        <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${open ? "hide" : "show"}</span>
-      </button>
-      ${open && html`
-        <div style=${{ padding: "0 16px 12px" }}>
-          ${rows.map((sec, i) => html`
-            <div key=${i} class="dc-blockrow"
-                 style=${{ padding: "9px 4px", borderTop: "1px solid var(--border)" }}>
-              <span style=${{ fontSize: 13 }}>${sec.parent ? sec.parent + " · " : ""}${sec.label}</span>
-              <span class="dc-num" style=${{ fontSize: 13, textAlign: "right" }}>
-                ${sec.capacity == null ? "—" : fmtMw(sec.capacity) + " MW"}</span>
-              <span style=${{ fontSize: 12, color: "var(--muted-foreground)", gridColumn: "3 / -1" }}>
-                ${blockState(sec.status).label}</span>
-            </div>`)}
-        </div>`}
-    <//>`;
+//: What a reader may want to check about one section, in words. Empty for most.
+function sectionNotes(sec) {
+  const notes = [];
+  if (sec.aliases.length) notes.push({ text: `Also called ${sec.aliases.join(", ")}.` });
+  if (sec.verdict === "ambiguous") {
+    notes.push({ tone: "--warning", text: "Which section this is could not be settled." });
+  }
+  if (sec.generic && !sec.parent && sec.aliases.length === 0) {
+    notes.push({ text: "Not tied to a named facility." });
+  }
+  if (sec.capacity_conflict.length > 1) {
+    notes.push({ tone: "--danger",
+      text: `Two sources confirm ${sec.capacity_conflict.map((v) => fmtMw(v)).join(" and ")} MW — two figures, not one.` });
+  }
+  if (sec.capacity != null && !sec.capacity_confirmed) {
+    notes.push({ tone: "--warning",
+      text: "待确认 — a source states this capacity, but no quote names this section, so it is not counted as cited." });
+  }
+  /* A date in the past on a section that is not running is news we have missed, not
+   * a plan. Decided by the server with the rule `tracker logic check` reads tranches
+   * with (`delays.tranche_state`): the period a date names has to be over, so "2026"
+   * is not due in March 2026, and a paused or cancelled tranche is not late. */
+  if (sec.overdue) {
+    notes.push({ tone: "--warning", text: `Was due ${fmtMonth(sec.expected_online)}; nothing since says it runs.` });
+  }
+  return notes;
+}
+
+function TrancheRow({ sec }) {
+  const state = blockState(sec.status);
+  const when = sec.energized_on || sec.expected_online;
+  const cap = sec.capacity;
+  const live = sec.delivering || 0;
+  const notes = sectionNotes(sec);
+  const tone = notes.some((n) => n.tone === "--danger") ? "--danger"
+    : notes.some((n) => n.tone === "--warning") ? "--warning" : null;
+  const line = html`
+    <span class="dc-tr-state" style=${chip(state.tone)}>${state.label}</span>
+    <span class="dc-tr-name">
+      ${sec.parent && html`<span class="dc-tr-parent">${sec.parent} ›</span>`}${sec.label}
+      ${notes.length > 0 && html`<span class="dc-tr-count" style=${tone ? { color: `var(${tone})` } : undefined}>${
+        ` · ${notes.length} note${notes.length === 1 ? "" : "s"}`}</span>`}
+    </span>
+    <span class="dc-tr-mw dc-num">
+      ${cap == null
+        ? html`<span class="dc-quiet">—</span>`
+        : html`<span><span class=${live > 0 ? "" : "dc-quiet"}>${fmtMw(live)}</span><span class="dc-quiet"> / ${fmtMw(cap)} MW</span></span>
+            <i class="dc-tr-bar"><b style=${{ width: `${Math.min(100, (live / cap) * 100)}%`,
+              background: `var(${state.tone})`, opacity: sec.capacity_confirmed ? 1 : 0.4 }} /></i>`}
+    </span>
+    <span class="dc-tr-cust">${sec.customer || html`<span class="dc-quiet">—</span>`}</span>
+    <span class="dc-tr-when dc-num" style=${sec.overdue ? { color: "var(--warning)" } : undefined}>
+      ${when ? `${sec.energized_on ? "since " : sec.overdue ? "was due " : ""}${fmtMonth(when)}` : "—"}</span>`;
+  return notes.length
+    ? html`<li><details class="dc-tr"><summary class="dc-tr-line">${line}</summary>
+        <ul class="dc-tr-notes">${notes.map((n, i) => html`
+          <li key=${i} style=${n.tone ? { color: `var(${n.tone})` } : undefined}>${n.text}</li>`)}</ul>
+      </details></li>`
+    : html`<li><div class="dc-tr-line">${line}</div></li>`;
 }
 
 function BlocksTab({ p }) {
   const blocks = p.blocks || [];
   const serving = p.serving || [];
   const acct = p.accounting;
-  // Read off the reconciliation rather than summed here. The backend already puts
-  // every megawatt of this campus on exactly one line, and a second sum in the page
-  // is how the top of this panel once came to say 132 MW while the bottom said
-  // 36,126.
+  // Read off the reconciliation rather than summed here: the backend puts every
+  // megawatt of the campus on exactly one line.
   const servingMw = ((acct && acct.residuals) || [])
     .filter((r) => r.reason === "generation")
     .reduce((sum, r) => sum + r.mw, 0);
   const uncited = blocks.filter((b) => !b.mw_counted && b.mw != null);
   const customers = [...new Set(blocks.map((b) => b.customer).filter(Boolean))];
 
-  // Furthest along first, then largest, so the eye lands on running capacity before
-  // plans. Sorted here rather than server-side because it is a reading order, not a
-  // fact about the data.
-  /* **Rows are sections, ordered by identity — not by state.**
-   *
-   * A block is a section of a facility, so which section it is comes first and its
-   * state is one of its attributes: "Building 3, under construction, delivering 0 of
-   * 150 MW". This table used to sort by status and group its arithmetic by evidence
-   * tier, which answers a provenance question ("what do we believe") in a panel
-   * whose job is a site plan. Applied Digital's Polaris Forge read as seven rows in
-   * status order; it is four buildings.
-   *
-   * The sections come from the backend. Deciding that `Building 2 (ELN-02)` and
-   * `Building 2` are one building is a judgement, and the browser draws judgements
-   * rather than making them. */
+  /* **Rows are sections, ordered by identity — not by state.** A block is a section
+   * of a facility, so which section it is comes first and its state is one of its
+   * attributes. The sections come from the backend: deciding that `Building 2
+   * (ELN-02)` and `Building 2` are one building is a judgement, and the browser
+   * draws judgements rather than making them. The first twelve, then the rest on
+   * request: Abilene's sources describe thirty. */
   const rows = p.sections || [];
-  // The first twelve, and the rest on request: Abilene's sources describe thirty
-  // sections, five screens of them, between the summary and everything below.
   const [listed, moreRows] = useCapped(rows);
 
-  const cited = acct && acct.total != null ? acct.total : null;
-  const campusTotal =
-    cited != null ? cited : blocks.reduce((sum, b) => sum + (b.mw || 0), 0);
+  const campusTotal = acct && acct.total != null ? acct.total : blocks.reduce((sum, b) => sum + (b.mw || 0), 0);
 
-  // Which tranches were rejected as implausible is decided by `blocks.account`, not
-  // here. Portland 3's "Hillsboro Phase 1" is 36,000 MW against a cited 144 MW
-  // campus, and the panel used to announce "36,000 MW delivering of 144 MW". Judging
-  // it a second time in the page would be a second definition of the rule, free to
-  // disagree with the reconciliation printed a few rows below — which is how the top
-  // of this panel came to say 132 MW while the bottom said 36,126.
+  // Which tranches were rejected as implausible is decided by `blocks.account`.
   const rejectedLabels = new Set(
-    (acct && acct.residuals ? acct.residuals : [])
-      .filter((r) => r.reason === "out_of_scale")
-      .flatMap((r) => r.labels),
-  );
+    ((acct && acct.residuals) || []).filter((r) => r.reason === "out_of_scale").flatMap((r) => r.labels));
   const outOfScale = (b) => rejectedLabels.has(b.label);
   const rejected = blocks.filter(outOfScale);
   const plotted = blocks.filter((b) => b.mw != null && !outOfScale(b));
-  const widest = Math.max(...plotted.map((b) => b.mw), 1);
 
   // Confirmed capacity by state, then everything the campus is made of that we will
-  // not commit to. **Only `mw_counted` capacity counts as delivering** — the previous
-  // version summed every `serving` tranche regardless, so 36,000 unconfirmed
-  // megawatts were reported as running. A figure nobody confirmed cannot be the
-  // headline number for a campus.
+  // not commit to. Only `mw_counted` capacity counts as delivering: a figure nobody
+  // confirmed cannot be the headline number for a campus.
   const byState = {};
-  for (const b of plotted.filter((x) => x.mw_counted)) {
-    byState[b.status] = (byState[b.status] || 0) + b.mw;
-  }
-  const confirmed = Object.entries(byState).sort(
-    (a, b) => blockState(b[0]).rank - blockState(a[0]).rank,
-  );
-  const live = confirmed
-    .filter(([s]) => s === "serving" || s === "energized")
-    .reduce((sum, [, mw]) => sum + mw, 0);
+  for (const b of plotted.filter((x) => x.mw_counted)) byState[b.status] = (byState[b.status] || 0) + b.mw;
+  const confirmed = Object.entries(byState).sort((a, b) => blockState(b[0]).rank - blockState(a[0]).rank);
+  const live = confirmed.filter(([s]) => s === "serving" || s === "energized").reduce((sum, [, mw]) => sum + mw, 0);
 
-  /* Why the headline can honestly read 0 while the table below shows tranches
-   * running: only cited capacity is summed, and a campus can be genuinely live
-   * with every running tranche's MW either absent or 待确认. Fairwater was the
-   * live case — energized in April per its own events, "0 MW delivering of
-   * 350 MW" on screen. The zero stays (summing an unconfirmed figure to make it
-   * go away is the 36,000 MW mistake in the comment above, in reverse), but a
-   * bare zero next to running tranches reads as the page disagreeing with
-   * itself, so it says why. */
-  const running = blocks.filter(
-    (b) => (b.status === "serving" || b.status === "energized") && !outOfScale(b),
-  );
-  const statedLive = running.reduce(
-    (sum, b) => sum + (b.mw != null && !b.mw_counted ? b.mw : 0), 0,
-  );
+  /* Why the headline can honestly read 0 while sections below are running: only cited
+   * capacity is summed, and a campus can be live with every running tranche's MW
+   * absent or 待确认 (Fairwater, energised in April, read "0 MW delivering"). The
+   * zero stays, and the line under it says why. */
+  const running = blocks.filter((b) => (b.status === "serving" || b.status === "energized") && !outOfScale(b));
+  const statedLive = running.reduce((sum, b) => sum + (b.mw != null && !b.mw_counted ? b.mw : 0), 0);
   const liveIsUncited = live === 0 && running.length > 0;
-  // The headline is the campus's running figure, the same one the cards above show
-  // (`blocks.delivering`). Summed here from the tranches marked live, Abilene read
-  // "1,600 MW delivering of 1,200 MW" under cards saying 240 MW running: its sources
-  // describe the campus as one whole-site tranche and again as the buildings in it.
+  // The headline is the campus's own running figure, the summary's *Running*
+  // (`blocks.delivering`). Summed from the tranches marked live, Abilene read
+  // "1,600 MW delivering of 1,200 MW": its sources describe the campus as a whole and
+  // again building by building.
   const headline = acct && acct.delivering != null ? acct.delivering : live;
-  const overDescribed =
-    acct && acct.live_mw != null && acct.delivering != null && acct.live_mw > acct.delivering + 0.5;
+  const overDescribed = acct && acct.live_mw != null && acct.delivering != null && acct.live_mw > acct.delivering + 0.5;
 
-  // The bar is the accounting, drawn: confirmed capacity by state, then what is
-  // stated but unconfirmed, then the remainder nobody has itemised. It is built to
-  // sum to the campus total exactly, so the bar reaching full width *is* the
-  // statement that every megawatt is accounted for — and the stated denominator is
-  // always the cited total, so the headline can never disagree with the total row.
-  // The uncommitted segments come straight from the reconciliation, not from a second
-  // pass over the blocks. Recomputing them put "Stated, unconfirmed 54 MW" in the
-  // legend against 36 MW three rows below, because the page lumped in capacity the
-  // backend had classed as not-tied-to-a-facility. One name, two numbers, again.
-  const RESIDUAL_LABEL = {
-    unconfirmed: "Stated, unconfirmed",
-    unplaceable: "Not tied to a facility",
-    unitemised: "Not yet itemised",
-  };
-  const RESIDUAL_TONE = {
-    unconfirmed: "--warning",
-    unplaceable: "--chart-5",
-    unitemised: "--border",
-  };
-  const extras = (acct && acct.residuals ? acct.residuals : [])
+  // The bar is the accounting drawn: confirmed capacity by state, then what is stated
+  // but unconfirmed, then the remainder nobody has itemised, straight from the
+  // reconciliation, so the legend can never disagree with the lines under it.
+  const extras = ((acct && acct.residuals) || [])
     .filter((r) => RESIDUAL_LABEL[r.reason] && r.mw > 0.5)
     .map((r) => [`_${r.reason}`, r.mw]);
-
-  const shown = [...confirmed, ...extras].reduce((sum, [, mw]) => sum + mw, 0);
-  const denom = Math.max(campusTotal, shown, 1);
-  // When the tranches describe more than the campus — the whole site and the
-  // buildings in it as separate tranches, or one building under two names — the
-  // page says so once, under the bar. Abilene's legend read "Energised 1,400 MW"
-  // beside a 1,200 MW campus and its cards' running figure, without a word.
-  const describedOver = shown > campusTotal + 0.5;
   const bars = [...confirmed, ...extras];
-  const barTone = (key) =>
-    key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone;
-  const barLabel = (key) =>
-    key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label;
+  const shown = bars.reduce((sum, [, mw]) => sum + mw, 0);
+  const denom = Math.max(campusTotal, shown, 1);
+  const describedOver = shown > campusTotal + 0.5;
+  const barTone = (key) => (key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone);
+  const barLabel = (key) => (key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label);
 
   return html`
-    <div style=${{ display: "grid", gap: 16 }}>
-      <!-- The headline: what is running, out of what. Replaces a paragraph of prose
-           that made the reader do this arithmetic themselves. -->
-      <div>
-        <div style=${{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          <span class="dc-num" style=${{ fontFamily: "var(--font-display)", fontSize: 30, fontWeight: 500,
-                 letterSpacing: "-0.02em" }}>${fmtMw(headline)} MW</span>
-          <span style=${{ fontSize: 14, color: "var(--muted-foreground)" }}>
-            delivering of ${fmtMw(campusTotal)} MW${acct && acct.total_is_floor ? " (at least)" : ""}
-            ${" "}· ${blocks.length} tranche${blocks.length === 1 ? "" : "s"}${customers.length > 1
-              ? ` · ${customers.length} customers`
-              : customers.length === 1 ? ` · ${customers[0]}` : ""}</span>
-          ${liveIsUncited && !(acct && acct.delivering) && html`
-            <span style=${{ fontSize: 12, color: "var(--warning)" }}>
-              ${running.length} tranche${running.length === 1 ? " is" : "s are"} running with no
-              cited MW${statedLive > 0 ? ` — ${fmtMw(statedLive)} MW stated, 待确认` : ""}
-            </span>`}
+    <div class="dc-tranches">
+      <div class="dc-tr-head">
+        <div class="dc-tr-headline">
+          <span class="dc-tr-big dc-num">${fmtMw(headline)} MW</span>
+          <span class="dc-quiet">delivering of ${fmtMw(campusTotal)} MW${acct && acct.total_is_floor ? " (at least)" : ""}</span>
+          <span class="dc-tr-meta">${blocks.length} tranche${blocks.length === 1 ? "" : "s"}
+            ${rows.length !== blocks.length ? ` in ${rows.length} section${rows.length === 1 ? "" : "s"}` : ""}${customers.length > 1
+              ? ` · ${customers.length} customers` : customers.length === 1 ? ` · ${customers[0]}` : ""}</span>
         </div>
-        <div style=${{ display: "flex", height: 8, marginTop: 10, borderRadius: 4, overflow: "hidden",
-             background: "var(--border)" }}>
+        ${liveIsUncited && !(acct && acct.delivering) && html`
+          <p class="dc-tr-note" style=${{ color: "var(--warning)" }}>
+            ${running.length} section${running.length === 1 ? " is" : "s are"} running with no cited
+            MW${statedLive > 0 ? ` — ${fmtMw(statedLive)} MW stated, 待确认` : ""}.</p>`}
+        <div class="dc-tr-barfull">
           ${bars.map(([key, mw], i) => html`
-            <div key=${i} title=${`${barLabel(key)}: ${fmtMw(mw)} MW`}
-                 style=${{ width: `${(mw / denom) * 100}%`, background: `var(${barTone(key)})` }} />`)}
+            <span key=${i} title=${`${barLabel(key)}: ${fmtMw(mw)} MW`}
+                  style=${{ width: `${(mw / denom) * 100}%`, background: `var(${barTone(key)})` }} />`)}
         </div>
-        <div style=${{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8 }}>
+        <div class="dc-tr-legend">
           ${bars.map(([key, mw], i) => html`
-            <span key=${i} style=${{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12,
-                   color: "var(--muted-foreground)" }}>
-              <span style=${{ width: 8, height: 8, borderRadius: 2, background: `var(${barTone(key)})`,
-                     border: key === "_gap" ? "1px solid var(--muted-foreground)" : "none" }} />
-              ${barLabel(key)} <span class="dc-num">${fmtMw(mw)} MW</span></span>`)}
+            <span key=${i}><i style=${{ background: `var(${barTone(key)})` }} />${barLabel(key)}
+              <span class="dc-num"> ${fmtMw(mw)} MW</span></span>`)}
         </div>
         ${(describedOver || overDescribed) && html`
-          <p style=${{ margin: "8px 0 0", fontSize: 12, lineHeight: "18px", maxWidth: "88ch",
-                       color: "var(--muted-foreground)" }}>
+          <p class="dc-tr-note">
             ${describedOver
               ? `The tranches add up to ${fmtMw(shown)} MW against this ${fmtMw(campusTotal)} MW campus${
                   overDescribed ? `, ${fmtMw(acct.live_mw)} MW of it marked live` : ""}`
-              : `The tranches marked live add up to ${fmtMw(acct.live_mw)} MW`}: sources describe
-            some buildings more than once, or the campus and its buildings separately. The bar
-            shows them as described; the headline is the campus's own running figure, the same
-            as the cards above.
-          </p>`}
+              : `The tranches marked live add up to ${fmtMw(acct.live_mw)} MW`}: sources describe some
+            buildings more than once, or the campus and its buildings separately. The bar shows them as
+            described; the headline is the campus's own running figure, the summary's Running.</p>`}
       </div>
 
-      <div>
-        <!-- A header row, because the previous table had none: four unlabelled
-             columns of dates, names and pills. -->
-        <div class="dc-blockrow dc-blockhead" style=${{ padding: "0 4px 7px",
-             fontSize: 11, textTransform: "uppercase", letterSpacing: "0.07em",
-             color: "var(--muted-foreground)" }}>
-          <span>Section</span>
-          <span style=${{ textAlign: "right" }}>Delivering / held</span>
-          <span>State</span>
-          <span>Customer</span>
-          <span style=${{ textAlign: "right" }}>Online</span>
-        </div>
+      ${rows.length > 0 && html`
+        <div class="dc-tr-table">
+          <div class="dc-tr-line dc-tr-cols" aria-hidden="true">
+            <span>State</span><span>Section</span><span>Delivering / held</span><span>Customer</span><span>Online</span>
+          </div>
+          <ul class="dc-tr-list">${listed.map((sec, i) => html`<${TrancheRow} key=${i} sec=${sec} />`)}</ul>
+          ${moreRows}
+        </div>`}
 
-        ${listed.map((sec, i) => {
-          const state = blockState(sec.status);
-          const when = sec.energized_on || sec.expected_online;
-          const cap = sec.capacity;
-          const live = sec.delivering || 0;
-          /* A date in the past on a tranche that is not running is not a plan, it is
-           * news we have missed: project 39 showed "Under construction" beside "Oct
-           * 2021" with nothing saying the date had gone. Decided by the server with
-           * the rule tracker logic check reads tranches with (delays.tranche_state):
-           * the period a date names has to be over, so "2026" is not due in March
-           * 2026, and a paused or cancelled tranche is not late. The browser used to
-           * compare the stored day itself and flagged both. */
-          const overdue = !!sec.overdue;
-          /* Only the two verdicts that mean something is *wrong* take a hue.
-           * "Four sources named this building" is not a defect, so it is said in
-           * words. Colour in this product means how much to believe a value, or
-           * that a value is broken — never a category. */
-          const bad = sec.capacity_conflict.length > 1 ? "var(--danger)"
-                    : sec.verdict === "ambiguous" ? "var(--warning)" : null;
-          return html`
-            <div key=${i} class="dc-blockrow"
-                 style=${{ padding: "11px 4px", borderTop: "1px solid var(--border)" }}>
-              <div style=${{ minWidth: 0 }}>
-                ${sec.parent && html`
-                  <div style=${{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em",
-                         color: "var(--muted-foreground)" }}>${sec.parent}</div>`}
-                <div style=${{ fontSize: 14, fontWeight: 500 }}>${sec.label}</div>
-                <!-- The other names sources gave this same section. Shown so the
-                     grouping can be checked rather than trusted. -->
-                ${sec.aliases.length > 0 && html`
-                  <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                    also called ${sec.aliases.join(", ")}</div>`}
-                ${sec.verdict === "ambiguous" && html`
-                  <div style=${{ fontSize: 12, color: "var(--warning)", marginTop: 2 }}>
-                    which section this is could not be settled</div>`}
-                ${sec.generic && !sec.parent && sec.aliases.length === 0 && html`
-                  <div style=${{ fontSize: 12, color: "var(--muted-foreground)", marginTop: 2 }}>
-                    not tied to a named facility</div>`}
-              </div>
-              <!-- Delivering of held: the question a section answers, and the one a
-                   single planned-versus-built pair per campus cannot. NOTE no
-                   backticks in here - this sits inside a template literal, and one
-                   ends it early and turns the next word into bare code. -->
-              <div>
-                <div class="dc-num" style=${{ fontSize: 14, textAlign: "right",
-                       color: cap == null ? "var(--muted-foreground)" : bad || "inherit" }}>
-                  ${cap == null ? "—" : html`
-                    <span style=${{ color: live > 0 ? "inherit" : "var(--muted-foreground)" }}
-                      >${fmtMw(live)}</span
-                    ><span style=${{ color: "var(--muted-foreground)" }}> / ${
-                      withBound(fmtMw(cap), sec.capacity_confirmed ? "exact" : null)} MW</span>`}
-                </div>
-                ${cap != null && html`
-                  <div style=${{ height: 3, marginTop: 4, marginLeft: "auto", borderRadius: 2,
-                         width: "100%", background: "var(--border)", overflow: "hidden" }}>
-                    <div style=${{ height: "100%", width: `${Math.min(100, (live / cap) * 100)}%`,
-                           background: `var(${state.tone})`,
-                           opacity: sec.capacity_confirmed ? 1 : 0.4 }} /></div>`}
-                ${sec.capacity_conflict.length > 1 && html`
-                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3,
-                         color: "var(--danger)" }}>
-                    two sources confirm ${sec.capacity_conflict.map((v) => fmtMw(v)).join(" and ")}
-                    — two figures, not one</div>`}
-                ${cap != null && !sec.capacity_confirmed && html`
-                  <div style=${{ fontSize: 10, textAlign: "right", marginTop: 3,
-                         color: "var(--warning)" }}>待确认</div>`}
-              </div>
-              <div class="dc-bmeta" data-label="State">
-                <span style=${chip(state.tone)}>${state.label}</span></div>
-              <div class="dc-bmeta" data-label="Customer"
-                   style=${{ fontSize: 13, minWidth: 0, overflowWrap: "anywhere" }}>
-                ${sec.customer || html`<span style=${{ color: "var(--muted-foreground)" }}>—</span>`}</div>
-              <div class="dc-bmeta"
-                   data-label=${sec.energized_on ? "Live since" : overdue ? "Was due" : "Online"}
-                   style=${{ textAlign: "right",
-                          color: overdue ? "var(--warning)" : "var(--muted-foreground)" }}>
-                ${(sec.energized_on || overdue) && html`
-                  <div class="dc-bmeta-label" style=${{ fontSize: 10, textTransform: "uppercase",
-                         letterSpacing: "0.05em" }}>${sec.energized_on ? "live since" : "was due"}</div>`}
-                <span class="dc-num" style=${{ fontSize: 12 }}>${when ? fmtMonth(when) : "—"}</span>
-              </div>
-            </div>`;
-        })}
-        ${moreRows}
+      ${rejected.length > 0 && html`
+        <p class="dc-tr-note">
+          <strong style=${{ color: "var(--danger)" }}>Out of scale:</strong>
+          ${" "}${rejected.map((b) => `${b.label} ${fmtMw(b.mw)} MW`).join(", ")}
+          ${" "}${rejected.length === 1 ? "is" : "are"} larger than this whole campus and left out of the
+          figures — almost always kilowatts read as megawatts.</p>`}
 
-        <!-- The arithmetic, closed. Every megawatt of the campus sits on one of these
-             lines, which is the point: a reader who cannot make the parts reach the
-             total stops trusting the rest of the row too. -->
-        ${acct && html`
-          <div style=${{ marginTop: 10, paddingTop: 2, borderTop: "2px solid var(--border)" }}>
+      ${acct && html`
+        <details class="dc-fold">
+          <summary>How the ${fmtMw(acct.total)} MW adds up
+            <span class="dc-quiet">${` — ${fmtMw(acct.counted_mw)} MW cited per tranche, the rest on ${acct.residuals.length} line${acct.residuals.length === 1 ? "" : "s"} of its own`}</span></summary>
+          <div class="dc-fold-body">
             <${ReconRow} label="Cited per tranche" mw=${fmtMw(acct.counted_mw)}
               note="capacity a quote confirms for a named tranche" />
             ${acct.residuals.map((r, i) => html`
-              <${ReconRow} key=${i} tone="--warning"
-                label=${r.reason === "unitemised" ? "Not yet itemised"
-                  : r.reason === "unconfirmed" ? "Stated, unconfirmed"
-                  : r.reason === "unplaceable" ? "Not tied to a facility"
-                  : r.reason === "out_of_scale" ? "Out of scale, excluded"
-                  : r.reason === "generation" ? "Power serving the campus"
-                  : "Counted twice over"}
+              <${ReconRow} key=${i}
+                label=${RECON_LABEL[r.reason] || r.reason}
                 mw=${(r.reason === "overlap" ? "−" : "") + fmtMw(r.mw)} note=${r.note}
                 tone=${r.reason === "out_of_scale" ? "--danger"
-                  /* Generation is not a defect and takes no warning colour: the
-                     line is the arithmetic working, not a fault to chase. */
-                  : r.reason === "generation" ? "--muted-foreground" : "--warning"} />`)}
+                  /* Generation is not a defect: the line is the arithmetic working. */
+                  : r.reason === "generation" ? null : "--warning"} />`)}
             <${ReconRow} strong label=${acct.total_is_floor ? "Accounted for (at least)" : "Accounted for"}
               mw=${fmtMw(acct.total)}
               note=${acct.total_is_floor ? "no source states a campus figure — this is the sum of the parts" : ""} />
-          </div>`}
-      </div>
+            ${uncited.length > 0 && html`
+              <p class="dc-tr-note" style=${{ marginTop: 8 }}>
+                <strong style=${{ color: "var(--warning)" }}>待确认</strong> marks a capacity the article states
+                without any quote naming that tranche. It is shown and accounted for above, and kept out of the
+                cited figure — a number nobody stated should not read as one that was.</p>`}
+          </div>
+        </details>`}
 
-      <${ServingInfrastructure} rows=${serving} mw=${servingMw} />
-
-      ${rejected.length > 0 && html`
-        <p style=${{ margin: 0, fontSize: 12, lineHeight: "19px", color: "var(--muted-foreground)" }}>
-          <strong style=${{ color: "var(--danger)" }}>Out of scale:</strong>
-          ${" "}${rejected.length} tranche${rejected.length === 1 ? "" : "s"}
-          ${" "}(${rejected.map((b) => `${b.label} ${fmtMw(b.mw)} MW`).join(", ")})
-          ${" "}${rejected.length === 1 ? "is" : "are"} larger than this whole campus, so
-          ${" "}${rejected.length === 1 ? "it is" : "they are"} left out of the figures above.
-          Almost always a kilowatt figure read as megawatts.
-        </p>`}
-
-      ${uncited.length > 0 && html`
-        <p style=${{ margin: 0, fontSize: 12, lineHeight: "19px", color: "var(--muted-foreground)" }}>
-          <strong style=${{ color: "var(--warning)" }}>待确认</strong> marks a capacity the article
-          states without any quote naming that tranche. It is shown and accounted for above, and kept
-          out of the cited figure — a number nobody stated should not read as one that was.
-        </p>`}
+      ${/* The utility's plant, folded under the campus it serves. Entergy building
+            2,262 MW of gas for Hyperion is one of the most important facts about that
+            campus, and it is not the campus's capacity: a plant's output and a data
+            center's load are different quantities, so it is never added above. The
+            split is made in `webui/dataset.py` with the predicate the sums use. */ ""}
+      ${serving.length > 0 && html`
+        <details class="dc-fold">
+          <summary>Power serving this campus <span class="dc-num">${fmtMw(servingMw)} MW</span>
+            <span class="dc-quiet"> — ${serving.length} generation or grid asset${serving.length === 1 ? "" : "s"},
+              the utility's; never added to the campus figures</span></summary>
+          <div class="dc-fold-body">
+            ${serving.map((sec, i) => html`
+              <${ReconRow} key=${i} label=${`${sec.parent ? sec.parent + " · " : ""}${sec.label}`}
+                mw=${sec.capacity == null ? "—" : fmtMw(sec.capacity) + " MW"} note=${blockState(sec.status).label} />`)}
+          </div>
+        </details>`}
     </div>`;
 }
 

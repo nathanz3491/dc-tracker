@@ -369,6 +369,19 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Capacity by tranche follows the project page's new layout** (`tracker/webui/static/app.js`,
+  `tracker/webui/static/app.css`, reader docs *A project's page*, *Release notes*). Left
+  out of the rewrite the same day and pointed out by the user: it was still a 30px
+  headline over a five-column table whose rows ran to three lines with their notes,
+  then seven reconciliation rows and two paragraphs. Now the headline and the state bar
+  at the summary's size, one line per section in a bordered list like the obstacles —
+  state, name under its facility, what it delivers of what it holds, customer, *since*
+  or amber *was due* — with "· N notes" opening the other names, an unsettled section,
+  a figure two sources disagree on or an unquoted 待确认 capacity, and the arithmetic
+  ("How the 1,200 MW adds up") and the utility's plant folded underneath. The figures
+  are untouched: every one still comes from the server's accounting. Abilene's section
+  goes from 1,496 to 843 px at 1,456 px wide, and its page from 4,190 to 3,540.
+
 - **The test suite runs in parallel: about 70 seconds instead of five and a half
   minutes** (`pyproject.toml`, `requirements.lock`, `README.md`). Asked for on
   2026-10-21. Profiled first: 4,646 tests took 319 s in one process, 12 s of it

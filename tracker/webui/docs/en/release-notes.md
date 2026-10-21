@@ -9,7 +9,8 @@ Changes a reader of the console will notice, newest first. The console's version
 - **A summary first**: planned, running, how much is still to come and when, the expected online date, the delay risk with its reasons, and the investment with its cost per megawatt; then the buyers, operator, power, what to watch for, the biggest obstacle and how well sourced the row is. Hover a figure for the sentence behind it. See [A project's page](project-page).
 - **Sections in an investor's order.** Progress and timeline, In context and Citations start closed; click a heading to open or close a section, and the page remembers.
 - **The twelve fields in two columns**, one line each. The sentence is a hover away, and opening a field shows every claim made about it.
-- **Obstacles one line each**, the sentence when you open one, resolved ones folded away. A tranche list shows its first twelve sections.
+- **Obstacles one line each**, the sentence when you open one, resolved ones folded away.
+- **Capacity by tranche in the same style**: the headline and bar, then one line per section — state, name, what it delivers of what it holds, customer, date — with its notes a click away, the first twelve shown; the arithmetic and the utility's plant fold underneath.
 - **A running campus with capacity still to come is read for delay risk** on its slips and obstacles — on its page and on its company's — rather than counted as low because part of it runs.
 
 ### Numbers that agree on every page

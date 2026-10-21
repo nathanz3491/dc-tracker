@@ -5403,5 +5403,8 @@ def test_the_project_page_reads_in_an_investors_order():
     closed = set(re.findall(r'\{ id: "([a-z]+)"[^}]*closed: true', block.group(1)))
     assert closed == {"progress", "context", "citations"}
     assert "dc-field-row" not in app and ".dc-field-row" not in css
+    # The tranches follow the same layout: one line per section, notes behind it.
+    assert "dc-blockrow" not in app and ".dc-blockrow" not in css
+    assert re.search(r"\.dc-tr-line\s*\{", css) and "function TrancheRow(" in app
     facts = re.search(r"\.dc-facts\s*\{([^}]*)\}", css)
     assert facts and "repeat(2, minmax(0, 1fr))" in facts.group(1)
