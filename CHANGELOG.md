@@ -334,6 +334,17 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A running campus with capacity still to come is read for delay risk on its
+  evidence** (`tracker/supply.py`, reader docs *Company pages*, *A project's page*).
+  Every operating campus used to read *low*, so Abilene — 421 of 1,200 MW running, two
+  recorded slips and five open obstacles a source says moved the schedule — was low on
+  its company's supply table. It is now read like any other while planned exceeds
+  running, counting only slips to this year or later (a slip "to 2020" on a campus that
+  has since gone live is history, not a forecast) and open, quoted obstacles; with
+  nothing left to deliver it is low, as are paused and cancelled campuses. On a copy of
+  production 16 operating campuses move: four to high (Colossus, Stargate Abilene, Riot
+  Corsicana, Fairwater) and twelve to elevated.
+
 - **The projects table fits the window and keeps its column names in view**
   (`tracker/webui/static/app.js`, `tracker/webui/static/app.css`, reader docs
   *Projects*). Reported 2026-10-21: on a 1,456-pixel screen the table ran 1,538 pixels

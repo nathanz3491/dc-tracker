@@ -52,7 +52,7 @@ Capacity the company is credited with that is not yet running, by the year each 
 - **Delay risk** is *high*, *elevated* or *low*, with the evidence it rests on, each something you can check on the campus's page:
   - *high* — a suspected delay; the online date has slipped twice or more; or an open obstacle a source says has stopped work;
   - *elevated* — one slip; an open obstacle a source says moved the schedule or scope; or due within a year with no construction reported.
-  Only obstacles with a quoted sentence count, and a date restated more precisely inside the same year is not a slip.
+  Only obstacles with a quoted sentence count, and a date restated more precisely inside the same year is not a slip. A running campus is read the same way while it still has capacity to deliver; once it has none left, it is *low*, as is a paused or cancelled one. A campus's own page shows the same level with every reason (see [A project's page](project-page)).
 - When one campus is **a fifth or more** of the three years' supply and is at elevated or high delay risk, a line above the bars names it: *Conesville is 38% of this supply (600 of 1,596 MW), and is at high delay risk: …*
 
 A tenant's share uses the campus's own date; a tranche's separate date is not yet read here.

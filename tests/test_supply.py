@@ -115,6 +115,30 @@ def test_an_operating_or_stopped_campus_carries_no_delay_risk():
     for phase in ("operational", "paused", "cancelled"):
         campus = _campus(phase=phase, expected=dt.date(2024, 1, 1), risks=[_risk("blocking")])
         assert supply.delay_risk(campus, today=TODAY).level == supply.LOW
+    done = _campus(phase="operational", built=1200.0, risks=[_risk("blocking")])
+    done.mw_planned = 1200.0
+    assert supply.delay_risk(done, today=TODAY).level == supply.LOW
+
+
+def test_an_operating_campus_with_capacity_still_to_come_is_read_on_its_evidence():
+    """Abilene runs 421 of 1,200 MW; an obstacle on the rest is a risk to the rest."""
+    campus = _campus(phase="operational", built=421.0, risks=[_risk("material", "financing")])
+    campus.mw_planned = 1200.0
+    got = supply.delay_risk(campus, today=TODAY)
+    assert got.level == supply.ELEVATED
+    assert got.reasons == ("1 open obstacle a source says moved the schedule or scope (financing)",)
+
+
+def test_a_running_campus_counts_only_slips_still_ahead_of_it():
+    """A slip to a date long gone is the history of what was built, not of what is left."""
+    old = _campus(phase="operational", built=102.0, events=[_slip(dt.date(2020, 1, 1))])
+    old.mw_planned = 600.0
+    assert supply.delay_risk(old, today=TODAY).level == supply.LOW
+    ahead = _campus(phase="operational", built=800.0, events=[_slip(dt.date(2027, 3, 1))])
+    ahead.mw_planned = 1200.0
+    assert supply.delay_risk(ahead, today=TODAY).reasons == (
+        "its online date has slipped once, to 2027-03-01",
+    )
 
 
 # --- supply by year ----------------------------------------------------------------

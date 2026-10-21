@@ -24,6 +24,11 @@ each one something a reader can check on the project page:
 * *elevated* — one slip; an open obstacle a source says moved the schedule or the
   scope; due within a year with no construction reported.
 
+An operating campus is read the same way while it still has planned capacity
+to deliver — Abilene runs 421 of its 1,200 MW, and the rest is what an investor is
+asking about. Once nothing is left to deliver, and for a paused or cancelled
+campus, the level is low: there is no date left to miss.
+
 Only quoted obstacles and dated milestones count. An unquoted obstacle is a
 model's guess that a sentence would not support, and a slip that may only be a
 more precise restatement of the same year is not a slip. The levels are a reading
@@ -116,6 +121,12 @@ def _categories(risks: list[Any]) -> str:
     return ", ".join(names)
 
 
+def _capacity_to_come(project: Any) -> bool:
+    """Whether a campus still has planned capacity it does not yet run."""
+    planned = getattr(project, "mw_planned", None)
+    return planned is not None and (getattr(project, "mw_built", None) or 0.0) < planned
+
+
 def delay_risk(
     project: Any,
     *,
@@ -128,7 +139,9 @@ def delay_risk(
     company page reads the whole fleet's at once); otherwise it is worked out here.
     """
     phase = (getattr(project, "phase", None) or "").lower()
-    if phase in ("operational", "paused", "cancelled"):
+    if phase in ("paused", "cancelled") or (
+        phase == "operational" and not _capacity_to_come(project)
+    ):
         return DelayRisk(LOW)
     if suspected is None:
         suspected = delays.suspected_delay(project, today=today)
@@ -142,6 +155,16 @@ def delay_risk(
         )
 
     slipped = slips(getattr(project, "events", ()) or ())
+    if phase == "operational":
+        # Part of it runs. A slip to a date that has since gone by is the history of
+        # what was built — Lake Mariner's "to 2020", IREN Childress's "to 2022" —
+        # not a reading of what is still to come.
+        slipped = [
+            e
+            for e in slipped
+            if (when := _as_date(getattr(e, "event_date", None))) is not None
+            and when.year >= today.year
+        ]
     if len(slipped) >= 2:
         high.append(f"its online date has slipped {len(slipped)} times")
     elif slipped:
