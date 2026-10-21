@@ -354,3 +354,41 @@ def test_the_token_ceiling_leaves_room_for_the_longer_answer(session):
 
     overview.write(_project(session), extractor=_Counting(V3_BRIEFING))
     assert asked["max_tokens"] == overview.MAX_TOKENS >= 8192
+
+
+def test_a_provider_that_is_down_is_said_so_not_called_an_empty_answer(session):
+    """The panel read "the model returned nothing" while OpenCode Go answered 503."""
+    from tracker.llm import LLMError
+
+    project = _project(session)
+
+    class _Down:
+        model = "test-model"
+
+        def stream(self, *, system, user, max_tokens):
+            raise LLMError(
+                'OpenCode Go returned HTTP 503: {"error":{"message":"Endpoint is unavailable."}}'
+            )
+            yield ""  # pragma: no cover - a generator that fails before its first piece
+
+    with pytest.raises(overview.BriefingFailed, match="not answering right now"):
+        "".join(overview.stream(project, extractor=_Down()))
+    assert overview.cached(project) is None
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "OpenCode Go returned HTTP 429: busy",
+            "OpenCode Go, the model provider, is not answering",
+        ),
+        ("DeepSeek returned HTTP 401: no", "refused the console's key"),
+        ("OpenCode Go returned HTTP 402: empty", "out of credit"),
+        ("LLM stream failed: connection reset", "connection to the model provider failed"),
+    ],
+)
+def test_the_reason_is_said_in_a_readers_words(message, expected):
+    from tracker.llm import LLMError
+
+    assert expected in overview.reader_reason(LLMError(message))

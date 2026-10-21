@@ -60,6 +60,45 @@ log = logging.getLogger(__name__)
 #: reader needs, arrives first and the sections fill in under it.
 MAX_TOKENS: Final = 8192
 
+
+class BriefingFailed(RuntimeError):
+    """The model could not be asked, with the reason in a reader's words.
+
+    Raised by the streaming briefings so the panel can say what happened. They used
+    to log the provider's refusal and end quietly, and the console turned that
+    silence into "the model returned nothing" — on 2026-10-21, while OpenCode Go was
+    answering 503 "Endpoint is unavailable", which is a different thing to be told:
+    nothing is wrong with the row, and trying again in a minute is the fix.
+    """
+
+
+_STATUS = re.compile(r"(OpenCode Go|DeepSeek) returned HTTP (\d{3})")
+#: Statuses that mean the provider is busy or down for now, not that the request
+#: is wrong: the same set the client retries (`llm.RETRYABLE_STATUS`).
+_PASSING = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def reader_reason(exc: Exception) -> str:
+    """Why a briefing could not be written, said to the person waiting for it."""
+    text = str(exc)
+    found = _STATUS.search(text)
+    if found:
+        who, status = found.group(1), int(found.group(2))
+        if status in _PASSING:
+            return (
+                f"{who}, the model provider, is not answering right now (HTTP {status}). "
+                "It usually comes back within minutes — try again shortly."
+            )
+        if status in (401, 403):
+            return f"{who} refused the console's key (HTTP {status}); an administrator needs to check it."
+        if status == 402:
+            return f"The {who} account is out of credit (HTTP 402)."
+        return f"{who} refused the request (HTTP {status})."
+    if "stream failed" in text or "request failed" in text:
+        return "The connection to the model provider failed before it finished — try again."
+    return "The model could not be asked — try again."
+
+
 #: How many briefings to keep in memory. One per project is the natural size and
 #: the console serves one operator; this is a bound against a runaway, not a
 #: tuned cache.
@@ -309,7 +348,7 @@ def stream(project: Project, *, extractor, prompt_name: str = "overview-v3") -> 
             break
     except LLMError as exc:
         log.warning("overview stream for project %s failed: %s", project.id, exc)
-        return
+        raise BriefingFailed(reader_reason(exc)) from exc
 
     text = sent.strip()
     if len(text) < 40:
@@ -483,7 +522,7 @@ def stream_position(
             )
         except LLMError as exc:
             log.warning("position briefing for %r failed: %s", position.name, exc)
-            return
+            raise BriefingFailed(reader_reason(exc)) from exc
         text = _strip_reasoning(reply.text or "")
         cut = RUNAWAY.search(text)
         text = (text[: cut.start()] if cut else text).strip()
@@ -520,7 +559,7 @@ def stream_position(
             break
     except LLMError as exc:
         log.warning("position briefing for %r failed: %s", position.name, exc)
-        return
+        raise BriefingFailed(reader_reason(exc)) from exc
 
     text = sent.strip()
     if len(text) < 40:
@@ -541,6 +580,7 @@ __all__ = [
     "CACHE_SIZE",
     "MAX_TOKENS",
     "RUNAWAY",
+    "BriefingFailed",
     "Overview",
     "build_context",
     "build_position_context",
@@ -548,6 +588,7 @@ __all__ = [
     "cached_position",
     "fingerprint",
     "position_fingerprint",
+    "reader_reason",
     "stream",
     "stream_position",
     "write",

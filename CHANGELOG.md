@@ -757,6 +757,20 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The AI overview asks again when the model provider refuses, and says why when it
+  still cannot** (`tracker/llm.py`, `tracker/overview.py`, `tracker/webui/server.py`,
+  reader docs *A project's page*). On 2026-10-21 OpenCode Go answered 503 "Endpoint is
+  unavailable" for minutes at a time; a request two seconds later usually went through,
+  and the night's calls, which retry, carried on — but the briefing's streaming call
+  retried nothing, so the panel failed three times running and called it "the model
+  returned nothing". The stream now retries a refusal the provider may lift, or a
+  dropped connection, up to three times before its first token (never after, which
+  would restart a paragraph mid-sentence), and a briefing that still fails raises
+  `overview.BriefingFailed` with the reason in a reader's words — *OpenCode Go, the
+  model provider, is not answering right now (HTTP 503). It usually comes back within
+  minutes — try again shortly.* — which the console shows in place of the old message,
+  for the capex hover card too.
+
 - **A campus whose sources name several buyers is no longer credited to whichever
   name sorts first, and the spellings that still split one company fold**
   (`tracker/capex.py`, `tracker/parties.py`, `tracker/dedup.py`, `tracker/company.py`,

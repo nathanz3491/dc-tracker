@@ -1299,10 +1299,15 @@ class DeepSeekExtractor:
     def stream(self, *, system: str, user: str, max_tokens: int | None = None) -> Iterator[str]:
         """Yield the answer as it is generated.
 
-        Deliberately not retried. `_post` can replay a failed request because
-        nothing has been shown yet; once the first token has reached the reader,
-        a retry would restart the paragraph mid-sentence. A stream that breaks is
-        reported as broken and the caller can ask again.
+        Retried only before the first token, the way `_post` retries: a refusal the
+        provider may lift (`RETRYABLE_STATUS`) or a connection that failed, with
+        nothing yet on the reader's screen. Once a token has been shown a retry
+        would restart the paragraph mid-sentence, so a stream that breaks after that
+        is reported as broken and the caller can ask again. It used to retry nothing:
+        on 2026-10-21 OpenCode Go answered 503 "Endpoint is unavailable" for minutes
+        on end, a request two seconds later went through, and the project page's
+        briefing failed three times running while the night's calls, which do retry,
+        carried on.
 
         Reasoning is filtered out *as it arrives*. With `thinking` disabled — which
         is how the drawer calls this — there should be none to filter, but the
@@ -1310,31 +1315,64 @@ class DeepSeekExtractor:
         private deliberation into the drawer and then have to erase it.
         """
         payload = self._payload(system=system, user=user, max_tokens=max_tokens, stream=True)
-        url, headers, body = self._route(payload)
-        filter_ = _ThinkFilter()
-        try:
-            with api_client(self.settings.deepseek_timeout_s).stream(
-                "POST",
-                url,
-                json=body,
-                headers=headers,
-            ) as response:
-                if response.status_code >= 400:
-                    response.read()
-                    if response.status_code != INSUFFICIENT_BALANCE:
-                        raise self._refused(response)
-                    # Nothing has been shown yet, so moving to the reserve and
-                    # asking again cannot restart a paragraph mid-sentence.
-                    self._fall_back(response)
-                else:
-                    for line in response.iter_lines():
-                        piece = _sse_delta(line)
-                        if piece:
-                            yield from filter_.feed(piece)
-                    yield from filter_.finish()
-                    return
-        except httpx.RequestError as exc:
-            raise LLMError(f"LLM stream failed: {exc}") from exc
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            url, headers, body = self._route(payload)
+            filter_ = _ThinkFilter()
+            shown = False
+            wait: float | None = None
+            try:
+                with api_client(self.settings.deepseek_timeout_s).stream(
+                    "POST",
+                    url,
+                    json=body,
+                    headers=headers,
+                ) as response:
+                    if response.status_code == INSUFFICIENT_BALANCE:
+                        response.read()
+                        # Nothing has been shown yet, so moving to the reserve and
+                        # asking again cannot restart a paragraph mid-sentence.
+                        self._fall_back(response)
+                        break
+                    if response.status_code >= 400:
+                        response.read()
+                        if response.status_code not in RETRYABLE_STATUS or attempt == attempts:
+                            raise self._refused(response)
+                        wait = _backoff(
+                            attempt, settings=self.settings, after=_retry_after(response)
+                        )
+                        log.warning(
+                            "LLM stream HTTP %d, retrying in %.1fs (attempt %d/%d)",
+                            response.status_code,
+                            wait,
+                            attempt,
+                            attempts,
+                        )
+                    else:
+                        for line in response.iter_lines():
+                            piece = _sse_delta(line)
+                            if piece:
+                                for text in filter_.feed(piece):
+                                    shown = True
+                                    yield text
+                        yield from filter_.finish()
+                        return
+            except httpx.RequestError as exc:
+                if shown or attempt == attempts:
+                    raise LLMError(f"LLM stream failed: {exc}") from exc
+                wait = _backoff(attempt, settings=self.settings)
+                log.warning(
+                    "LLM stream error before the first token, retrying in %.1fs "
+                    "(attempt %d/%d): %s %s",
+                    wait,
+                    attempt,
+                    attempts,
+                    type(exc).__name__,
+                    exc,
+                )
+            time.sleep(wait or 0)
+        else:  # every attempt returned or raised; only the move to the reserve gets here
+            return
         yield from self.stream(system=system, user=user, max_tokens=max_tokens)
 
     def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:

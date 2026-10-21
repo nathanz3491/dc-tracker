@@ -37,7 +37,7 @@ Under the figures, one line each:
 
 ### AI overview
 
-**✦ AI overview**, under the summary, is a short written reading of the campus — where the build stands, what would move it, how far to trust the row — written by a language model from the values on this page. It starts on its own and appears as it is written; **Rewrite** asks again.
+**✦ AI overview**, under the summary, is a short written reading of the campus — where the build stands, what would move it, how far to trust the row — written by a language model from the values on this page. It starts on its own and appears as it is written; **Rewrite** asks again. When the model provider refuses for a moment it is asked again before anything is shown; when it is still not answering, the panel says so — *OpenCode Go, the model provider, is not answering right now* — and **Try again** asks once more.
 
 > [!WARNING]
 > The AI overview and the inferred analysis (under Delay risk) are a model's reading, not evidence. Nothing they say is stored, nothing they say changes any value, and they can be wrong. Each one costs money to run, so they are switched on per account. When they are off, the panel says why: switched off on this console, or not switched on for your account — in which case an administrator can turn them on.

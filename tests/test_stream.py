@@ -189,7 +189,12 @@ def test_a_stream_that_dies_partway_is_not_cached(session):
             yield "Meta is building a 1 GW campus in New Albany and then"
             raise __import__("tracker.llm", fromlist=["LLMError"]).LLMError("connection reset")
 
-    got = list(overview.stream(project, extractor=_Dies()))
+    got = []
+    # What arrived is shown, and the break is then said rather than swallowed: the
+    # console puts the reason under the partial text (`overview.BriefingFailed`).
+    with pytest.raises(overview.BriefingFailed, match="try again"):
+        for piece in overview.stream(project, extractor=_Dies()):
+            got.append(piece)
     assert got, "what did arrive is still shown"
     assert overview.cached(project) is None
 

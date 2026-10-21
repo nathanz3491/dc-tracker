@@ -306,3 +306,59 @@ def test_a_run_on_the_reserve_is_held_at_peak_too(low_balance_rule):
             llm.check_peak(settings.model_copy(update={"reserve_when": "always"}), now=peak)
     finally:
         llm._PEAK_GUARD.clear()
+
+
+# --- a stream the provider refuses before it starts ------------------------------------
+
+UNAVAILABLE = {
+    "error": {
+        "type": "server_error",
+        "message": "Upstream request failed: Endpoint is unavailable.",
+    }
+}
+STREAMED = (
+    'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'
+    'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'
+    "data: [DONE]\n\n"
+)
+
+
+def test_a_stream_refused_before_its_first_token_is_asked_again(settings, monkeypatch):
+    """2026-10-21: OpenCode Go answered 503 for minutes and a retry two seconds later
+    went through, but the briefing's stream retried nothing and failed three times."""
+    from tracker import llm
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _s: None)
+    with respx.mock:
+        route = respx.post(DEEPSEEK).mock(
+            side_effect=[
+                respx.MockResponse(503, json=UNAVAILABLE),
+                respx.MockResponse(
+                    200, text=STREAMED, headers={"Content-Type": "text/event-stream"}
+                ),
+            ]
+        )
+        text = "".join(llm.DeepSeekExtractor(settings).stream(system="s", user="u"))
+    assert text == "Hello" and route.call_count == 2
+
+
+def test_a_stream_still_refused_after_three_tries_says_who_refused(settings, monkeypatch):
+    from tracker import llm
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _s: None)
+    with respx.mock:
+        route = respx.post(DEEPSEEK).respond(503, json=UNAVAILABLE)
+        with pytest.raises(llm.LLMError, match="returned HTTP 503"):
+            "".join(llm.DeepSeekExtractor(settings).stream(system="s", user="u"))
+    assert route.call_count == 3
+
+
+def test_a_stream_refused_for_good_is_not_asked_again(settings, monkeypatch):
+    from tracker import llm
+
+    monkeypatch.setattr(llm.time, "sleep", lambda _s: None)
+    with respx.mock:
+        route = respx.post(DEEPSEEK).respond(400, json={"error": {"message": "bad request"}})
+        with pytest.raises(llm.LLMError, match="returned HTTP 400"):
+            "".join(llm.DeepSeekExtractor(settings).stream(system="s", user="u"))
+    assert route.call_count == 1

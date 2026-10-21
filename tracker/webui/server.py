@@ -3718,10 +3718,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
             wrote = False
-            for piece in overview_mod.stream(project, extractor=extractor):
-                wrote = True
-                self.wfile.write(_sse({"type": "text", "text": piece}).encode("utf-8"))
-                self.wfile.flush()
+            failed: str | None = None
+            try:
+                for piece in overview_mod.stream(project, extractor=extractor):
+                    wrote = True
+                    self.wfile.write(_sse({"type": "text", "text": piece}).encode("utf-8"))
+                    self.wfile.flush()
+            except overview_mod.BriefingFailed as exc:
+                failed = str(exc)
 
             done = overview_mod.cached(project)
             tail = (
@@ -3729,8 +3733,15 @@ class Handler(BaseHTTPRequestHandler):
                 if done is not None
                 else {"type": "error", "error": "the model did not return a usable briefing"}
             )
-            if not wrote and done is None:
-                tail = {"type": "error", "error": "the model returned nothing"}
+            if failed is not None:
+                # Why, in words: a provider that is down for a minute is not a row
+                # with nothing to say, and "try again" means something different.
+                tail = {"type": "error", "error": failed}
+            elif not wrote and done is None:
+                tail = {
+                    "type": "error",
+                    "error": "the model answered with nothing usable — try again",
+                }
             self.wfile.write(_sse(tail).encode("utf-8"))
             self.wfile.flush()
 
@@ -3799,10 +3810,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
             wrote = False
-            for piece in overview_mod.stream_position(position, projects, extractor=extractor):
-                wrote = True
-                self.wfile.write(_sse({"type": "text", "text": piece}).encode("utf-8"))
-                self.wfile.flush()
+            failed: str | None = None
+            try:
+                for piece in overview_mod.stream_position(position, projects, extractor=extractor):
+                    wrote = True
+                    self.wfile.write(_sse({"type": "text", "text": piece}).encode("utf-8"))
+                    self.wfile.flush()
+            except overview_mod.BriefingFailed as exc:
+                failed = str(exc)
 
             done = overview_mod.cached_position(position, projects)
             tail = (
@@ -3810,8 +3825,15 @@ class Handler(BaseHTTPRequestHandler):
                 if done is not None
                 else {"type": "error", "error": "the model did not return a usable briefing"}
             )
-            if not wrote and done is None:
-                tail = {"type": "error", "error": "the model returned nothing"}
+            if failed is not None:
+                # Why, in words: a provider that is down for a minute is not a row
+                # with nothing to say, and "try again" means something different.
+                tail = {"type": "error", "error": failed}
+            elif not wrote and done is None:
+                tail = {
+                    "type": "error",
+                    "error": "the model answered with nothing usable — try again",
+                }
             self.wfile.write(_sse(tail).encode("utf-8"))
             self.wfile.flush()
 

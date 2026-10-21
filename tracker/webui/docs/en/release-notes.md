@@ -11,6 +11,7 @@ Changes a reader of the console will notice, newest first. The console's version
 - **The twelve fields in two columns**, one line each. The sentence is a hover away, and opening a field shows every claim made about it.
 - **Obstacles one line each**, the sentence when you open one, resolved ones folded away.
 - **Capacity by tranche in the same style**: the headline and bar, then one line per section — state, name, what it delivers of what it holds, customer, date — with its notes a click away, the first twelve shown; the arithmetic and the utility's plant fold underneath.
+- **The AI overview says why it failed.** It used to read *the model returned nothing* when the model provider was refusing requests; it now asks again first, and if the provider is still down it says so.
 - **A running campus with capacity still to come is read for delay risk** on its slips and obstacles — on its page and on its company's — rather than counted as low because part of it runs.
 
 ### Numbers that agree on every page
