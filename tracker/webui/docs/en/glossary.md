@@ -20,6 +20,8 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Default** — a value shown because nobody stated one and the field cannot be empty; in practice a phase of *announced*. See [Where a value came from](provenance).
 
+**Delay risk** — on a [company page](companies), how likely a campus is to miss its date, read from evidence on its page: *high* for a passed date with nothing running, two or more slips, or an obstacle that stopped work; *elevated* for one slip, an obstacle that moved the schedule, or a date within a year with no construction reported; otherwise *low*. A reading, not a forecast.
+
 **Derived** — a value looked up or worked out rather than reported: Census geography, compute from megawatts.
 
 **Duplicate** — one campus held in two rows. See [Duplicates](duplicates).
@@ -64,6 +66,8 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Operator** — the company building and running a campus.
 
+**Overdue** — on a company page's supply chart, capacity whose campus is a suspected delay: still expected, with no date anyone now stands behind.
+
 **Party** — a company involved in a campus, with its role: developer, owner, operator, customer, utility or contractor.
 
 **Phase** — how far along a campus is: announced, permitting, construction, operational, paused, cancelled.
@@ -85,6 +89,10 @@ Terms you will meet in the console and these docs, alphabetically.
 **Signal to watch for** — the next milestone on a track: the news that would show a campus moving.
 
 **Superseded** — a claim that was correct when published but has since been restated.
+
+**Supply** — on a company page, the capacity it is credited with that is not yet running, by the year each campus is due, over this year and the next two.
+
+**Suspected delay** — a campus whose expected online date has passed, for the whole month, quarter or year it names, with nothing reported since saying it runs. See [Numbers and dates](numbers-and-dates).
 
 **Tertiary source** — a directory, wiki or digest. Fills gaps only.
 

@@ -25,13 +25,15 @@ Your watchlist decides what [Updates](updates) shows you and what the 8:00 morni
 
 ## 4. Look a campus up — Projects
 
-[Projects](projects) is the whole table. Search by name, city or company, or open **Filters** to narrow by state, phase, confidence or kind of obstacle. Click a column header to sort.
+[Projects](projects) is the whole table. Search by name, city or company, or open **Filters** to narrow by state, phase, confidence or kind of obstacle, or to see only suspected delays. Click a column header to sort.
 
 Hover any value to see the sentence behind it. The value's style tells you how far to trust it before you even hover — see [Where a value came from](provenance).
 
 ## 5. One campus, in full — the project page
 
 Click a row to open [its page](project-page): the headline figures, who is involved, all twelve tracked fields with their sources, how the campus is split into buildings or phases, open obstacles, every citation, and a timeline of milestones.
+
+Click the operator's name for its [company page](companies): its megawatts by stage, the next three years of its supply, and any large campus in that supply that could slip.
 
 ## 6. Who is paying — Capex
 

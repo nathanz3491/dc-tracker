@@ -15,6 +15,9 @@ What the tracker cannot do, or does imperfectly. Each one changes how far you sh
 - **Many dates are year-only.** A large share of expected online dates were given only as a year. Read [Capex](capex)'s quarter view as a shape.
 - **Ties are broken by when an article was read.** When two equally credible sources disagree, the more recently *fetched* wins, which is not always the more recently *published*.
 - **Severity says little.** Sources rarely say an obstacle moved the schedule, so nearly every obstacle is *watch*.
+- **Delay risk is a reading, not a forecast.** It counts the evidence on a campus's page — a passed date, slips, obstacles. A campus that went live without making news can read as a suspected delay, and one heading for trouble that nobody has reported reads as low.
+- **A tenant's share of a campus is dated by the campus.** On a company page's supply chart, a tenant's building is filed under the campus's own expected date, not the building's.
+- **A campus naming several buyers counts for none of them** until a source divides it, so a buyer's total on [Capex](capex) can be low.
 
 ## About coverage
 
@@ -32,4 +35,4 @@ What the tracker cannot do, or does imperfectly. Each one changes how far you sh
 
 - **Merges cannot be undone,** and a merged row's address stops working.
 - **The AI panels are a model's reading.** They can be wrong, and nothing they say is stored or counts as evidence.
-- **The console's interface is in English.** These docs are in English and Chinese.
+- **The console's interface is in English,** though a project page also names each field in Chinese. These docs are in English and Chinese.

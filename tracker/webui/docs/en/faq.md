@@ -24,6 +24,14 @@ Because the source gave only a year. "2027" means "in 2027", not 1 January. See 
 
 [Capex](capex) totals by **buyer** — the company that will use the capacity — not by builder. A developer building for a cloud company is counted under the cloud company.
 
+## Why is a campus counted under no buyer when its sources name several?
+
+Because nothing says how it divides between them. Sources often name more than one tenant for one campus — a lease chain such as Oracle leasing a site OpenAI uses, or several tenants still in talks — and crediting the whole campus to one of them would be a guess. A building or phase that names its buyer still counts for that buyer. The [Capex](capex) page lists each such campus with the buyers its sources name.
+
+## What does "suspected delay" mean?
+
+The campus's expected online date has passed — the whole month, quarter or year the source named — and nothing reported since says it is running. It is a prompt to look, not a finding: the usual causes are a slip nobody reported and a campus that went live without an article the tracker read. See [Numbers and dates](numbers-and-dates).
+
 ## Why are two rows the same campus?
 
 Different articles named it differently and the tracker could not yet tell they are one site. Capex counts such a group once. See [Duplicates](duplicates).

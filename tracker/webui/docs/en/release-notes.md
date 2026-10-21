@@ -2,6 +2,32 @@
 
 Changes a reader of the console will notice, newest first. The console's version number is in its top bar.
 
+## 21 October 2026
+
+### Numbers that agree on every page
+
+- **Running capacity is never more than planned.** When the two disagree, the better-supported figure decides which one describes something else. Englewood no longer reads "18 MW planned, 6,750 MW running": the 6,750 was kilowatts written as megawatts, and such a figure is now set aside. See [Numbers and dates](numbers-and-dates).
+- **The tranche panel's headline is the campus's own running figure**, the same as the card above it. A line under the bar says when a campus's tranches describe more than the campus. See [A project's page](project-page).
+- **One name per company, everywhere.** AWS, Amazon Web Services and Amazon all read *Amazon*; Facebook/Meta reads *Meta*. A campus's page still shows its source's spelling beside the name.
+- **A company's totals are the Capex page's.** A campus stored twice counts once, a cancelled one not at all, and a tenant gets its own buildings rather than the whole campus. See [Company pages](companies).
+- **A campus whose sources name several buyers is credited to none of them** until a source says how it divides. Fermi America's 11 GW Amarillo campus had been counted as Amazon's. See [Capex](capex).
+- **Power stations and solar farms are not campuses.** Three built to supply AWS in Mississippi are gone, and new ones are kept out.
+
+### Delays
+
+- **Suspected delays.** A campus whose expected online date has passed — the whole month, quarter or year it names — with no news of it running is marked in amber: on its page, in a **Late** column and a **Suspected delays only** filter on [Projects](projects), and on its company's page. See [Numbers and dates](numbers-and-dates).
+
+### Company pages
+
+- **Read in megawatts.** The cards are planned, running, under construction, and due in the next three years. **Stage, in megawatts** splits the planned figure by how far along it is.
+- **Supply and delay risk.** A new **Supply** section shows the next three years of capacity by year, each campus's share, and its delay risk — high, elevated or low — with the evidence behind it. A campus that is a fifth or more of that supply and could slip is named above the bars. See [Company pages](companies).
+
+### Project pages and Projects
+
+- **Who is involved is a list of names**, one line per role. Hover a name for the sentence behind it; **new** marks a company first named in the last 30 days.
+- **Fields are named in words**, in English and Chinese — *Planned · MW, 规划容量* — with the stored name in small type.
+- **The Projects table fits the window** and its column names stay in view as you scroll. Town and state are one **Location** column, and the columns run in reading order.
+
 ## September–October 2026
 
 ### Keeping up with news
