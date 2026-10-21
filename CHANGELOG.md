@@ -26,7 +26,7 @@ initial build of the v1 PRD.
   campus-wide tranche equal to the cited total that its parts fit inside. A tranche
   counts what its parts add up to, or its own figure where that is larger — the
   remainder nobody broke down — and one set aside is named on a line of its own
-  beside the total. On the copy the free rules alone settle 15 campuses and take the
+  beside the total, together with anything ruled part of it. On the copy the free rules alone settle 15 campuses and take the
   double count from 103,706 to 80,833 MW; one stored figure moves at the next
   re-derive (Elk Grove's running 15.5 → 12 MW: a 3.5 MW lease inside a 12 MW
   building), and Capex moves 210 MW (Colossus: the 300 MW Anthropic lease sits inside

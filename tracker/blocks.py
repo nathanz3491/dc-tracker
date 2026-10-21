@@ -1171,10 +1171,28 @@ def _sum_tree(blocks: list[Any], nested: Structure, *, skip: set[str] = frozense
     present = [b for b in blocks if b.block_key not in skip]
     aside: dict[str, list[Any]] = {reason: [] for reason in SET_ASIDE}
     nodes: dict[str, Any] = {}
+
+    def gone_with(key: str) -> str | None:
+        # A part goes where what holds it goes: Abilene's "second Abilene campus" is
+        # part of the Microsoft expansion ruled another campus, so it is that
+        # campus's too, not a top-level part of Abilene. Followed up the `part_of`
+        # chain to the first tranche ruled superseded or elsewhere.
+        seen: set[str] = set()
+        above = nested.parent(key)
+        while above is not None and above not in seen:
+            seen.add(above)
+            link = nested.link(above)
+            if link is not None and link.relation in ("superseded", "elsewhere"):
+                return link.relation
+            above = nested.parent(above)
+        return None
+
     for block in present:
         link = nested.link(block.block_key)
         if link is not None and link.relation in SET_ASIDE:
             aside[link.relation].append(block)
+        elif (inherited := gone_with(block.block_key)) is not None:
+            aside[inherited].append(block)
         else:
             nodes[block.block_key] = block
 

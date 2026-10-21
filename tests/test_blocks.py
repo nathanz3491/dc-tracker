@@ -1254,3 +1254,24 @@ def test_an_expansion_is_beside_the_capacity_it_expands():
     assert blocks.structure(project).links == {}
     got = blocks.account(project)
     assert got.counted_mw == 50.0 and got.live_mw == 25.0
+
+
+def test_a_part_of_another_campus_goes_with_it():
+    """Abilene: "second Abilene campus" is part of the Microsoft expansion ruled another
+    campus; it is that campus's too, and credits nobody here."""
+    project = FakeProject(
+        mw_planned=1200.0,
+        blocks=[
+            FakeBlock("abilene", mw=1200.0, label="Abilene Campus", customer="OpenAI"),
+            FakeBlock("microsoft-900.expansion", mw=900.0, label="Microsoft 900 MW Expansion"),
+            FakeBlock("abilene-2", mw=672.0, label="second Abilene campus", customer="Microsoft"),
+        ],
+        nesting=[
+            FakeRuling("microsoft-900.expansion", "elsewhere"),
+            FakeRuling("abilene-2", "part_of", "microsoft-900.expansion"),
+        ],
+    )
+    got = blocks.account(project)
+    assert {r.reason: r.mw for r in got.residuals} == {"elsewhere": 1572.0}
+    shares = blocks.tree_shares(blocks.tranche_tree(project))
+    assert [(s.customer, s.mw_planned) for s in shares] == [("OpenAI", 1200.0)]
