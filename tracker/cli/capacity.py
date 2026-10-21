@@ -497,6 +497,7 @@ def blocks(
     if len(groups) > limit:
         console.print(f"\n[dim]{len(groups) - limit} more; raise --limit to see them[/dim]")
     console.print(
-        "\n[dim]Nothing here is written. A block is identity, and folding two of them "
-        "is a judgement — the same reason `duplicates` proposes and never merges.[/dim]"
+        "\n[dim]Nothing here is written. A mergeable group is counted once in every sum "
+        "(`blocks.structure`) without touching a row; the others are judgements, for "
+        "`tracker tranches review` or a person's `tracker tranches rule`.[/dim]"
     )

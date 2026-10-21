@@ -100,7 +100,7 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Track** — one of five independent progress ladders: site control, permits, power, construction, customer & finance.
 
-**Tranche** — one building, phase or hall of a campus, with its own capacity and state.
+**Tranche** — one building, phase or hall of a campus, with its own capacity and state. Tranches nest: a building can be part of a phase, a phase part of the campus, and the campus counts each megawatt once. One that is another name for a tranche, superseded, or another campus's is *set aside* and counted nowhere.
 
 **待确认** — "to be confirmed": a value read from an article but not backed by a checked sentence.
 

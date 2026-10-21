@@ -979,7 +979,11 @@ def resolve_pairs(
     rows = {
         p.id: p
         for p in session.scalars(
-            select(Project).options(selectinload(Project.sources), selectinload(Project.blocks))
+            select(Project).options(
+                selectinload(Project.sources),
+                selectinload(Project.blocks),
+                selectinload(Project.nesting),
+            )
         ).all()
     }
 

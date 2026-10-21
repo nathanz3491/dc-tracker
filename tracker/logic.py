@@ -294,8 +294,12 @@ def _reported_after_finish(
     return isinstance(reported, dt.date) and reported > min(dated)
 
 
-def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
+def _nested_blocks(blocks: list[Any], nested: Any = None) -> list[tuple[str, str]]:
     """Pairs where one block's label is contained in another's. `(inner, outer)`.
+
+    A pair the campus's tranche structure already relates (`blocks.structure`) — one
+    part of the other, one the same as the other, either set aside — is answered and
+    not reported again.
 
     Measured on Riot Rockdale, which came back as "AMD Lease" 25 MW, "AMD Lease
     Initial Deployment" 25 MW and "AMD Lease Expansion" 25 MW — one lease described
@@ -313,6 +317,24 @@ def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
     # order, which `block_key` builds deterministically, so the strict-subset test
     # below cannot be loosened by any input this codebase can produce.
     keyed = [(b.block_key, set(b.block_key.split("."))) for b in blocks]
+
+    def related(inner: str, outer: str) -> bool:
+        if nested is None:
+            return False
+        if any(
+            (link := nested.link(k)) is not None
+            and link.relation in ("same_as", "superseded", "elsewhere")
+            for k in (inner, outer)
+        ):
+            return True
+        seen, key = set(), inner
+        while key is not None and key not in seen:
+            seen.add(key)
+            key = nested.parent(key)
+            if key == nested.canonical(outer):
+                return True
+        return False
+
     out: list[tuple[str, str]] = []
     for inner, inner_parts in keyed:
         for outer, outer_parts in keyed:
@@ -320,7 +342,7 @@ def _nested_blocks(blocks: list[Any]) -> list[tuple[str, str]]:
                 continue
             # Strict superset: every segment of the outer key appears in the inner
             # one, so the inner names the outer plus something more.
-            if outer_parts < inner_parts:
+            if outer_parts < inner_parts and not related(inner, outer):
                 out.append((inner, outer))
     return sorted(set(out))
 
@@ -387,7 +409,10 @@ def _check_stored_against_evidence(project: Project) -> list[Finding]:
         return []
     by_field = claims_by_field(sources)
     stored_blocks = list(getattr(project, "blocks", ()) or ())
-    roll = blocks_mod.rollup(stored_blocks) if stored_blocks else None
+    # Read through the campus's tranche tree, as `reconcile` fills from it.
+    roll = (
+        blocks_mod.rollup(stored_blocks, blocks_mod.structure(project)) if stored_blocks else None
+    )
 
     out: list[Finding] = []
     for name in _EVIDENCE_BACKED_FIELDS:
@@ -759,7 +784,8 @@ def check_rules(project: Project) -> list[Finding]:
     if blocks:
         from tracker import blocks as blocks_mod
 
-        got = blocks_mod.rollup(blocks)
+        nested = blocks_mod.structure(project)
+        got = blocks_mod.rollup(blocks, nested)
         if got.unplaceable:
             listed = ", ".join(got.unplaceable[:3])
             add(
@@ -772,13 +798,13 @@ def check_rules(project: Project) -> list[Finding]:
                 "the campus total rather than guessed at",
             )
 
-        nested = _nested_blocks(blocks)
-        if nested:
-            listed = ", ".join(f"{inner} within {outer}" for inner, outer in nested[:3])
+        inside = _nested_blocks(blocks, nested)
+        if inside:
+            listed = ", ".join(f"{inner} within {outer}" for inner, outer in inside[:3])
             add(
                 "blocks_may_double_count",
                 WARNING,
-                f"{len(nested)} block label(s) sit inside another's ({listed}), so "
+                f"{len(inside)} block label(s) sit inside another's ({listed}), so "
                 "summing them as separate tranches may count the same megawatts twice",
                 ("mw_planned", "mw_built"),
                 "if one describes part of the other, merge them or record only the finer grain",
@@ -994,9 +1020,11 @@ def check_collisions(project: Project) -> list[Collision]:
         if name in settled:
             expected = settled[name]
         if name == "phase":
-            from tracker.blocks import phase_after_blocks
+            from tracker.blocks import phase_after_blocks, structure
 
-            expected = phase_after_blocks(chosen, list(getattr(project, "blocks", ()) or ()))
+            expected = phase_after_blocks(
+                chosen, list(getattr(project, "blocks", ()) or ()), structure(project)
+            )
 
         out.append(
             Collision(

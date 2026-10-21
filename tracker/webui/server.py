@@ -1700,6 +1700,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._admin_act("delete", body)
             if parsed.path == "/api/admin/users/approve":
                 return self._admin_act("approve", body)
+            if parsed.path == "/api/admin/tranches/rule":
+                return self._admin_tranche("rule", body)
+            if parsed.path == "/api/admin/tranches/undo":
+                return self._admin_tranche("undo", body)
             if parsed.path == "/api/infer":
                 return self._infer(body)
             if parsed.path == "/api/overview":
@@ -2275,6 +2279,57 @@ class Handler(BaseHTTPRequestHandler):
             ]
         self._json({"accounts": rows, "invites": invites})
 
+    def _admin_tranche(self, action: str, body: dict[str, Any]) -> None:
+        """An admin's ruling on how one tranche nests, or taking one back.
+
+        What `tracker tranches rule` and `undo` do at the terminal (`nesting.rule`),
+        from the project page. Admins only: it is a write to a fact about a project,
+        the one kind the console otherwise never makes, and a person's ruling outranks
+        the model's and every automatic rule. Recorded under the admin's name, so the
+        page can say who decided, and logged.
+        """
+        from tracker import nesting
+
+        project_id, key = body.get("project_id"), body.get("key")
+        if not isinstance(project_id, int) or isinstance(project_id, bool):
+            return self._error(400, "project_id must be a project id")
+        if not isinstance(key, str) or not key:
+            return self._error(400, "key must name a tranche")
+        relation = body.get("relation")
+        target = body.get("target") or None
+        reason = body.get("reason") or ""
+        if action == "rule" and not isinstance(relation, str):
+            return self._error(400, "relation is required")
+        if target is not None and not isinstance(target, str):
+            return self._error(400, "target must name a tranche")
+        if not isinstance(reason, str):
+            return self._error(400, "reason must be a string")
+        try:
+            with self.console.write_session() as session:
+                admin = self._admin(session)
+                if admin is None:
+                    return self._error(403, "ruling on tranches is for admins")
+                project = nesting.project_with_rulings(session, project_id)
+                if project is None:
+                    return self._error(404, f"no project #{project_id}")
+                who = (admin.name or "").strip() or admin.email.split("@", 1)[0]
+                if action == "rule":
+                    try:
+                        nesting.rule(session, project, key, relation, target, by=who, reason=reason)
+                    except nesting.RulingError as exc:
+                        return self._error(400, str(exc))
+                    done = f"{relation} {target or ''}".strip()
+                else:
+                    if not nesting.undo(session, project, key):
+                        return self._error(404, f"{key} carries no ruling")
+                    done = "ruling taken back"
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        log.info("console: %s ruled #%s %s: %s", who, project_id, key, done)
+        self._json({"ok": True, "project_id": project_id, "key": key, "done": done})
+
     def _admin_act(self, action: str, body: dict[str, Any]) -> None:
         """One change to one account, by an admin.
 
@@ -2831,6 +2886,19 @@ class Handler(BaseHTTPRequestHandler):
             "writes": True,
             "note": "Admins only. Body: {id, ai?}. Refused until the address is confirmed. "
             "`ai: true` switches the model panels on in the same step.",
+        },
+        "POST /api/admin/tranches/rule": {
+            "answers": "records an admin's ruling on how one tranche nests in its campus",
+            "writes": True,
+            "note": "Admins only. Body: {project_id, key, relation, target?, reason?}; "
+            "`key` and `target` are `sections[].tranche`, `relation` one of part_of, "
+            "same_as, separate, superseded, elsewhere. Outranks the model's and every "
+            "automatic rule. The same as `tracker tranches rule`.",
+        },
+        "POST /api/admin/tranches/undo": {
+            "answers": "takes back the ruling on one tranche, whoever made it",
+            "writes": True,
+            "note": "Admins only. Body: {project_id, key}. 404 when it carried none.",
         },
         "POST /api/signup": {
             "answers": "asks for an account; with an invite code, is /api/register",

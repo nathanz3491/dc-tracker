@@ -95,7 +95,13 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: `parties[].first_cited` (when a citation first named the party) and
 #: `accounting.delivering` / `accounting.live_mw` (the campus's running figure,
 #: and what its live tranches describe). Additive.
-JSON_SCHEMA_TAG = "tracker/10"
+#: 11 adds how a campus's tranches nest: `sections[].within` (the section it is part
+#: of), `sections[].relation` (`same_as`, `superseded` or `elsewhere` for a section set
+#: aside), `sections[].ruled_by`, `sections[].ruling` and `sections[].tranche` (the
+#: tranche key a ruling on the section names), and three residual reasons
+#: in `accounting` — `same_as`, `superseded`, `elsewhere` — and `accounting.by_state`,
+#: the counted capacity by tranche state. Additive.
+JSON_SCHEMA_TAG = "tracker/11"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -145,6 +151,7 @@ def fetch_projects(
         selectinload(Project.risks),
         selectinload(Project.blocks),
         selectinload(Project.parties),
+        selectinload(Project.nesting),
     )
     if flt is not None:
         stmt = flt.apply(stmt)
@@ -790,10 +797,17 @@ def _delay_json(project: Project) -> dict[str, Any] | None:
 
 
 def _sections_json(project: Project) -> list[dict[str, Any]]:
-    """Sections in identity order, each carrying what it delivers of what it holds."""
+    """Sections in identity order, each carrying what it delivers of what it holds.
+
+    And where it sits in the campus (`blocks.structure`): the section it is part of,
+    or why it is set aside, and who decided — a rule, a model or a person.
+    """
     from tracker.blockcheck import sections
 
     today = delays.as_of()
+    found = sections(project.id, list(project.blocks))
+    nested = blocks_mod.structure(project)
+    placed = _placement(project, found, nested)
     return [
         {
             "key": s.key,
@@ -817,9 +831,87 @@ def _sections_json(project: Project) -> list[dict[str, Any]]:
             # to be over, and a paused or cancelled section is not late.
             "overdue": delays.tranche_state(s, today) == delays.LATE,
             "source_ids": list(s.source_ids),
+            # The tranche a ruling on this section names: the one its other names
+            # are folded into, so a ruling moves the figure the sums count.
+            "tranche": _counted_key(s, nested),
+            **placed.get(s.key, _UNRULED),
         }
-        for s in sections(project.id, list(project.blocks))
+        for s in found
     ]
+
+
+def _counted_key(section: Any, nested: Any) -> str:
+    keys = list(section.block_keys)
+    inside = set(keys)
+    for key in keys:
+        link = nested.link(key)
+        if link is None or link.relation != "same_as" or nested.canonical(key) not in inside:
+            return key
+    return keys[0] if keys else section.key
+
+
+#: What a section with no link carries: top level, counted, nobody ruled.
+_UNRULED: dict[str, Any] = {"within": None, "relation": None, "ruled_by": None, "ruling": None}
+
+
+def _placement(project: Project, found: list[Any], nested: Any) -> dict[str, dict[str, Any]]:
+    """Section key -> where it sits: `within`, `relation`, `ruled_by`, `ruling`.
+
+    A section stands for one or more tranche keys (several names for one building),
+    so a link on any of them is the section's, read off the one the display names.
+    A section whose every tranche is set aside carries that relation; a part's
+    `within` is the section holding its parent, never itself.
+    """
+    if not nested.links:
+        return {}
+    section_of = {k: s.key for s in found for k in s.block_keys}
+    out: dict[str, dict[str, Any]] = {}
+    for s in found:
+        # A name the section already folds — "Facility 1" inside "Building 1" — is
+        # the section itself, not a link out of it.
+        links = [
+            link
+            for link in (nested.link(k) for k in s.block_keys)
+            if link is not None
+            and not (
+                link.relation == "same_as" and section_of.get(nested.canonical(link.key)) == s.key
+            )
+        ]
+        if not links:
+            continue
+        aside = [link for link in links if link.relation in blocks_mod.SET_ASIDE]
+        # Set aside only when no name for it is still counted: a name the section
+        # folds points at another of its names, so one unlinked name keeps it in.
+        if aside and all(nested.link(k) is not None for k in s.block_keys):
+            link = aside[0]
+            out[s.key] = {
+                "within": (
+                    section_of.get(nested.canonical(link.key))
+                    if link.relation == "same_as"
+                    else None
+                ),
+                "relation": link.relation,
+                "ruled_by": link.by,
+                "ruling": link.reason or None,
+            }
+            continue
+        part = next(
+            (
+                link
+                for link in links
+                if link.relation == "part_of"
+                and section_of.get(nested.parent(link.key) or "") not in (None, s.key)
+            ),
+            None,
+        )
+        ruled = part or links[0]
+        out[s.key] = {
+            "within": section_of.get(nested.parent(part.key) or "") if part else None,
+            "relation": None,
+            "ruled_by": ruled.by,
+            "ruling": ruled.reason or None,
+        }
+    return out
 
 
 def _accounting_json(project: Project) -> dict[str, Any] | None:
@@ -835,6 +927,8 @@ def _accounting_json(project: Project) -> dict[str, Any] | None:
         # live tranches describe beside it. See `blocks.delivering`.
         "delivering": blocks_mod.delivering(project, got),
         "live_mw": got.live_mw,
+        # The counted capacity by tranche state, read off the tree, for the bar.
+        "by_state": dict(got.by_state),
         "closes": got.closes,
         "residuals": [
             {"reason": r.reason, "mw": r.mw, "labels": list(r.labels), "note": r.note}

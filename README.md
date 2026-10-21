@@ -465,7 +465,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest -n auto
 ```
 
-4,646 tests. `-n auto` (pytest-xdist) spreads them over every core: about 70 seconds on
+4,692 tests. `-n auto` (pytest-xdist) spreads them over every core: about 70 seconds on
 a 16-core machine, against five and a half minutes in one process. No single test is
 the cost — the slowest takes 5 seconds and the average 69 ms — so running them side by
 side is the only large saving. Leave `-n` off for one file or one test, where starting

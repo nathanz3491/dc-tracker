@@ -13,8 +13,9 @@ depend on that being true.
 
 from __future__ import annotations
 
+import itertools
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -163,6 +164,8 @@ class FakeBlock:
     unconfirmed_fields: str | None = None
     #: What a reader sees. Defaults to the key so the older tests need no changes.
     label: str = ""
+    #: A row id, distinct per block as the table's are: `blockcheck` groups by it.
+    id: int = field(default_factory=itertools.count(1).__next__)
 
     def __post_init__(self) -> None:
         self.label = self.label or self.block_key
@@ -732,10 +735,13 @@ class FakeProject:
     mw_planned: float | None = None
     blocks: list = None  # type: ignore[assignment]
     sources: list = None  # type: ignore[assignment]
+    #: Stored rulings, `block_nesting` rows.
+    nesting: list = None  # type: ignore[assignment]
 
     def __post_init__(self):
         self.blocks = self.blocks or []
         self.sources = self.sources or []
+        self.nesting = self.nesting or []
 
 
 def test_an_unconfirmed_tranche_is_accounted_for_rather_than_dropped():
@@ -765,24 +771,41 @@ def test_a_campus_only_partly_itemised_names_the_remainder():
 
 
 def test_tranches_that_exceed_the_cited_total_are_named_not_hidden():
-    """The other direction: a stale campus figure, or one building counted twice.
+    """The other direction: a stale campus figure, or two tranches describing one.
 
-    Two sibling keys on purpose, not a nested pair — the duplicate that actually
-    occurs is `building-2.eln-2` beside `building-2.forge-1.polaris`, two articles
-    naming one building different ways. Neither key contains the other, which is why
-    it went undetected and why the overlap line has to exist.
+    Two phases nothing relates — no shared name, no stated parent, no campus-wide
+    tranche — so which describes which is a judgement for the review, and until it is
+    made the excess is a line of its own.
+    """
+    got = blocks.account(
+        FakeProject(
+            mw_planned=100.0,
+            blocks=[FakeBlock("phase-1", mw=100.0), FakeBlock("phase-2", mw=100.0)],
+        )
+    )
+    assert got.closes
+    assert [(r.reason, r.mw) for r in got.residuals] == [("overlap", 100.0)]
+
+
+def test_one_building_under_two_names_is_counted_once():
+    """Polaris Forge 1: `building-2.eln-2` beside `building-2.forge-1.polaris`.
+
+    Two articles naming one building two ways. Neither key contains the other, which
+    is why it went undetected as an overlap; `blockcheck` groups them as one
+    building, and with no confirmed figure in dispute the sum takes it once.
     """
     got = blocks.account(
         FakeProject(
             mw_planned=100.0,
             blocks=[
-                FakeBlock("building-2.eln-2", mw=100.0),
-                FakeBlock("building-2.forge-1.polaris", mw=100.0),
+                FakeBlock("building-2.eln-2", mw=100.0, label="Building 2 (ELN-02)"),
+                FakeBlock("building-2.forge-1.polaris", mw=100.0, label="Building 2"),
             ],
         )
     )
     assert got.closes
-    assert [(r.reason, r.mw) for r in got.residuals] == [("overlap", 100.0)]
+    assert got.counted_mw == 100.0
+    assert [(r.reason, r.mw) for r in got.residuals] == [("same_as", 100.0)]
 
 
 def test_with_no_cited_total_the_sum_of_parts_is_shown_as_a_floor():
@@ -975,3 +998,259 @@ def test_a_placeholder_alone_still_produces_a_block():
     )
     assert block["label"] == "Phase 1"
     assert block["mw"] == 100.0
+
+
+# --- how the tranches nest ----------------------------------------------------
+#
+# Batch 4 of the client plan (2026-10-21): 123 campuses on the 10-21 copy carried
+# tranches that describe them more than once, 101,892 MW summed twice. The tree
+# `structure` builds is what the sums now read.
+
+
+@dataclass
+class FakeRuling:
+    block_key: str
+    relation: str
+    target_key: str | None = None
+    decided_by: str = "model"
+    reason: str | None = None
+    confidence: float | None = 0.9
+
+
+def test_a_stated_parent_that_is_itself_a_tranche_holds_its_parts():
+    """Colossus: "Building 2" of "Colossus 2", where "Colossus 2" is a tranche too."""
+    project = FakeProject(
+        mw_planned=1000.0,
+        blocks=[
+            FakeBlock("colossus-2", mw=1000.0, label="Colossus 2"),
+            FakeBlock("building-1.colossus-2", mw=400.0, label="Building 1", parent="Colossus 2"),
+            FakeBlock("building-2.colossus-2", mw=500.0, label="Building 2", parent="Colossus 2"),
+        ],
+    )
+    nested = blocks.structure(project)
+    assert nested.parent("building-1.colossus-2") == "colossus-2"
+    assert nested.link("building-2.colossus-2").by == blocks.AUTO_PARENT
+    got = blocks.account(project)
+    assert got.counted_mw == 1000.0, "the parent's 100 MW nobody broke down still counts"
+    assert got.closes and got.residuals == ()
+
+
+def test_a_tranche_counts_its_parts_when_they_add_up_past_its_own_figure():
+    """A stale parent figure: the parts are later, larger news, and they win."""
+    project = FakeProject(
+        mw_planned=None,
+        blocks=[
+            FakeBlock("colossus-2", mw=210.0, label="Colossus 2"),
+            FakeBlock("building-3.colossus-2", mw=1500.0, label="Building 3", parent="Colossus 2"),
+        ],
+    )
+    got = blocks.account(project)
+    assert got.counted_mw == 1500.0 and got.total == 1500.0
+
+
+def test_the_campus_wide_tranche_is_not_made_a_parent_of_parts_that_do_not_fit():
+    """Sweetwater holds IREN's Childress too: 1,400 + 750 + 600 cannot sit in 2,000."""
+    project = FakeProject(
+        mw_planned=2000.0,
+        blocks=[
+            FakeBlock("hub.sweetwater", mw=2000.0, label="Sweetwater Hub"),
+            FakeBlock("sweetwater-1", mw=1400.0, label="Sweetwater 1"),
+            FakeBlock("childress", mw=750.0, label="Childress"),
+            FakeBlock("sweetwater-2", mw=600.0, label="Sweetwater 2"),
+        ],
+    )
+    nested = blocks.structure(project)
+    assert nested.links == {}, "a judgement, left to the review"
+    assert {r.reason for r in blocks.account(project).residuals} == {"overlap"}
+
+
+def test_an_increment_is_never_taken_for_the_whole_campus():
+    """ "another 400 MW" the size of the campus is still an increment of it."""
+    project = FakeProject(
+        mw_planned=400.0,
+        blocks=[
+            FakeBlock("400.another", mw=400.0, label="another 400 MW"),
+            FakeBlock("phase-1", mw=300.0, label="Phase 1"),
+        ],
+    )
+    assert blocks.structure(project).links == {}
+
+
+def test_a_ruling_sets_a_tranche_aside_on_a_line_of_its_own():
+    project = FakeProject(
+        mw_planned=1200.0,
+        blocks=[
+            FakeBlock("abilene", mw=1200.0, label="Abilene Campus"),
+            FakeBlock("county.shackelford", mw=1400.0, label="Shackelford County Site"),
+            FakeBlock("phase-2.2023", mw=700.0, label="Phase 2 (2023 plan)"),
+        ],
+        nesting=[
+            FakeRuling("county.shackelford", "elsewhere"),
+            FakeRuling("phase-2.2023", "superseded"),
+        ],
+    )
+    got = blocks.account(project)
+    lines = {r.reason: r.mw for r in got.residuals}
+    assert lines == {"elsewhere": 1400.0, "superseded": 700.0}
+    assert got.counted_mw == 1200.0 and got.closes
+
+
+def test_a_ruling_places_a_phase_that_names_no_facility():
+    """A bare "Phase 2" in a row holding two campuses is placed once somebody says where."""
+    tranches = [
+        FakeBlock("azp-2", mw=300.0),
+        FakeBlock("azp-3", mw=300.0),
+        FakeBlock("phase-2", mw=100.0, generic=True),
+    ]
+    before = blocks.account(FakeProject(mw_planned=700.0, blocks=list(tranches)))
+    assert {r.reason for r in before.residuals} == {"unplaceable"}
+    after = blocks.account(
+        FakeProject(
+            mw_planned=700.0,
+            blocks=list(tranches),
+            nesting=[FakeRuling("phase-2", "separate", decided_by="nathan")],
+        )
+    )
+    assert after.counted_mw == 700.0 and after.residuals == ()
+
+
+def test_a_same_as_twin_lends_its_quoted_figure_to_the_tranche_it_is():
+    project = FakeProject(
+        mw_planned=200.0,
+        blocks=[
+            FakeBlock("building-1", mw=None, label="Building 1"),
+            FakeBlock("first.hall", mw=200.0, label="First hall"),
+        ],
+        nesting=[FakeRuling("first.hall", "same_as", "building-1")],
+    )
+    got = blocks.account(project)
+    assert got.counted_mw == 200.0
+    assert {r.reason: r.mw for r in got.residuals} == {"same_as": 200.0}
+
+
+def test_a_ruling_that_would_make_a_tranche_part_of_itself_is_dormant():
+    project = FakeProject(
+        mw_planned=300.0,
+        blocks=[FakeBlock("a", mw=100.0), FakeBlock("b", mw=200.0)],
+        nesting=[
+            FakeRuling("a", "part_of", "b", decided_by="nathan"),
+            FakeRuling("b", "part_of", "a"),
+        ],
+    )
+    nested = blocks.structure(project)
+    assert nested.parent("a") == "b" and nested.link("b") is None
+    assert [d.key for d in nested.dormant] == ["b"]
+
+
+def test_a_person_is_applied_before_a_model_and_a_ruling_on_a_gone_tranche_waits():
+    project = FakeProject(
+        mw_planned=300.0,
+        blocks=[FakeBlock("a", mw=100.0), FakeBlock("b", mw=200.0)],
+        nesting=[
+            FakeRuling("b", "part_of", "a"),
+            FakeRuling("a", "part_of", "b", decided_by="nathan"),
+            FakeRuling("gone", "elsewhere"),
+        ],
+    )
+    nested = blocks.structure(project)
+    assert nested.link("a").by == "nathan"
+    assert {d.key for d in nested.dormant} == {"b", "gone"}
+
+
+def test_a_ruled_tranche_is_left_to_the_ruling_by_every_automatic_rule():
+    project = FakeProject(
+        mw_planned=1200.0,
+        blocks=[
+            FakeBlock("campus", mw=1200.0, label="Campus"),
+            FakeBlock("microsoft-900.expansion", mw=900.0, label="Microsoft 900 MW Expansion"),
+        ],
+        nesting=[FakeRuling("microsoft-900.expansion", "separate")],
+    )
+    nested = blocks.structure(project)
+    assert nested.link("microsoft-900.expansion").relation == "separate"
+    assert {r.reason for r in blocks.account(project).residuals} == {"overlap"}
+
+
+def test_buyers_are_credited_down_the_tree_once():
+    """A campus leased to one buyer, and its buildings: credited once between them."""
+    project = FakeProject(
+        mw_planned=1200.0,
+        blocks=[
+            FakeBlock("abilene", mw=1200.0, label="Abilene Campus", customer="OpenAI"),
+            FakeBlock("building-1", mw=200.0, label="Building 1", status="serving"),
+            FakeBlock("building-2", mw=200.0, label="Building 2", customer="Oracle"),
+        ],
+    )
+    shares = {s.customer: s.mw_planned for s in blocks.tree_shares(blocks.tranche_tree(project))}
+    assert shares == {"OpenAI": 1000.0, "Oracle": 200.0}
+
+
+def test_a_buyer_named_on_another_name_travels_only_with_that_names_figure():
+    """Fermi: "Phase 1" 222 MW naming AMD, filed as another name for the 1 GW phase."""
+    project = FakeProject(
+        mw_planned=11000.0,
+        blocks=[
+            FakeBlock("1.gw.phase", mw=1000.0, label="Initial 1-GW phase"),
+            FakeBlock(
+                "phase-1", mw=222.0, label="Phase 1", customer="AMD", unconfirmed_fields="mw"
+            ),
+        ],
+        nesting=[FakeRuling("phase-1", "same_as", "1.gw.phase")],
+    )
+    assert blocks.tree_shares(blocks.tranche_tree(project)) == []
+
+
+def test_a_buyer_holds_its_own_figure_and_not_parts_reported_past_it():
+    """Colossus: "Colossus 2" 210 MW for Anthropic, with a 1,531 MW building later
+    reported inside it and naming nobody. Anthropic holds 210, not 1,741."""
+    project = FakeProject(
+        mw_planned=2000.0,
+        blocks=[
+            FakeBlock("colossus-2", mw=210.0, label="Colossus 2", customer="Anthropic"),
+            FakeBlock("building-3.colossus-2", mw=1531.0, label="Building 3", parent="Colossus 2"),
+        ],
+    )
+    shares = blocks.tree_shares(blocks.tranche_tree(project))
+    assert [(s.customer, s.mw_planned) for s in shares] == [("Anthropic", 210.0)]
+
+
+def test_a_range_is_never_another_name_for_one_of_what_it_spans():
+    """Richmond 5: "DC4-DC6" holds three buildings; DC6 was folded into DC4 through it."""
+    project = FakeProject(
+        mw_planned=1434.0,
+        blocks=[
+            FakeBlock("dc-4", mw=238.0, label="DC4", status="serving"),
+            FakeBlock("dc-6", mw=238.0, label="DC6", status="serving"),
+            FakeBlock("dc-4.dc-6", mw=None, label="DC4-DC6"),
+        ],
+    )
+    assert blocks.structure(project).links == {}
+
+
+def test_one_name_under_two_parents_is_two_tranches():
+    """ACC8's row: "Phase I" of ACC9 and "Phase I" of ACC6 are two buildings' phases."""
+    project = FakeProject(
+        mw_planned=None,
+        blocks=[
+            FakeBlock("acc-9.phase-1", mw=7.2, label="Phase I", parent="ACC9"),
+            FakeBlock("acc-6.phase-1", mw=None, label="Phase I", parent="ACC6", status="serving"),
+        ],
+    )
+    assert blocks.structure(project).links == {}
+    assert blocks.rollup(project.blocks, blocks.structure(project)).mw_built is None
+
+
+def test_an_expansion_is_beside_the_capacity_it_expands():
+    """Riot's Colorado row: "AMD Expansion" of "Initial AMD Capacity" adds 25 MW to it."""
+    project = FakeProject(
+        mw_planned=50.0,
+        blocks=[
+            FakeBlock("amd-1.capacity", mw=25.0, label="Initial AMD Capacity", status="serving"),
+            FakeBlock(
+                "amd.expansion", mw=25.0, label="AMD Expansion", parent="Initial AMD Capacity"
+            ),
+        ],
+    )
+    assert blocks.structure(project).links == {}
+    got = blocks.account(project)
+    assert got.counted_mw == 50.0 and got.live_mw == 25.0

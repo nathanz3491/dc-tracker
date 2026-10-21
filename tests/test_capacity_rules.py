@@ -274,7 +274,9 @@ def test_the_tranche_headline_is_the_campus_running_figure(session):
     project = _tranches(session, built=240.0)
     got = _accounting_json(project)
     assert got["delivering"] == 240.0
-    assert got["live_mw"] == 1400.0  # what the tranches describe, kept for the note
+    # What the live tranches describe, kept for the note: the building nests inside the
+    # campus-wide tranche (`blocks.structure`), so 1,200 MW once — it read 1,400.
+    assert got["live_mw"] == 1200.0
 
 
 def test_with_no_running_figure_the_live_tranches_count_up_to_the_campus(session):

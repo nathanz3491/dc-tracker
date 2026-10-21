@@ -873,6 +873,7 @@ def digest(
                 selectinload(Project.events),
                 selectinload(Project.risks),
                 selectinload(Project.blocks),
+                selectinload(Project.nesting),
             )
             .order_by(Project.id.asc())
         ).all()

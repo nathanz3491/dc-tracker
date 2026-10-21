@@ -270,6 +270,7 @@ def profile(
         select(Project)
         .options(
             selectinload(Project.blocks),
+            selectinload(Project.nesting),
             selectinload(Project.events),
             selectinload(Project.risks),
             selectinload(Project.parties),

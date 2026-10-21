@@ -5,7 +5,7 @@ A company owns campuses; a campus is built in buildings and phases (its *tranche
 Each relationship is one of two kinds:
 
 - **Held** — the tracker enforces it when it writes a row. Every surface (the project page, the company pages, [Capex](capex), the map, the API) reads figures that keep it. A break would be a fault in the tracker, not in the data, and the test suite runs these before any change ships.
-- **Reported** — the published sources do not yet close it, and the tracker says where. Most of these come from one gap: a campus described once as a whole and again building by building, with nothing saying which building is part of which. The tracker is being given a campus → building → phase hierarchy so that these can move to *held* one by one.
+- **Reported** — the published sources do not yet close it, and the tracker says where. Most of these come from one gap: a campus described once as a whole and again building by building, with nothing saying which building is part of which. Since 22 October 2026 the tranches are summed as the tree they form: what the labels settle on their own — one building under several names, a parent its source names, a campus-wide tranche whose parts fit inside it — is settled on every read, and the rest is ruled on by a model reading the quotes each night, or by a person. Each ruling moves a campus off this list.
 
 ## Held
 
@@ -21,7 +21,7 @@ Each relationship is one of two kinds:
 | Relationship | 关系 | What a break means |
 | --- | --- | --- |
 | No tranche is larger than its campus. | 任何分期都不大于其所属园区。 | Almost always kilowatts read as megawatts. Already left out of every figure. |
-| A campus's tranches describe it once: its buildings and phases add up to the campus, not past it. | 园区的楼栋与分期只描述园区一次，其容量之和不超过园区总容量。 | The campus and its buildings listed side by side, or one building under two names. Shown on a [project's page](project-page) as *counted twice over*. |
+| A campus's tranches describe it once: its buildings and phases add up to the campus, not past it. | 园区的楼栋与分期只描述园区一次，其容量之和不超过园区总容量。 | The campus and its buildings listed side by side, or one building under two names, that no rule or ruling has yet placed. Shown on a [project's page](project-page) as *counted twice over*. |
 | Every tranche belongs to a named facility of its campus. | 每个分期都属于园区内一个具名设施。 | "Phase 2" without saying of which building. |
 | The tranches marked live add up to no more than the campus's running capacity. | 已投运分期的容量之和不超过园区运行容量。 | The same double description, seen in the running figure. |
 | A campus is not at an earlier phase than its own running tranches. | 园区所处阶段不早于其已投运的分期。 | A phase the tranches outran. |

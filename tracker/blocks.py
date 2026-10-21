@@ -436,6 +436,10 @@ def furthest_status(statuses: list[str]) -> str:
 # looks careless and one that looks careful.
 
 #: Why a slice of a campus is not in the committed total. Ordered as displayed.
+#:
+#: The last three are set aside by a ruling on how the tranches nest (`structure`):
+#: like `generation` and `out_of_scale` they are named beside the arithmetic and
+#: kept out of it.
 RESIDUAL_REASONS: Final[tuple[str, ...]] = (
     "unconfirmed",
     "unplaceable",
@@ -443,6 +447,14 @@ RESIDUAL_REASONS: Final[tuple[str, ...]] = (
     "generation",
     "overlap",
     "out_of_scale",
+    "same_as",
+    "superseded",
+    "elsewhere",
+)
+
+#: Residuals named beside the total rather than inside it. See `accounted_mw`.
+OUTSIDE_THE_TOTAL: Final[frozenset[str]] = frozenset(
+    {"overlap", "out_of_scale", "generation", "same_as", "superseded", "elsewhere"}
 )
 
 #: A tranche cannot be several times larger than the campus it is part of.
@@ -462,6 +474,9 @@ _RESIDUAL_NOTES: Final[dict[str, str]] = {
     "generation": "a utility's plant, not the data center — generation is a different megawatt",
     "overlap": "tranches sum past the cited campus total — probably one described twice",
     "out_of_scale": "larger than the whole campus — almost always kilowatts read as megawatts",
+    "same_as": "the same tranche under another name — counted once, under that name",
+    "superseded": "an earlier figure the sources have since replaced",
+    "elsewhere": "describes another campus, not this one",
 }
 
 
@@ -499,6 +514,9 @@ class Accounting:
     #: building under several names, and Abilene's live tranches summed to 1,600 MW
     #: against a 1,200 MW campus. See `delivering`.
     live_mw: float = 0.0
+    #: `counted_mw` by tranche state, furthest first — what the panel's bar draws, so
+    #: the browser never sums tranches itself (a nested building would count twice).
+    by_state: tuple[tuple[str, float], ...] = ()
 
     @property
     def accounted_mw(self) -> float:
@@ -510,9 +528,8 @@ class Accounting:
         cogeneration read as 558 MW accounted for a 279 MW campus — and nothing noticed,
         because no check ran this across the database until the invariants register did.
         """
-        outside = ("overlap", "out_of_scale", "generation")
         over = sum(r.mw for r in self.residuals if r.reason == "overlap")
-        rest = sum(r.mw for r in self.residuals if r.reason not in outside)
+        rest = sum(r.mw for r in self.residuals if r.reason not in OUTSIDE_THE_TOTAL)
         return self.counted_mw + rest - over
 
     @property
@@ -529,13 +546,20 @@ class Accounting:
         return abs(self.accounted_mw - self.total) < 0.51
 
 
-def account(project: Any) -> Accounting:
+def account(project: Any, nested: Structure | None = None) -> Accounting:
     """Break a campus into lines that sum to its total. Never writes.
 
     The residuals are not a rounding plug. Each names a *reason* capacity is not in
     the committed figure, and each reason implies different work: `unconfirmed` wants
     a citation, `unplaceable` wants an operator to say which facility, `unitemised`
-    wants another article, `overlap` wants two tranches merged.
+    wants another article, `overlap` wants a ruling on which tranche is part of which.
+
+    **The tranches are summed as the tree they form** (`structure`), not as siblings:
+    a tranche counts what its parts add up to, or its own figure where that is larger
+    — the remainder nobody broke down. A campus described once as a whole and again
+    building by building used to count both, which is how Abilene's 1,200 MW read as
+    14,729 MW of tranches. A tranche ruled the same as another, superseded, or
+    describing another campus is set aside on a line of its own, beside the total.
     """
     blocks = list(getattr(project, "blocks", ()) or ())
     # Generation is split off first, exactly as `rollup` does, and then reported as
@@ -545,8 +569,7 @@ def account(project: Any) -> Accounting:
     # nothing leaves the arithmetic without being named.
     generation = [b for b in blocks if is_generation(b.label, getattr(b, "parent", None))]
     blocks = [b for b in blocks if b not in generation]
-    usable = placeable(blocks)
-    unplaced = [b for b in blocks if b not in usable]
+    nested = nested if nested is not None else structure(project)
 
     def running(items: list[Any]) -> list[Any]:
         # A cancelled tranche is not part of anybody's campus total, and neither is
@@ -562,14 +585,11 @@ def account(project: Any) -> Accounting:
     # campus total, so calling its figure implausible as well is noise about a
     # number nobody is counting.
     rejected = [b for b in running(blocks) if implausible(b)]
-    ok = [b for b in running(usable) if not implausible(b)]
-    counted = [b for b in ok if mw_is_confirmed(b)]
-    unconfirmed = [b for b in ok if not mw_is_confirmed(b)]
-    unplaceable_blocks = [b for b in running(unplaced) if not implausible(b)]
+    tree = _sum_tree(blocks, nested, skip={b.block_key for b in rejected})
 
-    counted_mw = sum(b.mw for b in counted)
-    live_mw = sum(b.mw for b in counted if b.status in LIVE_STATUSES)
-    itemised = counted_mw + sum(b.mw for b in unconfirmed) + sum(b.mw for b in unplaceable_blocks)
+    counted_mw = tree.placed.confirmed
+    live_mw = tree.placed.live
+    itemised = tree.placed.confirmed + tree.placed.unconfirmed + tree.unplaced.total
 
     cited = cited_total
     total, floor = cited, False
@@ -578,20 +598,15 @@ def account(project: Any) -> Accounting:
         floor = True
 
     residuals: list[Residual] = []
-    for reason, group in (
-        ("unconfirmed", unconfirmed),
-        ("unplaceable", unplaceable_blocks),
-        ("generation", running(generation)),
-        ("out_of_scale", rejected),
+    for reason, mw, labels in (
+        ("unconfirmed", tree.placed.unconfirmed, tree.unconfirmed_labels),
+        ("unplaceable", tree.unplaced.total, tree.unplaced_labels),
+        ("generation", sum(b.mw for b in running(generation)), _labels(running(generation))),
+        ("out_of_scale", sum(b.mw for b in rejected), _labels(rejected)),
+        *((reason, *tree.set_aside[reason]) for reason in SET_ASIDE),
     ):
-        if group:
-            residuals.append(
-                Residual(
-                    reason,
-                    sum(b.mw for b in group),
-                    tuple(sorted(b.label for b in group)),
-                )
-            )
+        if mw > 0:
+            residuals.append(Residual(reason, mw, labels))
     if total is not None:
         gap = total - itemised
         if gap > 0.5:
@@ -599,13 +614,25 @@ def account(project: Any) -> Accounting:
         elif gap < -0.5:
             residuals.append(Residual("overlap", -gap))
 
+    by_state: dict[str, float] = {}
+    for key in tree.in_placed:
+        rest = tree.remainder.get(key)
+        if rest is not None and rest.confirmed > 0:
+            state = tree.status[key]
+            by_state[state] = by_state.get(state, 0.0) + rest.confirmed
+
     return Accounting(
         total=total,
         counted_mw=counted_mw,
         residuals=tuple(residuals),
         total_is_floor=floor,
         live_mw=live_mw,
+        by_state=tuple(sorted(by_state.items(), key=lambda kv: -_RANK.get(kv[0], -1))),
     )
+
+
+def _labels(blocks: list[Any]) -> tuple[str, ...]:
+    return tuple(sorted(b.label for b in blocks))
 
 
 #: The tranche states that mean the capacity is running.
@@ -703,19 +730,31 @@ class Rollup:
     built_from: tuple[str, ...] = ()
 
 
-def placeable(blocks: list[Any], *, families: int | None = None) -> list[Any]:
+def placeable(
+    blocks: list[Any], *, families: int | None = None, nested: Structure | None = None
+) -> list[Any]:
     """Blocks that can safely be summed.
 
     A generic block with no parent, in a project that holds more than one
     designator family, might belong to either campus. Its megawatts are excluded
     rather than guessed at — the same floor discipline the rest of the project
     uses, and the alternative is silently double-counting two campuses.
+
+    A ruling places one (`nested`): "Phase 2" that a model or a person ruled part of
+    a named building, or its own slice of the campus, is no longer a guess.
     """
     if families is None:
         families = len({b.block_key.split(".")[0] for b in blocks if not b.generic})
     if families <= 1:
         return list(blocks)
-    return [b for b in blocks if not b.generic or b.parent]
+    ruled = set()
+    if nested is not None:
+        ruled = {
+            key
+            for key, link in nested.links.items()
+            if link.relation in ("part_of", "separate") and not link.automatic
+        }
+    return [b for b in blocks if not b.generic or b.parent or b.block_key in ruled]
 
 
 def mw_is_confirmed(block: Any) -> bool:
@@ -738,12 +777,626 @@ def mw_is_confirmed(block: Any) -> bool:
     return "mw" not in {part.strip() for part in raw.split(",")}
 
 
-def rollup(blocks: list[Any]) -> Rollup:
-    """Derive project-level values from a project's blocks. Never writes."""
+# --- how the tranches nest -----------------------------------------------------
+#
+# Sources describe one campus at several grains at once: the campus as a whole, its
+# phases, the buildings inside them, one building under three names, an earlier plan
+# the campus outgrew, now and then another site entirely. Summed as siblings they
+# counted the same megawatts several times — 123 campuses on the 10-21 copy, 101,892
+# MW — and the arithmetic could only report the excess as `overlap`.
+#
+# A `Structure` says how they relate: which tranche is part of which, which are one
+# tranche under two names, which describe something no longer planned or somewhere
+# else. Judgement comes from `block_nesting` (a model's or a person's ruling); what
+# arithmetic settles alone is derived here on every read, and never stored, for the
+# reason `is_generation` gives about a stored `kind`: a derived judgement frozen into
+# a cache is how caches drift.
+
+#: Rulings that take a tranche out of the sum, each named on its own residual line.
+SET_ASIDE: Final[tuple[str, ...]] = ("same_as", "superseded", "elsewhere")
+
+#: Who decided a link that no stored ruling made. The suffix says which rule.
+AUTO_NAMES: Final = "auto:names"
+AUTO_PARENT: Final = "auto:parent"
+AUTO_CAMPUS: Final = "auto:campus"
+
+#: Words that mark a tranche as an increment of a campus, never the campus itself,
+#: whatever its size: "another 3.75 GW", "Option for another 380 MW".
+_INCREMENT_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "additional",
+        "another",
+        "expansion",
+        "expansions",
+        "extra",
+        "first",
+        "further",
+        "future",
+        "initial",
+        "more",
+        "next",
+        "option",
+        "remaining",
+        "second",
+        "third",
+    }
+)
+
+
+#: Words that mark a tranche as added to what it names rather than part of it: an
+#: "AMD Expansion" of "Initial AMD Capacity" is beside that capacity, not inside it.
+_ADDED_WORDS: Final[frozenset[str]] = frozenset(
+    {"additional", "another", "expansion", "expansions", "extra", "further", "more", "option"}
+)
+
+
+def adds_to(block: Any) -> bool:
+    """Whether a tranche's label says it adds to its parent rather than being a part of it."""
+    return bool(set(_fold_label(block.label).split()) & _ADDED_WORDS)
+
+
+@dataclass(frozen=True)
+class Link:
+    """How one tranche relates to its campus's others."""
+
+    key: str
+    #: From `vocab.NEST_RELATIONS`.
+    relation: str
+    target: str | None = None
+    #: 'model', a person's account name, or one of the `AUTO_*` rules.
+    by: str = AUTO_NAMES
+    reason: str = ""
+    confidence: float | None = None
+
+    @property
+    def automatic(self) -> bool:
+        return self.by.startswith("auto:")
+
+    @property
+    def by_model(self) -> bool:
+        return self.by == "model"
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "relation": self.relation,
+            "target": self.target,
+            "by": self.by,
+            "reason": self.reason,
+            "confidence": self.confidence,
+        }
+
+
+@dataclass(frozen=True)
+class Structure:
+    """Every link in one campus, by tranche key. Tranches with none are top level."""
+
+    links: dict[str, Link]
+    #: Stored rulings naming a tranche no source states any more. Kept, not applied:
+    #: the next re-read may state it again.
+    dormant: tuple[Link, ...] = ()
+
+    def link(self, key: str) -> Link | None:
+        return self.links.get(key)
+
+    def canonical(self, key: str) -> str:
+        """The tranche this one is, following `same_as` to its end."""
+        seen = {key}
+        link = self.links.get(key)
+        while link is not None and link.relation == "same_as" and link.target not in seen:
+            key = link.target or key
+            seen.add(key)
+            link = self.links.get(key)
+        return key
+
+    def parent(self, key: str) -> str | None:
+        link = self.links.get(key)
+        if link is None or link.relation != "part_of" or not link.target:
+            return None
+        return self.canonical(link.target)
+
+
+EMPTY_STRUCTURE: Final = Structure({})
+
+
+def closes_cycle(links: dict[str, Link], key: str, target: str | None) -> bool:
+    """Whether linking `key` to `target` would make a tranche part of itself."""
+    seen: set[str] = set()
+    while target is not None and target not in seen:
+        if target == key:
+            return True
+        seen.add(target)
+        link = links.get(target)
+        target = (
+            link.target if link is not None and link.relation in ("part_of", "same_as") else None
+        )
+    return False
+
+
+def _fold_label(text: str | None) -> str:
+    return " ".join(_fold(text or "").replace("-", " ").split())
+
+
+def campus_like(block: Any) -> bool:
+    """Whether a tranche's label could name the whole campus: no ordinal, no increment.
+
+    "Abilene Campus", "Full buildout", "Sweetwater Hub" — and not "Building 1",
+    "Phase 2" or "another 3.75 GW", whatever their size.
+    """
+    from tracker.blockcheck import Member, families
+
+    if families(Member.of(block)):
+        return False
+    words = set(_fold_label(block.label).split())
+    return not words & _INCREMENT_WORDS
+
+
+def structure(project: Any, *, automatic: bool = True) -> Structure:
+    """How a campus's tranches nest: stored rulings, then the automatic rules. Never writes.
+
+    Stored rulings come first, a person's before a model's, and each is applied only
+    while both tranches it names still exist. Then, for tranches nobody ruled on,
+    three rules arithmetic and the sources' own words can settle:
+
+    * **one tranche under several names** — the groups `blockcheck` finds with no
+      confirmed figure in dispute ("Building 1", "Facility 1", "First facility")
+      become one, under the name with the best-supported figure;
+    * **a stated parent that is itself a tranche** — "Building 2" of "Colossus 2",
+      where "Colossus 2" is a tranche of the same campus;
+    * **a campus-wide tranche** — labelled for the whole campus and within 2% of its
+      cited total — is the parent of every other top-level tranche, when they fit
+      inside it. When they do not, something in them is described twice or belongs
+      elsewhere, and that is a judgement left to the review.
+    """
+    blocks = [
+        b
+        for b in (getattr(project, "blocks", ()) or ())
+        if not is_generation(b.label, getattr(b, "parent", None))
+    ]
+    keys = {b.block_key: b for b in blocks}
+    links: dict[str, Link] = {}
+    dormant: list[Link] = []
+
+    stored = sorted(
+        getattr(project, "nesting", ()) or (),
+        key=lambda row: (row.decided_by == "model", row.block_key),
+    )
+    for row in stored:
+        link = Link(
+            row.block_key,
+            row.relation,
+            row.target_key,
+            by=row.decided_by or "operator",
+            reason=row.reason or "",
+            confidence=row.confidence,
+        )
+        missing = row.block_key not in keys or (row.target_key and row.target_key not in keys)
+        if missing or closes_cycle(links, row.block_key, row.target_key):
+            dormant.append(link)
+            continue
+        links[row.block_key] = link
+
+    if automatic and blocks:
+        _auto_names(project, blocks, links)
+        _auto_parents(blocks, keys, links)
+        _auto_campus(project, blocks, links)
+    return Structure(links, tuple(dormant))
+
+
+def _auto_names(project: Any, blocks: list[Any], links: dict[str, Link]) -> None:
+    from tracker.blockcheck import _canonical, group_blocks
+
+    # `group_blocks` tells members apart by row id, so rows not yet flushed — no id,
+    # or ids that collide — would be grouped as one. Nothing is inferred from them.
+    ids = [getattr(b, "id", None) for b in blocks]
+    if None in ids or len(set(ids)) != len(ids):
+        return
+    by_key = {b.block_key: b for b in blocks}
+    stored = {k for k, link in links.items() if not link.automatic}
+    for group in group_blocks(getattr(project, "id", 0), blocks):
+        if group.verdict != "mergeable":
+            continue
+        # A label naming a range or a list — "DC4-DC6", "Buildings 1-7" — holds
+        # several of the others; it is never the same as one of them. Two
+        # designators of different kinds are one thing named twice: "Building 2
+        # (ELN-02)".
+        members = [
+            by_key[m.block_key] for m in group.members if m.block_key in by_key and not _spans(m)
+        ]
+        # The same name under two different stated parents is two things: "Phase I"
+        # of ACC9 and "Phase I" of ACC6 are the first phases of two buildings, and
+        # `blockcheck` groups by the label alone.
+        parents = {_fold_label(m.parent) for m in members if getattr(m, "parent", None)}
+        if len(parents) > 1:
+            continue
+        # A tranche an earlier group already placed by rule stays where it was put.
+        members = [m for m in members if m.block_key not in links or m.block_key in stored]
+        if len(members) < 2 or all(m.block_key in links for m in members):
+            continue
+        head = _canonical(group.members).block_key
+        ruled = [m for m in members if m.block_key in stored]
+
+        def tier(block: Any, head: str = head) -> tuple[int, int, str]:
+            figure = 0 if block.mw and mw_is_confirmed(block) else 1 if block.mw else 2
+            return (figure, 0 if block.block_key == head else 1, block.block_key)
+
+        target = sorted(ruled or members, key=tier)[0]
+        for member in members:
+            if member is target or member.block_key in links:
+                continue
+            if closes_cycle(links, member.block_key, target.block_key):
+                continue
+            links[member.block_key] = Link(
+                member.block_key,
+                "same_as",
+                target.block_key,
+                by=AUTO_NAMES,
+                reason=f"another name for {target.label}",
+            )
+
+
+def _spans(member: Any) -> bool:
+    """Whether a label names several of one kind: two ordinals of one class, or a bare
+    count beside one ("Buildings 1-7", "Phase 1 (4 of 8 buildings)")."""
+    from tracker.blockcheck import UNKNOWN_CLASS, families
+
+    found = families(member)
+    classes = [klass for klass, _ in found]
+    return len(classes) != len(set(classes)) or (UNKNOWN_CLASS in classes and len(found) > 1)
+
+
+def _auto_parents(blocks: list[Any], keys: dict[str, Any], links: dict[str, Link]) -> None:
+    by_label = {}
+    for block in blocks:
+        by_label.setdefault(_fold_label(block.label), block)
+    for block in sorted(blocks, key=lambda b: b.block_key):
+        stated = getattr(block, "parent", None)
+        if not stated or block.block_key in links or adds_to(block):
+            continue
+        target = keys.get(block_key(stated).value) or by_label.get(_fold_label(stated))
+        if target is None or target is block:
+            continue
+        if closes_cycle(links, block.block_key, target.block_key):
+            continue
+        links[block.block_key] = Link(
+            block.block_key,
+            "part_of",
+            target.block_key,
+            by=AUTO_PARENT,
+            reason=f"its source names {target.label} as what it is part of",
+        )
+
+
+def _auto_campus(project: Any, blocks: list[Any], links: dict[str, Link]) -> None:
+    total = getattr(project, "mw_planned", None)
+    if not total:
+        return
+    tolerance = max(1.0, total * 0.02)
+    nested = Structure(links)
+    tree = _sum_tree(blocks, nested)
+    usable = {b.block_key for b in placeable(blocks, nested=nested)}
+    top = [tree.nodes[k] for k in sorted(tree.nodes) if tree.parent.get(k) is None and k in usable]
+    candidates = [
+        b
+        for b in top
+        if b.block_key not in links
+        and b.mw
+        and b.status not in BLOCK_TERMINAL
+        and abs(b.mw - total) <= tolerance
+        and campus_like(b)
+    ]
+    if not candidates:
+        return
+    root = sorted(candidates, key=lambda b: (not mw_is_confirmed(b), b.block_key))[0]
+    for twin in candidates:
+        if twin is not root:
+            links[twin.block_key] = Link(
+                twin.block_key,
+                "same_as",
+                root.block_key,
+                by=AUTO_CAMPUS,
+                reason=f"both describe the whole {total:g} MW campus",
+            )
+    # An expansion or "another 380 MW" may be beyond the cited total rather than
+    # inside it, so it is left beside the campus for the review to place.
+    others = [b for b in top if b not in candidates and b.block_key not in links and not adds_to(b)]
+    inside = sum(tree.eff[c].total for c in tree.children.get(root.block_key, ()))
+    if (
+        not others
+        or inside + sum(tree.eff[b.block_key].total for b in others) > root.mw + tolerance
+    ):
+        return
+    for other in others:
+        links[other.block_key] = Link(
+            other.block_key,
+            "part_of",
+            root.block_key,
+            by=AUTO_CAMPUS,
+            reason=f"fits inside {root.label}, the whole campus",
+        )
+
+
+@dataclass
+class _Figures:
+    confirmed: float = 0.0
+    unconfirmed: float = 0.0
+    live: float = 0.0
+
+    @property
+    def total(self) -> float:
+        return self.confirmed + self.unconfirmed
+
+    def add(self, other: _Figures) -> None:
+        self.confirmed += other.confirmed
+        self.unconfirmed += other.unconfirmed
+        self.live += other.live
+
+
+@dataclass
+class _Tree:
+    """One campus's tranches summed as the tree they form."""
+
+    nodes: dict[str, Any]
+    parent: dict[str, str | None]
+    children: dict[str, list[str]]
+    #: What each tranche counts: its parts, or its own figure where that is larger.
+    eff: dict[str, _Figures]
+    #: The part of each tranche's own figure its parts do not cover — what it adds.
+    remainder: dict[str, _Figures]
+    #: Tranches ruled the same as one in the tree, by the tranche they are.
+    twins: dict[str, list[Any]]
+    #: Whose figure each tranche counts: its own row, or one of its other names'.
+    figure_from: dict[str, Any]
+    #: Each tranche's own quoted figure (0 when unquoted), before its parts are summed.
+    own_confirmed: dict[str, float]
+    #: Each tranche's state, the furthest any of its names reports.
+    status: dict[str, str]
+    placed: _Figures
+    unplaced: _Figures
+    roots: tuple[str, ...]
+    placed_roots: frozenset[str]
+    #: Every tranche in a tree whose root is placed.
+    in_placed: frozenset[str]
+    unconfirmed_labels: tuple[str, ...]
+    unplaced_labels: tuple[str, ...]
+    set_aside: dict[str, tuple[float, tuple[str, ...]]]
+
+
+def _sum_tree(blocks: list[Any], nested: Structure, *, skip: set[str] = frozenset()) -> _Tree:
+    """Sum non-generation tranches as the tree `nested` makes of them.
+
+    `skip` are tranches left out entirely (a figure too large to be the campus's); a
+    tranche whose parent is skipped or set aside counts at the top level.
+    """
+    present = [b for b in blocks if b.block_key not in skip]
+    aside: dict[str, list[Any]] = {reason: [] for reason in SET_ASIDE}
+    nodes: dict[str, Any] = {}
+    for block in present:
+        link = nested.link(block.block_key)
+        if link is not None and link.relation in SET_ASIDE:
+            aside[link.relation].append(block)
+        else:
+            nodes[block.block_key] = block
+
+    twins: dict[str, list[Any]] = {}
+    for block in aside["same_as"]:
+        canonical = nested.canonical(block.block_key)
+        if canonical in nodes:
+            twins.setdefault(canonical, []).append(block)
+
+    usable = {b.block_key for b in placeable(blocks, nested=nested)}
+    parent: dict[str, str | None] = {}
+    children: dict[str, list[str]] = {}
+    for key in sorted(nodes):
+        above = nested.parent(key)
+        parent[key] = above if above in nodes and above != key else None
+        if parent[key] is not None:
+            children.setdefault(parent[key], []).append(key)
+
+    figure_from: dict[str, Any] = {}
+
+    def own(key: str) -> tuple[float, float]:
+        # A tranche's own figure, or — when it states none, or only an unquoted one —
+        # the best its other names state. `figure_from` records whose it was: the
+        # buyer a statement names travels with that statement's figure and no other.
+        block = nodes[key]
+        figure_from[key] = block
+        if block.status in BLOCK_TERMINAL:
+            return 0.0, 0.0
+        if block.mw and mw_is_confirmed(block):
+            return float(block.mw), 0.0
+        group = [t for t in twins.get(key, ()) if t.mw and t.status not in BLOCK_TERMINAL]
+        confirmed = [t for t in group if mw_is_confirmed(t)]
+        if confirmed:
+            figure_from[key] = max(confirmed, key=lambda t: (t.mw, t.block_key))
+            return float(figure_from[key].mw), 0.0
+        if block.mw:
+            return 0.0, float(block.mw)
+        if group:
+            figure_from[key] = max(group, key=lambda t: (t.mw, t.block_key))
+            return 0.0, float(figure_from[key].mw)
+        return 0.0, 0.0
+
+    def state(key: str) -> str:
+        if nodes[key].status in BLOCK_TERMINAL:
+            return nodes[key].status
+        return furthest_status(
+            [nodes[key].status]
+            + [t.status for t in twins.get(key, ()) if t.status not in BLOCK_TERMINAL]
+        )
+
+    def live(key: str) -> bool:
+        return state(key) in BLOCK_LIVE
+
+    eff: dict[str, _Figures] = {}
+    remainder: dict[str, _Figures] = {}
+
+    def total_of(key: str, depth: int = 0) -> _Figures:
+        if key in eff:
+            return eff[key]
+        below = _Figures()
+        if depth < 64:
+            for child in children.get(key, ()):
+                below.add(total_of(child, depth + 1))
+        mine_confirmed, mine_unconfirmed = own(key)
+        extra = (mine_confirmed + mine_unconfirmed) - below.total
+        rest = _Figures()
+        if extra > 1e-9:
+            if mine_confirmed:
+                rest.confirmed = extra
+                rest.live = extra if live(key) else 0.0
+            else:
+                rest.unconfirmed = extra
+        got = _Figures(below.confirmed, below.unconfirmed, below.live)
+        got.add(rest)
+        eff[key], remainder[key] = got, rest
+        return got
+
+    roots = tuple(k for k in sorted(nodes) if parent[k] is None)
+    placed, unplaced = _Figures(), _Figures()
+    placed_roots = frozenset(k for k in roots if k in usable)
+    for root in roots:
+        (placed if root in placed_roots else unplaced).add(total_of(root))
+
+    def tree_of(root: str) -> list[str]:
+        out, stack = [], [root]
+        while stack:
+            key = stack.pop()
+            out.append(key)
+            stack.extend(children.get(key, ()))
+        return out
+
+    unconfirmed_labels: set[str] = set()
+    unplaced_labels: set[str] = set()
+    in_placed: set[str] = set()
+    for root in roots:
+        for key in tree_of(root):
+            if root in placed_roots:
+                in_placed.add(key)
+            rest = remainder.get(key) or _Figures()
+            if root in placed_roots and rest.unconfirmed > 0:
+                unconfirmed_labels.add(nodes[key].label)
+            if root not in placed_roots and rest.total > 0:
+                unplaced_labels.add(nodes[key].label)
+
+    set_aside = {}
+    for reason in SET_ASIDE:
+        group = [b for b in aside[reason] if b.mw and b.status not in BLOCK_TERMINAL]
+        set_aside[reason] = (float(sum(b.mw for b in group)), _labels(group))
+
+    return _Tree(
+        nodes=nodes,
+        parent=parent,
+        children=children,
+        eff=eff,
+        remainder=remainder,
+        twins=twins,
+        figure_from=figure_from,
+        own_confirmed={k: own(k)[0] for k in nodes},
+        status={k: state(k) for k in nodes},
+        placed=placed,
+        unplaced=unplaced,
+        roots=roots,
+        placed_roots=placed_roots,
+        in_placed=frozenset(in_placed),
+        unconfirmed_labels=tuple(sorted(unconfirmed_labels)),
+        unplaced_labels=tuple(sorted(unplaced_labels)),
+        set_aside=set_aside,
+    )
+
+
+@dataclass(frozen=True)
+class TreeShare:
+    """One customer's confirmed slice of a campus's tranche tree."""
+
+    customer: str | None
+    mw_planned: float
+    mw_built: float
+    online: Any
+
+
+def tree_shares(tree: _Tree) -> list[TreeShare]:
+    """Confirmed capacity by named buyer, read up the tree. Unnamed capacity is left out.
+
+    A tranche naming a buyer holds its own quoted figure, less what the tranches inside
+    it credit to buyers of their own; parts inside it that name nobody are its buyer's,
+    up to that figure and no further. So a campus-wide lease and the buildings inside
+    it are credited once between them — Abilene's 1,200 MW for OpenAI with a 200 MW
+    building for Oracle is 1,000 and 200 — and a buyer named on a 210 MW "Colossus 2"
+    does not take the 1,531 MW building later reported inside it.
+    """
+    out: dict[str, dict[str, Any]] = {}
+
+    def customer_of(key: str) -> str | None:
+        # Its own buyer, else the buyer of another name for it that states the same
+        # figure, or none. Never a buyer stated with a different figure: Fermi's 222
+        # MW lease naming AMD is another name for its 1 GW phase, and AMD did not
+        # take the gigawatt.
+        block = tree.nodes[key]
+        if block.customer:
+            return block.customer
+        counted = tree.own_confirmed.get(key) or float(getattr(block, "mw", None) or 0.0)
+        for twin in [tree.figure_from.get(key), *tree.twins.get(key, ())]:
+            if twin is None or twin is block or not twin.customer:
+                continue
+            if twin.mw is None or abs(float(twin.mw) - counted) <= max(1.0, counted * 0.01):
+                return twin.customer
+        return None
+
+    def walk(key: str, depth: int = 0) -> tuple[float, float]:
+        named, named_live = 0.0, 0.0
+        if depth < 64:
+            for child in tree.children.get(key, ()):
+                got, got_live = walk(child, depth + 1)
+                named += got
+                named_live += got_live
+        buyer = customer_of(key)
+        whole = tree.eff[key]
+        own = tree.own_confirmed.get(key, 0.0)
+        if not buyer or own <= 0:
+            return named, named_live
+        take = max(0.0, min(own, whole.confirmed) - named)
+        take_live = max(0.0, min(take, whole.live - named_live))
+        if take > 0:
+            entry = out.setdefault(buyer, {"planned": 0.0, "built": 0.0, "online": None})
+            entry["planned"] += take
+            entry["built"] += take_live
+            block = tree.nodes[key]
+            when = getattr(block, "energized_on", None) or getattr(block, "expected_online", None)
+            if when and (entry["online"] is None or when < entry["online"]):
+                entry["online"] = when
+        return named + take, named_live + take_live
+
+    for root in tree.roots:
+        if root in tree.placed_roots:
+            walk(root)
+    return [
+        TreeShare(name, entry["planned"], entry["built"], entry["online"])
+        for name, entry in out.items()
+    ]
+
+
+def tranche_tree(project: Any, nested: Structure | None = None) -> _Tree:
+    """A campus's non-generation tranches summed as their tree. For Capex and the page."""
+    blocks = [
+        b
+        for b in (getattr(project, "blocks", ()) or ())
+        if not is_generation(b.label, getattr(b, "parent", None))
+    ]
+    return _sum_tree(blocks, nested if nested is not None else structure(project))
+
+
+def rollup(blocks: list[Any], nested: Structure | None = None) -> Rollup:
+    """Derive project-level values from a project's blocks. Never writes.
+
+    Summed as the tree `nested` makes of them (see `structure`); without one, every
+    tranche is its own top-level part, which is how this read before the hierarchy.
+    """
     if not blocks:
         return Rollup(None, None, None, None)
+    nested = nested if nested is not None else EMPTY_STRUCTURE
 
-    usable = placeable(blocks)
+    usable = placeable(blocks, nested=nested)
     skipped = tuple(b.block_key for b in blocks if b not in usable)
 
     # Generation comes out before anything is summed. A gas plant built to serve
@@ -752,27 +1405,31 @@ def rollup(blocks: list[Any]) -> Rollup:
     generation = tuple(
         b.block_key for b in usable if is_generation(b.label, getattr(b, "parent", None))
     )
-    usable = [b for b in usable if b.block_key not in set(generation)]
+    plant = set(generation)
+    tree = _sum_tree([b for b in blocks if b.block_key not in plant], nested)
+    usable = [b for b in usable if b.block_key not in plant and b.block_key in tree.nodes]
 
-    counted = [b for b in usable if mw_is_confirmed(b)]
     uncited = tuple(b.block_key for b in usable if not mw_is_confirmed(b) and b.mw)
-    live = [b for b in counted if b.status in BLOCK_LIVE]
+    contributing = [
+        k for k in tree.in_placed if tree.remainder.get(k) and tree.remainder[k].confirmed > 0
+    ]
+    built_from = [k for k in contributing if tree.remainder[k].live > 0]
 
-    sized_blocks = [b for b in counted if b.mw and b.status not in BLOCK_TERMINAL]
-    built_blocks = [b for b in live if b.mw]
-    sized = [b.mw for b in sized_blocks]
-    built = [b.mw for b in built_blocks]
-
+    # Which buyer the tranches name, largest first, for `reconcile`'s fill and the
+    # disclosure. Every counted tranche that names one, as before the tree — a buyer
+    # named on a tranche with no figure still names the buyer — less those set aside.
     by_customer: dict[str, float] = {}
-    for block in counted:
-        if block.customer:
+    for block in usable:
+        if block.customer and mw_is_confirmed(block):
             by_customer[block.customer] = by_customer.get(block.customer, 0.0) + (block.mw or 0.0)
     ranked = tuple(sorted(by_customer.items(), key=lambda kv: (-kv[1], kv[0])))
 
     # Generation excluded here too: a utility energising its own gas plant is not
     # the data center coming online, and letting it set the campus phase is one of
-    # the ways Hyperion came to read `operational` while nothing was built.
-    statuses = [b.status for b in blocks if b.block_key not in set(generation)]
+    # the ways Hyperion came to read `operational` while nothing was built. So is a
+    # tranche ruled superseded or another campus's: neither says where this one is.
+    gone = {k for k, link in nested.links.items() if link.relation in ("superseded", "elsewhere")}
+    statuses = [b.status for b in blocks if b.block_key not in plant | gone]
     phase = None
     if statuses:
         # Terminal only when *every* block is terminal: a cancelled phase 3 must
@@ -789,16 +1446,16 @@ def rollup(blocks: list[Any]) -> Rollup:
             phase = BLOCK_STATUS_TO_PHASE[furthest_status(statuses)]
 
     return Rollup(
-        mw_planned=sum(sized) if sized else None,
-        mw_built=sum(built) if built else None,
+        mw_planned=tree.placed.confirmed or None,
+        mw_built=tree.placed.live or None,
         phase=phase,
         customer=ranked[0][0] if ranked else None,
         unplaceable=skipped,
         uncited=uncited,
         customers=ranked,
         generation=generation,
-        planned_from=tuple(b.block_key for b in sized_blocks),
-        built_from=tuple(b.block_key for b in built_blocks),
+        planned_from=tuple(sorted(contributing)),
+        built_from=tuple(sorted(built_from)),
     )
 
 
@@ -1166,7 +1823,9 @@ def raise_phase(phase: str | None, from_blocks: str | None) -> str | None:
     return phase
 
 
-def phase_after_blocks(phase: str | None, blocks: list[Any]) -> str | None:
+def phase_after_blocks(
+    phase: str | None, blocks: list[Any], nested: Structure | None = None
+) -> str | None:
     """The campus phase once its *named* buildings have had their say.
 
     Only a block that names its building may lift the campus. A generic block —
@@ -1180,10 +1839,11 @@ def phase_after_blocks(phase: str | None, blocks: list[Any]) -> str | None:
 
     One function for the write path (`reconcile`) and the read path
     (`logic.check_collisions`), so the nightly drift check expects exactly what a
-    recompute stores.
+    recompute stores. Both pass the campus's `structure`, so a tranche ruled
+    another campus's or superseded lifts nothing.
     """
     named = [b for b in blocks if not getattr(b, "generic", False)]
-    return raise_phase(phase, rollup(named).phase if named else None)
+    return raise_phase(phase, rollup(named, nested).phase if named else None)
 
 
 def reconcile(project: Any) -> list[str]:
@@ -1231,7 +1891,8 @@ def reconcile(project: Any) -> list[str]:
     if not project.blocks:
         return []
 
-    got = rollup(list(project.blocks))
+    nested = structure(project)
+    got = rollup(list(project.blocks), nested)
     notes: list[str] = []
 
     if got.mw_planned is not None:
@@ -1257,7 +1918,7 @@ def reconcile(project: Any) -> list[str]:
                 "double-count or the campus figure is stale"
             )
 
-    project.phase = phase_after_blocks(project.phase, list(project.blocks))
+    project.phase = phase_after_blocks(project.phase, list(project.blocks), nested)
 
     if project.customer is None and got.customer is not None:
         project.customer = got.customer
@@ -1306,22 +1967,34 @@ def reconcile_notes(got: Rollup) -> list[str]:
 
 
 __all__ = [
+    "AUTO_CAMPUS",
+    "AUTO_NAMES",
+    "AUTO_PARENT",
     "BLOCK_POLICY",
+    "EMPTY_STRUCTURE",
     "ITEMISATION_NOTES",
     "ITEMISED",
     "NO_ARTICLE",
+    "OUTSIDE_THE_TOTAL",
     "RESIDUAL_REASONS",
+    "SET_ASIDE",
     "SINGLE_BLOCK",
     "TYPE_WORDS",
     "UNREAD",
     "Accounting",
     "Key",
+    "Link",
     "Residual",
     "Rollup",
+    "Structure",
+    "TreeShare",
     "account",
+    "adds_to",
     "aliases_for",
     "block_key",
     "blocks_by_key",
+    "campus_like",
+    "closes_cycle",
     "furthest_status",
     "is_generation",
     "is_type_word_only",
@@ -1334,4 +2007,7 @@ __all__ = [
     "reconcile_notes",
     "rollup",
     "segment_requirements",
+    "structure",
+    "tranche_tree",
+    "tree_shares",
 ]

@@ -31,6 +31,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from tracker.vocab import (
     BLOCK_STATUSES,
     EVENT_TYPES,
+    NEST_RELATIONS,
     PARTY_ROLES,
     PHASES,
     RISK_CATEGORIES,
@@ -137,6 +138,12 @@ class Project(Base):
     #: means the description changed, whereas a risk's absence from one article is
     #: not evidence it cleared.
     parties: Mapped[list[ProjectParty]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", passive_deletes=True
+    )
+    #: How its tranches nest, where a model or a person ruled. **Not a cache**:
+    #: unlike `blocks` nothing rebuilds these, so they outlive the tranche rows they
+    #: name and are kept when a re-read drops one (see `BlockNesting`).
+    nesting: Mapped[list[BlockNesting]] = relationship(
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
     )
 
@@ -579,6 +586,63 @@ class BlockAlias(Base):
         return f"<BlockAlias {self.from_key}->{self.to_key} p={self.project_id}>"
 
 
+class BlockNesting(Base):
+    """A ruling on how one tranche relates to the rest of its campus.
+
+    Sources describe a campus as a whole, again phase by phase and again building by
+    building; summed as siblings those count the same megawatts several times. What
+    arithmetic can settle is derived on every read (`blocks.structure`); this holds
+    what needed judgement — a model's or a person's — keyed by `block_key` like
+    `BlockAlias`, because the tranche rows themselves are rebuilt on every upsert.
+    """
+
+    __tablename__ = "block_nesting"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    block_key: Mapped[str] = mapped_column(Text, nullable=False)
+    #: From `vocab.NEST_RELATIONS`.
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The tranche this one is part of or the same as; for `superseded`, optionally
+    #: what replaced it. NULL for `separate` and `elsewhere`.
+    target_key: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    #: The model's own confidence; NULL for a person.
+    confidence: Mapped[float | None] = mapped_column(REAL)
+    #: 'model', or the account name of the person who ruled.
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'operator'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    project: Mapped[Project] = relationship(back_populates="nesting")
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "block_key", name="uq_block_nesting_project_key"),
+        CheckConstraint(sql_in("relation", NEST_RELATIONS), name="ck_block_nesting_relation"),
+        CheckConstraint(
+            "(relation IN ('part_of', 'same_as')) = (target_key IS NOT NULL) "
+            "OR relation = 'superseded'",
+            name="ck_block_nesting_target",
+        ),
+        CheckConstraint(
+            "target_key IS NULL OR target_key <> block_key", name="ck_block_nesting_not_self"
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0 AND 1", name="ck_block_nesting_confidence"
+        ),
+        Index("ix_block_nesting_project_id", "project_id"),
+    )
+
+    @property
+    def by_model(self) -> bool:
+        return self.decided_by == "model"
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        target = f" {self.target_key}" if self.target_key else ""
+        return f"<BlockNesting {self.block_key} {self.relation}{target} p={self.project_id}>"
+
+
 class ProjectAlias(Base):
     """A merged-away identity, and the row it now belongs to.
 
@@ -718,7 +782,8 @@ class ModelDecline(Base):
     __table_args__ = (
         UniqueConstraint("kind", "subject", name="uq_model_decline_subject"),
         CheckConstraint(
-            "kind IN ('pair', 'logic', 'audit', 'risk', 'settle')", name="ck_model_decline_kind"
+            "kind IN ('pair', 'logic', 'audit', 'risk', 'settle', 'nest')",
+            name="ck_model_decline_kind",
         ),
     )
 

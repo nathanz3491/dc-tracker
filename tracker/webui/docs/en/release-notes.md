@@ -2,6 +2,15 @@
 
 Changes a reader of the console will notice, newest first. The console's version number is in its top bar.
 
+## 22 October 2026
+
+### Tranches that nest
+
+- **A campus's tranches are summed as the tree they form.** Sources describe a campus as a whole, again phase by phase and again building by building; added up side by side, the same megawatts were counted several times. Now a building is *part of* its phase, a phase *part of* the campus, and the campus counts each megawatt once. On a [project's page](project-page) the parts sit indented under what they are part of.
+- **What could not be counted is set aside, with why.** Another name for a tranche above, an earlier figure the sources replaced, or another campus entirely — listed under *N set aside*, and in no figure.
+- **Who placed each tranche is on the page.** A rule (the same name in other words, a parent the source names, a campus-wide tranche its parts fit inside), the nightly review (a model reading the quoted sentences), or a person by name. Admins can rule on any tranche, or take a ruling back.
+- **Fewer campuses count the same megawatts twice.** See [How the figures relate](invariants).
+
 ## 21 October 2026
 
 ### How the figures relate

@@ -517,17 +517,35 @@ def test_one_buyers_overlapping_tranches_credit_it_the_campus_and_no_more(sessio
 
 
 def test_several_buyers_overlapping_tranches_leave_the_campus_whole(session):
-    """Abilene credited 3,872 MW to three buyers on a 1,200 MW campus. Which part is
-    whose cannot be told without a ratio nobody stated, so the campus is credited
+    """Abilene credited 3,872 MW to three buyers on a 1,200 MW campus. Where the
+    tranches still run past the campus — two phases nobody has ruled on — which part
+    is whose cannot be told without a ratio nobody stated, so the campus is credited
     whole, the way a campus without tranches is."""
+    project = _project(session, company="Crusoe", customer="Oracle", mw_planned=1200.0)
+    _block(session, project, label="Phase 1", mw=1000.0, customer="OpenAI", status="planned")
+    _block(session, project, label="Phase 2", mw=672.0, customer="Microsoft", status="planned")
+    session.refresh(project)
+
+    shares, leftover = capex.block_shares(project)
+    assert shares == [] and leftover == 1200.0
+    assert capex.credits(project) == {"oracle": (1200.0, 0.0)}
+
+
+def test_a_building_inside_a_campus_wide_lease_is_credited_to_its_own_buyer(session):
+    """Once the tranches nest, each buyer holds the part its tranche names, and the
+    campus-wide tranche's buyer the rest — 1,200 MW between them, never 1,872."""
     project = _project(session, company="Crusoe", customer="Oracle", mw_planned=1200.0)
     _block(session, project, label="Campus", mw=1200.0, customer="OpenAI", status="planned")
     _block(session, project, label="Building 1", mw=672.0, customer="Microsoft", status="planned")
     session.refresh(project)
 
     shares, leftover = capex.block_shares(project)
-    assert shares == [] and leftover == 1200.0
-    assert capex.credits(project) == {"oracle": (1200.0, 0.0)}
+    assert sorted((s.key, s.mw_planned) for s in shares) == [
+        ("microsoft", 672.0),
+        ("openai", 528.0),
+    ]
+    assert leftover == 0.0
+    assert sum(planned for planned, _ in capex.credits(project).values()) == 1200.0
 
 
 def test_an_unconfirmed_tranche_capacity_is_never_attributed(session):

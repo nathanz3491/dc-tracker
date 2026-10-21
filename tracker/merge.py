@@ -205,6 +205,11 @@ def merge_projects(
         # first — the campus is the same one they asked to follow.
         result.watches_moved += watchlist.repoint(session, dupe.id, keep.id)
 
+        # Rulings on how its tranches nest. Keyed by tranche key, which the folded
+        # row's sources carry across, so they still name the same tranches on the
+        # survivor. One the survivor already ruled on is the survivor's.
+        _move_nesting(session, keep, dupe)
+
         session.delete(dupe)
         result.removed.append(dupe_id)
         session.flush()
@@ -222,6 +227,33 @@ def merge_projects(
     session.flush()
     log.info("merged %s into #%d", ", ".join(f"#{i}" for i in result.removed), keep_id)
     return result
+
+
+def _move_nesting(session: Session, keep: Project, dupe: Project) -> int:
+    """Carry the folded row's tranche rulings to the survivor. Returns how many moved."""
+    from tracker.models import BlockNesting
+
+    taken = set(
+        session.scalars(
+            select(BlockNesting.block_key).where(BlockNesting.project_id == keep.id)
+        ).all()
+    )
+    moved = 0
+    for row in session.scalars(
+        select(BlockNesting).where(BlockNesting.project_id == dupe.id)
+    ).all():
+        if row.block_key in taken:
+            session.delete(row)
+            continue
+        row.project_id = keep.id
+        taken.add(row.block_key)
+        moved += 1
+    session.flush()
+    # Both collections are stale now, and a loaded one on the folded row would take
+    # the moved rulings down with it through the delete-orphan cascade.
+    session.expire(dupe, ["nesting"])
+    session.expire(keep, ["nesting"])
+    return moved
 
 
 def _repoint(session: Session, old_source_id: int, new_source_id: int) -> None:

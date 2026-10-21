@@ -739,7 +739,11 @@ def resolve(
     # Loaded with what the evidence block reads, so a 20-pair run is two queries
     # rather than sixty.
     session.scalars(
-        select(Project).options(selectinload(Project.sources), selectinload(Project.blocks))
+        select(Project).options(
+            selectinload(Project.sources),
+            selectinload(Project.blocks),
+            selectinload(Project.nesting),
+        )
     ).all()
 
     found = sorted(suspected_duplicates(session), key=lambda p: (p.rank, p.a_id, p.b_id))

@@ -1586,6 +1586,12 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
     return () => { cancelled = true; };
   }, [id]);
 
+  /* After an admin rules on a tranche: the page re-reads its project in place —
+   * no skeleton, no scroll — so the arithmetic under the ruling is the server's. */
+  const reload = () => api(`/api/project?id=${id}`)
+    .then((payload) => setState({ loading: false, project: payload.project, error: null }))
+    .catch(() => {});
+
   const back = html`
     <button type="button" class="dc-linkish" onClick=${onBack}
             style=${{ justifySelf: "start" }}>← every project</button>`;
@@ -1700,7 +1706,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
           hint="Which part of the campus is running, building or planned, and for whom."
           blurb="A modern campus is several states at once — one phase energised and serving a buyer, the next under construction, a third planned with nobody named."
           ...${at("tranches")}>
-          <${BlocksTab} p=${p} />
+          <${BlocksTab} p=${p} admin=${!!(data && data.account && data.account.admin)} onRuled=${reload} />
         <//>`}
 
       ${at("parties") && html`
@@ -3444,7 +3450,46 @@ const RECON_LABEL = {
   out_of_scale: "Out of scale, excluded",
   generation: "Power serving the campus",
   overlap: "Counted twice over",
+  same_as: "Another name for a tranche above",
+  superseded: "Superseded",
+  elsewhere: "Another campus",
 };
+
+/* Who placed a tranche in the campus (`blocks.structure`, `block_nesting`). A rule
+ * says which rule; a model and a person are named as such, so a reader can tell a
+ * judgement from arithmetic. */
+const RULED_BY = {
+  "auto:names": "automatic — the same name in other words",
+  "auto:parent": "automatic — its source names the tranche it is part of",
+  "auto:campus": "automatic — it fits inside the campus-wide tranche",
+  model: "the nightly review",
+};
+const rulerOf = (by) => RULED_BY[by] || (by ? `ruled by ${by}` : "");
+const SET_ASIDE_WORD = {
+  same_as: "Same as",
+  superseded: "Superseded",
+  elsewhere: "Another campus",
+};
+
+/* The sections as the tree they form: each followed by the ones it holds, indented.
+ * A section whose parent is not among the rows (set aside, or generation) is a root.
+ * Server order is kept among siblings — it is identity order. */
+function treeOrder(rows) {
+  const keys = new Set(rows.map((r) => r.key));
+  const kids = {};
+  for (const r of rows) if (r.within && keys.has(r.within)) (kids[r.within] = kids[r.within] || []).push(r);
+  const out = [];
+  const seen = new Set();
+  const visit = (r, depth) => {
+    if (seen.has(r.key)) return;
+    seen.add(r.key);
+    out.push({ ...r, depth });
+    for (const k of kids[r.key] || []) visit(k, depth + 1);
+  };
+  for (const r of rows) if (!(r.within && keys.has(r.within))) visit(r, 0);
+  for (const r of rows) visit(r, 0);
+  return out;
+}
 
 //: One line of the arithmetic. A column of megawatts a reader can add up, because
 //: the complaint that started this panel was that the numbers did not visibly add up.
@@ -3483,10 +3528,71 @@ function sectionNotes(sec) {
   if (sec.overdue) {
     notes.push({ tone: "--warning", text: `Was due ${fmtMonth(sec.expected_online)}; nothing since says it runs.` });
   }
+  if (sec.ruled_by && !sec.relation) {
+    notes.push({ text: `${sec.within ? `Part of ${sec.withinLabel || "the tranche above"}` : "Its own part of the campus"} — ${
+      rulerOf(sec.ruled_by)}${sec.ruling ? `: ${sec.ruling}` : ""}.` });
+  }
   return notes;
 }
 
-function TrancheRow({ sec }) {
+/* An admin's hand on one tranche: how it relates to the rest, or the ruling taken
+ * back. What `tracker tranches rule` does, posted to the console; a person's ruling
+ * outranks the model's and every automatic rule (`nesting.rule`). */
+const RELATION_CHOICES = [
+  ["part_of", "Part of"],
+  ["same_as", "Same as"],
+  ["separate", "Its own part of the campus"],
+  ["superseded", "Superseded"],
+  ["elsewhere", "Another campus"],
+];
+
+function RuleControl({ projectId, sec, others, onRuled }) {
+  const [relation, setRelation] = useState(sec.relation || (sec.within ? "part_of" : "separate"));
+  const [target, setTarget] = useState(sec.within || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const needsTarget = relation === "part_of" || relation === "same_as";
+  const byKey = Object.fromEntries(others.map((o) => [o.key, o]));
+  const post = async (path, body) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api(path, { method: "POST", body: { project_id: projectId, key: sec.tranche, ...body } });
+      if (res && res.error) setError(res.error);
+      else if (onRuled) await onRuled();
+    } catch (err) {
+      setError(String((err && err.message) || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = () => post("/api/admin/tranches/rule", {
+    relation, target: needsTarget || (relation === "superseded" && target) ? (byKey[target] || {}).tranche || null : null,
+  });
+  const ruledByPerson = sec.ruled_by && !sec.ruled_by.startsWith("auto:");
+  return html`
+    <div class="dc-rule" onClick=${(e) => e.stopPropagation()}>
+      <span class="dc-quiet">Rule:</span>
+      <select value=${relation} disabled=${busy}
+              onChange=${(e) => setRelation(e.target.value)} aria-label="How this tranche relates">
+        ${RELATION_CHOICES.map(([value, label]) => html`<option key=${value} value=${value}>${label}</option>`)}
+      </select>
+      ${(needsTarget || relation === "superseded") && html`
+        <select value=${target} disabled=${busy}
+                onChange=${(e) => setTarget(e.target.value)} aria-label="The other tranche">
+          <option value="">${needsTarget ? "choose a tranche" : "(nothing named)"}</option>
+          ${others.map((o) => html`<option key=${o.key} value=${o.key}>${o.label}</option>`)}
+        </select>`}
+      <button type="button" class="dc-linkish" disabled=${busy || (needsTarget && !target)} onClick=${save}>Save</button>
+      ${ruledByPerson && html`
+        <button type="button" class="dc-linkish" disabled=${busy}
+                onClick=${() => post("/api/admin/tranches/undo", {})}>Take back</button>`}
+      ${error && html`<span style=${{ color: "var(--danger)" }}>${error}</span>`}
+    </div>`;
+}
+
+function TrancheRow({ sec, admin, projectId, others, onRuled }) {
+  const depth = Math.min(sec.depth || 0, 4);
   const state = blockState(sec.status);
   const when = sec.energized_on || sec.expected_online;
   const cap = sec.capacity;
@@ -3496,8 +3602,9 @@ function TrancheRow({ sec }) {
     : notes.some((n) => n.tone === "--warning") ? "--warning" : null;
   const line = html`
     <span class="dc-tr-state" style=${chip(state.tone)}>${state.label}</span>
-    <span class="dc-tr-name">
-      ${sec.parent && html`<span class="dc-tr-parent">${sec.parent} ›</span>`}${sec.label}
+    <span class="dc-tr-name" style=${depth ? { paddingLeft: `${depth * 14}px` } : undefined}>
+      ${depth > 0 && html`<span class="dc-tr-nest" aria-label="part of the row above">└ </span>`}${
+        !depth && sec.parent && html`<span class="dc-tr-parent">${sec.parent} ›</span>`}${sec.label}
       ${notes.length > 0 && html`<span class="dc-tr-count" style=${tone ? { color: `var(${tone})` } : undefined}>${
         ` · ${notes.length} note${notes.length === 1 ? "" : "s"}`}</span>`}
     </span>
@@ -3511,15 +3618,17 @@ function TrancheRow({ sec }) {
     <span class="dc-tr-cust">${sec.customer || html`<span class="dc-quiet">—</span>`}</span>
     <span class="dc-tr-when dc-num" style=${sec.overdue ? { color: "var(--warning)" } : undefined}>
       ${when ? `${sec.energized_on ? "since " : sec.overdue ? "was due " : ""}${fmtMonth(when)}` : "—"}</span>`;
-  return notes.length
+  return notes.length || admin
     ? html`<li><details class="dc-tr"><summary class="dc-tr-line">${line}</summary>
         <ul class="dc-tr-notes">${notes.map((n, i) => html`
-          <li key=${i} style=${n.tone ? { color: `var(${n.tone})` } : undefined}>${n.text}</li>`)}</ul>
+          <li key=${i} style=${n.tone ? { color: `var(${n.tone})` } : undefined}>${n.text}</li>`)}
+          ${admin && html`<li><${RuleControl} projectId=${projectId} sec=${sec}
+              others=${others.filter((o) => o.key !== sec.key)} onRuled=${onRuled} /></li>`}</ul>
       </details></li>`
     : html`<li><div class="dc-tr-line">${line}</div></li>`;
 }
 
-function BlocksTab({ p }) {
+function BlocksTab({ p, admin = false, onRuled }) {
   const blocks = p.blocks || [];
   const serving = p.serving || [];
   const acct = p.accounting;
@@ -3537,7 +3646,12 @@ function BlocksTab({ p }) {
    * (ELN-02)` and `Building 2` are one building is a judgement, and the browser
    * draws judgements rather than making them. The first twelve, then the rest on
    * request: Abilene's sources describe thirty. */
-  const rows = p.sections || [];
+  const all = p.sections || [];
+  const labelOf = Object.fromEntries(all.map((r) => [r.key, r.label]));
+  const rows = treeOrder(all.filter((r) => !r.relation)).map((r) => ({ ...r, withinLabel: labelOf[r.within] }));
+  // Ruled the same as another, superseded, or another campus's: listed apart, with
+  // why, and kept out of every figure (`blocks.SET_ASIDE`).
+  const aside = all.filter((r) => r.relation);
   const [listed, moreRows] = useCapped(rows);
 
   const campusTotal = acct && acct.total != null ? acct.total : blocks.reduce((sum, b) => sum + (b.mw || 0), 0);
@@ -3552,8 +3666,11 @@ function BlocksTab({ p }) {
   // Confirmed capacity by state, then everything the campus is made of that we will
   // not commit to. Only `mw_counted` capacity counts as delivering: a figure nobody
   // confirmed cannot be the headline number for a campus.
+  // By state off the server's tree (`accounting.by_state`): a building inside a
+  // campus-wide tranche is counted once there, and would be twice if summed here.
   const byState = {};
-  for (const b of plotted.filter((x) => x.mw_counted)) byState[b.status] = (byState[b.status] || 0) + b.mw;
+  if (acct && acct.by_state) Object.assign(byState, acct.by_state);
+  else for (const b of plotted.filter((x) => x.mw_counted)) byState[b.status] = (byState[b.status] || 0) + b.mw;
   const confirmed = Object.entries(byState).sort((a, b) => blockState(b[0]).rank - blockState(a[0]).rank);
   const live = confirmed.filter(([s]) => s === "serving" || s === "energized").reduce((sum, [, mw]) => sum + mw, 0);
 
@@ -3584,7 +3701,7 @@ function BlocksTab({ p }) {
   const barTone = (key) => (key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone);
   const barLabel = (key) => (key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label);
   // The reconciliation's lines inside the total, and the two named beside it.
-  const OUTSIDE = ["generation", "out_of_scale"];
+  const OUTSIDE = ["generation", "out_of_scale", "same_as", "superseded", "elsewhere"];
   const inside = ((acct && acct.residuals) || []).filter((r) => !OUTSIDE.includes(r.reason));
   const outside = ((acct && acct.residuals) || []).filter((r) => OUTSIDE.includes(r.reason));
 
@@ -3628,9 +3745,22 @@ function BlocksTab({ p }) {
           <div class="dc-tr-line dc-tr-cols" aria-hidden="true">
             <span>State</span><span>Section</span><span>Delivering / held</span><span>Customer</span><span>Online</span>
           </div>
-          <ul class="dc-tr-list">${listed.map((sec, i) => html`<${TrancheRow} key=${i} sec=${sec} />`)}</ul>
+          <ul class="dc-tr-list">${listed.map((sec) => html`<${TrancheRow} key=${sec.key} sec=${sec}
+            admin=${admin} projectId=${p.id} others=${all} onRuled=${onRuled} />`)}</ul>
           ${moreRows}
         </div>`}
+
+      ${aside.length > 0 && html`
+        <details class="dc-tr-aside">
+          <summary>${aside.length} set aside<span class="dc-quiet"> — another name for a tranche above, superseded,
+            or another campus; in no figure</span></summary>
+          <ul class="dc-tr-notes">${aside.map((r, i) => html`
+            <li key=${i}><strong>${r.label}</strong>${r.capacity != null ? ` · ${fmtMw(r.capacity)} MW` : ""} — ${
+              SET_ASIDE_WORD[r.relation] || r.relation}${r.relation === "same_as" && labelOf[r.within] ? ` ${labelOf[r.within]}` : ""}${
+              r.ruling ? `: ${r.ruling}` : ""} <span class="dc-quiet">(${rulerOf(r.ruled_by)})</span>
+              ${admin && html`<${RuleControl} projectId=${p.id} sec=${r}
+                others=${all.filter((o) => o.key !== r.key)} onRuled=${onRuled} />`}</li>`)}</ul>
+        </details>`}
 
       ${rejected.length > 0 && html`
         <p class="dc-tr-note dc-tr-foot">
@@ -3643,7 +3773,9 @@ function BlocksTab({ p }) {
       ${acct && html`
         <details class="dc-fold">
           <summary>How the ${fmtMw(acct.total)} MW adds up
-            <span class="dc-quiet">${` — ${fmtMw(acct.counted_mw)} MW cited per tranche, the rest on ${inside.length} line${inside.length === 1 ? "" : "s"} of its own`}</span></summary>
+            <span class="dc-quiet">${inside.length
+              ? ` — ${fmtMw(acct.counted_mw)} MW cited per tranche, the rest on ${inside.length} line${inside.length === 1 ? "" : "s"} of its own`
+              : ` — all of it cited per tranche`}</span></summary>
           <div class="dc-fold-body">
             <${ReconRow} label="Cited per tranche" mw=${fmtMw(acct.counted_mw)}
               note="capacity a quote confirms for a named tranche" />

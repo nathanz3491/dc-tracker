@@ -445,6 +445,9 @@ class Section:
     customer: str | None = None
     energized_on: Any = None
     expected_online: Any = None
+    #: The tranche keys this section stands for, so a ruling on any of them
+    #: (`blocks.structure`) can be read onto the section.
+    block_keys: tuple[str, ...] = ()
 
     @property
     def sort_key(self) -> tuple[int, int, str, str]:
@@ -547,6 +550,7 @@ def sections(project_id: int, blocks: list[Any]) -> list[Section]:
                 customer=next((m.customer for m in crowd if m.customer), None),
                 energized_on=next((m.energized_on for m in crowd if m.energized_on), None),
                 expected_online=next((m.expected_online for m in crowd if m.expected_online), None),
+                block_keys=tuple(sorted({m.block_key for m in crowd})),
             )
         )
     return sorted(out, key=lambda s: s.sort_key)

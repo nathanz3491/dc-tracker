@@ -52,6 +52,19 @@ of a month with no recorded precision is read as the month, or on 1 January as t
 year, because the wider reading only delays a warning and the narrower one deletes a
 value. On the production copy that day it took 5 of 13 findings off the list.
 
+**The tranche rules read the campus's tranches as the tree they form**
+(2026-10-21). `blocks_may_double_count` (one label inside another's) and
+`block_label_ambiguous` (a phase that names no facility) are still report-only — which
+tranche is part of which is a judgement — but a pair the structure already relates
+(`blocks.structure`: one tranche under several names, a stated parent that is itself
+a tranche, a campus-wide tranche its parts fit inside, or a ruling) is answered and
+not reported again, and a phase a ruling placed is not ambiguous. The judgement
+itself is not made here: `tracker tranches review` puts each campus whose tranches
+still do not add up to the model, after `logic resolve` in the nightly loop, and
+`tracker tranches rule` is a person's hand. The drift check and the stored-against-
+evidence rule read the same tree `reconcile` fills a campus from, so they expect
+exactly what a recompute stores.
+
 **A campus that is late is the same campus on the console and here.** The client
 asked for a campus whose expected date has passed, with no news of it going live, to
 be flagged on the console as a *suspected delay*. `past_its_own_date` was already
@@ -452,7 +465,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | The four layers, and the spend dials | `tracker/logic.py` — `review`, `MAX_TOKENS` |
-| Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `dedupe`, `ERROR`, `WARNING` |
+| Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `_nested_blocks`, `dedupe`, `ERROR`, `WARNING`; `tracker/blocks.py` — `structure`, `rollup` |
 | Suspected delays, and tranches past their date | `tracker/delays.py` — `assess`, `suspected_delay`, `suspected`, `tranche_state`, `period_end`, `read_as` |
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |

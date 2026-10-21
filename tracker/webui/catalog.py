@@ -247,6 +247,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "queue",
             "queue stats",
             "blocks",
+            # Beside `blocks`: that groups one tranche's several names, this lists
+            # the campuses whose tranches still do not add up, and draws one.
+            "tranches",
+            "tranches show",
             "sources",
             "feeds",
             # Where this installation keeps its code and its data. A read, and the
@@ -282,6 +286,11 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "audit resolve",
             "logic conflicts",
             "risks confirm",
+            # The model rules how a campus's tranches nest; a person rules or takes
+            # one back by hand.
+            "tranches review",
+            "tranches rule",
+            "tranches undo",
             "duplicates resolve",
             "queue check",
             "queue prune",

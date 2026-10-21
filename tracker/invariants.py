@@ -13,9 +13,9 @@ Two kinds, and the difference is what a violation means:
   A violation is a bug in this codebase, never a fact about the world, and the
   test suite runs these over the fixtures so that it cannot ship.
 * **reported** — the data as published does not close yet, and each violation
-  says what is missing: most often the campus → building → phase hierarchy that
-  Batch 4 of the client plan builds, without which a campus described once as a
-  whole and again building by building counts the same megawatts twice.
+  says what is missing: most often a ruling on how a campus's tranches nest
+  (`blocks.structure`, `tracker tranches`), without which a campus described once
+  as a whole and again building by building counts the same megawatts twice.
 
 Read-only, free, no network. `tracker invariants` prints the register; the
 report is what the hierarchy and the fact table are measured against as they
@@ -409,8 +409,9 @@ INVARIANTS: Final[tuple[Invariant, ...]] = (
         "campus, not past it.",
         "园区的楼栋与分期只描述园区一次：其容量之和等于园区总容量，而不超过它。",  # noqa: RUF001 - Chinese punctuation in Chinese text
         "Sources describe a campus as a whole and again building by building, or one "
-        "building under two names. Holds once tranches nest in a campus → building → "
-        "phase hierarchy (Batch 4).",
+        "building under two names. The tranches are summed as the tree they form "
+        "(`blocks.structure`); what arithmetic cannot settle waits for the nightly "
+        "review (`tracker tranches review`) or a person's ruling (`tracker tranches rule`).",
         _tranches_once,
     ),
     Invariant(
@@ -419,8 +420,8 @@ INVARIANTS: Final[tuple[Invariant, ...]] = (
         REPORTED,
         "Every tranche belongs to a named facility of its campus.",
         "每个分期都属于园区内一个具名设施。",
-        '"Phase 2" without saying of which building. Holds once each tranche is tied '
-        "to a facility in the hierarchy (Batch 4).",
+        '"Phase 2" without saying of which building. A ruling that it is part of a '
+        "named tranche, or its own part of the campus, places it (`tracker tranches`).",
         _tranches_placed,
     ),
     Invariant(
@@ -430,7 +431,8 @@ INVARIANTS: Final[tuple[Invariant, ...]] = (
         "The tranches marked live add up to no more than the campus's running capacity.",
         "已投运分期的容量之和不超过园区运行容量。",
         "The same double description as above, seen in the running figure: Abilene's "
-        "live tranches sum past its 421 MW running. Holds with the hierarchy (Batch 4).",
+        "live tranches sum past its 421 MW running. Closes as the tranches nest "
+        "(`tracker tranches`).",
         _live_tranches_le_running,
     ),
     Invariant(

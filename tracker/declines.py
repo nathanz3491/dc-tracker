@@ -64,8 +64,9 @@ TONIGHT_HOURS: Final = 20
 ERROR: Final = "error"
 
 #: `settle` is enrich's settle step (`enrich._settle`): a contested field the
-#: judgement tier refused to pick between, on the claims it was shown.
-KINDS: Final = ("pair", "logic", "audit", "risk", "settle")
+#: judgement tier refused to pick between, on the claims it was shown. `nest` is the
+#: tranche review (`nesting.review`): a campus whose tranches it could not settle.
+KINDS: Final = ("pair", "logic", "audit", "risk", "settle", "nest")
 
 
 def fingerprint(*parts: Any) -> str:

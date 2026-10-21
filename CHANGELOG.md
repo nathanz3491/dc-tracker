@@ -12,6 +12,46 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A campus's tranches nest, and are summed as the tree they form** (`tracker/blocks.py`
+  `structure`, migration 0042 `block_nesting`, `tests/test_blocks.py`). Step 4.2 of the
+  client plan's master data model. Sources describe a campus as a whole, again phase
+  by phase, again building by building, one building under three names, and now and
+  then another site altogether; summed as siblings those counted the same megawatts
+  several times — 128 campuses on the 10-21 evening copy, 103,706 MW. Each tranche can
+  now be *part of* another, *the same as* another, its *own part* of the campus,
+  *superseded*, or *another campus's*. What the labels settle on their own is derived
+  on every read and never stored: one tranche under several names (no confirmed figure
+  in dispute, no two stated parents, never a range like "DC4-DC6"), a stated parent
+  that is itself a tranche (not an "expansion" of it, which adds to it), and a
+  campus-wide tranche equal to the cited total that its parts fit inside. A tranche
+  counts what its parts add up to, or its own figure where that is larger — the
+  remainder nobody broke down — and one set aside is named on a line of its own
+  beside the total. On the copy the free rules alone settle 15 campuses and take the
+  double count from 103,706 to 80,833 MW; one stored figure moves at the next
+  re-derive (Elk Grove's running 15.5 → 12 MW: a 3.5 MW lease inside a 12 MW
+  building), and Capex moves 210 MW (Colossus: the 300 MW Anthropic lease sits inside
+  Colossus 2, so Anthropic −210, the campus's own buyer +210). A ruling on a folded
+  row moves to the survivor of a merge.
+- **The nightly review nests what the labels cannot: `tracker tranches review`**
+  (`tracker/nesting.py`, prompt `nest-v1`, `scripts/overnight.sh` phase *tranches*
+  after *logic*, `--nest N`, default 20 a round, `tests/test_nesting.py`). One model
+  call per campus whose tranches still do not add up, worst first by the megawatts at
+  stake, showing every tranche with its figures, its stated parent and the sentences
+  quoted for it. A ruling is kept only when it names tranches that exist, would not
+  make one part of itself, is at least 65% sure, and leaves a person's ruling alone;
+  the model's rulings on a campus are replaced by its next review of it. A campus
+  still open afterwards is remembered with a hash of its tranches (`declines`, new
+  kind `nest`) and not paid for again until they change. `--dry-run` measures at full
+  cost and writes nothing.
+- **A person's hand on it: `tracker tranches`, `show`, `rule`, `undo`, and the project
+  page** (`tracker/cli/tranches.py`, `POST /api/admin/tranches/rule` and `/undo`). Bare
+  `tracker tranches` lists the campuses still open with what is at stake; `show ID`
+  draws one as its tree with who placed each tranche and why; `rule` and `undo` record
+  or take back a person's ruling, which outranks the model's and every automatic rule.
+  On the project page the tranche list is drawn as the tree — parts indented under
+  what they are part of, *N set aside* listing what is in no figure and why — and an
+  admin can rule on any line, or take a ruling back, from the same place.
+
 - **The relationships between the figures are declared and checked: `tracker
   invariants`** (`tracker/invariants.py`, `tracker/cli/quality.py`, reader docs *How the
   figures relate*, `tests/test_invariants.py`). The first step of Batch 4 of the client
@@ -385,6 +425,21 @@ initial build of the v1 PRD.
   `robots.txt` only on the browser path and no `Crawl-delay`, were closed the same day; see below.)
 
 ### Changed
+
+- **The tranche rules, the drift check and Capex read the campus's tranche tree**
+  (`tracker/logic.py`, `tracker/capex.py`, `tracker/invariants.py`, workflow page
+  *logic*). `blocks_may_double_count` no longer reports a pair the structure relates,
+  and a phase a ruling placed is not `block_label_ambiguous`; the drift check and the
+  stored-against-evidence rule read the same tree `reconcile` fills a campus from.
+  Capex credits buyers up the tree — a tranche naming a buyer holds its own quoted
+  figure, less what tranches inside it credit to buyers of their own — so a
+  campus-wide lease and the buildings inside it are credited once between them, and a
+  buyer named on another name for a tranche carries over only with that name's own
+  figure (Fermi's 222 MW lease naming AMD is not AMD's gigawatt). The invariants'
+  remedies name the review and the rulings. Export schema `tracker/11` adds
+  `sections[].within`, `.relation`, `.ruled_by`, `.ruling`, `.tranche`,
+  `accounting.by_state` and three residual reasons; the tranche bar reads
+  `accounting.by_state`, so the browser never sums tranches itself.
 
 - **Capacity by tranche follows the project page's new layout** (`tracker/webui/static/app.js`,
   `tracker/webui/static/app.css`, reader docs *A project's page*, *Release notes*). Left

@@ -399,7 +399,9 @@ def watched(session: Session, *, account_id: int | None = None) -> list[Entity]:
     from tracker.models import Account
 
     rows = session.scalars(
-        select(Project).options(selectinload(Project.blocks)).order_by(Project.id.asc())
+        select(Project)
+        .options(selectinload(Project.blocks), selectinload(Project.nesting))
+        .order_by(Project.id.asc())
     ).all()
     # Only when it can be needed. One account's own list has one owner and the
     # page does not show it, so the whole-database path is the only one that pays.

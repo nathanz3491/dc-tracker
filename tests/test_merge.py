@@ -605,3 +605,37 @@ def test_a_quoted_obstacle_is_not_traded_for_an_unquoted_one(session):
     (risk,) = session.scalars(select(Risk)).all()
     assert risk.quote == quote
     assert risk.unconfirmed is None
+
+
+def test_rulings_on_how_tranches_nest_move_to_the_survivor(session):
+    """A model's or a person's ruling is a decision about the campus, not the row."""
+    from tracker.models import BlockNesting
+
+    keep = _project(session, "Stargate Abilene", "Crusoe")
+    dupe = _project(session, "Stargate", "Oracle")
+    _source(session, keep, "https://a.test/1")
+    _source(session, dupe, "https://b.test/2")
+    session.add_all(
+        [
+            BlockNesting(project_id=keep.id, block_key="campus", relation="separate"),
+            BlockNesting(project_id=dupe.id, block_key="campus", relation="elsewhere"),
+            BlockNesting(
+                project_id=dupe.id,
+                block_key="building-1",
+                relation="part_of",
+                target_key="campus",
+                decided_by="model",
+                confidence=0.8,
+            ),
+        ]
+    )
+    session.flush()
+    _ = dupe.nesting  # loaded, so the delete-orphan cascade could reach it
+
+    merge_projects(session, keep.id, [dupe.id])
+
+    rows = session.scalars(select(BlockNesting).order_by(BlockNesting.block_key)).all()
+    assert [(r.project_id, r.block_key, r.relation) for r in rows] == [
+        (keep.id, "building-1", "part_of"),
+        (keep.id, "campus", "separate"),
+    ]

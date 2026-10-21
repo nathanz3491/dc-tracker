@@ -56,6 +56,13 @@
 #             One call per finding on the fixed-menu path, so it is also cheap.
 #   risks     reads the article behind each unquoted obstacle. Also T3, also cheap.
 #   logic     the agent: reads sources, rules wrong claims out of the merge.
+#   tranches  since 2026-10-21: one call per campus whose tranches still count the
+#             same megawatts twice (`tracker tranches review`), worst first, `--nest`
+#             a round. The model rules which tranche is part of which, the same as
+#             which, superseded or another campus's; a campus left open is held back
+#             until its tranches change. 128 campuses were open on the 10-21 copy,
+#             22 settled by the free rules alone; at 20 a round the rest take a few
+#             nights at about ¥0.02 a campus.
 #   enrich    the agent, last and separately budgeted, because it is the most
 #             expensive rung (~77,000 tokens a row) AND the largest tier lever
 #             there is: every one of the 283 rows sitting at T1 is held there by
@@ -179,6 +186,7 @@ FINDINGS=60
 PAIRS=40
 AUDIT=60
 RISKS=40
+NEST=20
 ENRICH=40
 ENRICH_BUDGET=160
 ENRICH_ROUNDS=1
@@ -225,6 +233,7 @@ started in tmux and left.
   --pairs N          duplicate pairs per round (default 40)
   --audit N          audit findings per round (default 60)
   --risks N          obstacles per round (default 40)
+  --nest N           campuses whose tranches the model nests, per round (default 20)
   --enrich N         projects to enrich (default 40); 0 to skip
   --enrich-budget N  articles the enrich phase may read (default 160)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
@@ -270,6 +279,7 @@ while [ $# -gt 0 ]; do
     --pairs)          shift; PAIRS="${1:?}" ;;
     --audit)          shift; AUDIT="${1:?}" ;;
     --risks)          shift; RISKS="${1:?}" ;;
+    --nest)           shift; NEST="${1:?}" ;;
     --enrich)         shift; ENRICH="${1:?}" ;;
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
@@ -683,6 +693,12 @@ for round in $(seq 1 "$ROUNDS"); do
   if capped logic; then break; fi
   phase "logic — a model reads the sources, $FINDINGS at a time"
   tracker logic resolve --limit "$FINDINGS" < /dev/null || true
+
+  # After logic, which may rule a claim out and re-derive a row's tranches: the
+  # review then reads the tranches the night settled on.
+  if capped tranches; then break; fi
+  phase "tranches — a model nests the tranches of $NEST campus(es) that do not add up"
+  tracker tranches review --limit "$NEST" < /dev/null || true
 
   # --- enrich: last, and the largest lever --------------------------------
   # Every row sitting at T1 is held there by `fields_present` alone. Nothing above

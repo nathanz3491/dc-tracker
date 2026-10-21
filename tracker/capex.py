@@ -50,8 +50,6 @@ from tracker import dedup
 from tracker.dedup import is_undisclosed, is_vocabulary_block_key
 from tracker.models import Event, Project, Risk, Source
 from tracker.vocab import (
-    BLOCK_LIVE,
-    BLOCK_TERMINAL,
     OPEN_RISK_STATUS,
     PHASE_TERMINAL,
     severity_rank,
@@ -332,6 +330,11 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
     its share of the investment almost never, so splitting the money would mean
     inventing a ratio — which is the sort of quiet fabrication this codebase spends
     most of its effort refusing.
+
+    **Read down the campus's tranche tree** (`blocks.tree_shares`): a building inside
+    a campus-wide tranche leased to one buyer is that buyer's unless it names
+    another, and the two are credited once between them. A tranche ruled the same as
+    another, superseded or another campus's credits nobody.
     """
     from tracker import blocks as blocks_mod
 
@@ -340,25 +343,19 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
         return [], float(project.mw_planned or 0.0)
 
     by_key: dict[str, dict[str, Any]] = {}
-    for block in blocks_mod.placeable(blocks):
-        if block.mw is None or not blocks_mod.mw_is_confirmed(block):
-            continue
-        if block.status in PHASE_TERMINAL or block.status in BLOCK_TERMINAL:
-            continue
-        key = customer_key(block.customer)
-        if not key:
+    for share in blocks_mod.tree_shares(blocks_mod.tranche_tree(project)):
+        key = customer_key(share.customer)
+        if not key or share.mw_planned <= 0:
             continue
         entry = by_key.setdefault(
-            key, {"name": block.customer or key, "planned": 0.0, "built": 0.0, "online": None}
+            key, {"name": share.customer or key, "planned": 0.0, "built": 0.0, "online": None}
         )
-        entry["planned"] += float(block.mw)
-        if block.status in BLOCK_LIVE:
-            entry["built"] += float(block.mw)
-        when = block.energized_on or block.expected_online
+        entry["planned"] += share.mw_planned
+        entry["built"] += share.mw_built
         # Earliest tranche date, so a buyer's capacity is booked when it first
         # arrives rather than when the last building finishes.
-        if when and (entry["online"] is None or when < entry["online"]):
-            entry["online"] = when
+        if share.online and (entry["online"] is None or share.online < entry["online"]):
+            entry["online"] = share.online
 
     shares = [
         BlockShare(
@@ -372,21 +369,24 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
     ]
     claimed = sum(s.mw_planned for s in shares)
     planned = float(project.mw_planned or 0.0)
+    running = float(project.mw_built) if project.mw_built is not None else planned
     if project.mw_planned is not None and claimed > planned + 0.5:
-        # The tranches naming buyers describe more than the campus — the campus and
-        # its buildings, or one building under two names — so they are not a
-        # partition of it, and summing them credited buyers past the campus: 7,870 MW
-        # across nine campuses on the 10-21 copy, Doña Ana's 2,500 MW crediting
-        # Oracle 4,500 (`invariants.company_sums_campuses`). One buyer named across
-        # them holds the campus, no more; several cannot be told apart without a
-        # ratio nobody stated, so the campus is credited whole, the way `attribute`
-        # credits a campus without tranches. Until tranches nest in a hierarchy
-        # (Batch 4), this is the most that can be said without inventing.
+        # The tranches naming buyers still describe more than the campus once the
+        # tree has had its say — two phases describing one, nobody has yet ruled
+        # which — so they are not a partition of it, and summing them credited buyers
+        # past the campus: 7,870 MW across nine campuses on the 10-21 copy, Doña Ana's
+        # 2,500 MW crediting Oracle 4,500 (`invariants.company_sums_campuses`). One
+        # buyer named across them holds the campus, no more; several cannot be told
+        # apart without a ratio nobody stated, so the campus is credited whole, the
+        # way `attribute` credits a campus without tranches.
         if len(shares) == 1:
             only = shares[0]
-            running = float(project.mw_built) if project.mw_built is not None else planned
             return [replace(only, mw_planned=planned, mw_built=min(only.mw_built, running))], 0.0
         return [], planned
+    if len(shares) == 1 and shares[0].mw_built > running + 0.5:
+        # Tranches marked live past what the campus runs: the campus's own figure is
+        # the one every surface shows (`blocks.delivering`), so the buyer gets that.
+        shares = [replace(shares[0], mw_built=running)]
     return shares, max(0.0, planned - claimed)
 
 
@@ -495,6 +495,7 @@ def working_set(session: Session) -> Iterator[list[Project]]:
         session.scalars(
             select(Project).options(
                 selectinload(Project.blocks),
+                selectinload(Project.nesting),
                 selectinload(Project.parties),
                 selectinload(Project.sources),
             )

@@ -242,9 +242,10 @@ def _reconciled(
             if (block.customer or "").strip().casefold() == wanted:
                 yield _tranche(block, "customer", urls)
     elif field_name in ("mw_planned", "mw_built") and isinstance(value, int | float) and blocks:
-        from tracker.blocks import rollup
+        from tracker.blocks import rollup, structure
 
-        got = rollup(blocks)
+        # The tree `reconcile` filled it from, so the sum checked here is that sum.
+        got = rollup(blocks, structure(project))
         total = got.mw_planned if field_name == "mw_planned" else got.mw_built
         if total is None or not math.isclose(total, value, rel_tol=1e-9, abs_tol=1e-6):
             return

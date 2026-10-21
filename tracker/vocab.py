@@ -86,6 +86,19 @@ BLOCK_STATUS_TO_PHASE: Final[dict[str, str]] = {
 #: `mw_built` rolls up from.
 BLOCK_LIVE: Final[frozenset[str]] = frozenset({"energized", "serving"})
 
+#: How one tranche relates to the others of its campus, where a model or a person
+#: ruled on it (`block_nesting`, migration 0042). Order is the order a reviewer is
+#: offered them. See `tracker/blocks.py` (`structure`) for what each does to the sums.
+NEST_RELATIONS: Final[tuple[str, ...]] = (
+    "part_of",
+    "same_as",
+    "separate",
+    "superseded",
+    "elsewhere",
+)
+#: The relations that name another tranche of the same campus.
+NEST_TARGETED: Final[frozenset[str]] = frozenset({"part_of", "same_as"})
+
 #: Written when no source states a phase. `phase` is NOT NULL and the PRD has no
 #: `unknown` member, so we default — but ingest paths must then OMIT `phase` from
 #: `source.fields`, which makes confidence.py's coverage penalty fire and routes

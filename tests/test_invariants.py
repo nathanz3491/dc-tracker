@@ -73,13 +73,25 @@ def test_the_held_relationships_hold_on_a_campus_built_the_ordinary_way(session)
 
 
 def test_tranches_that_describe_a_campus_twice_are_reported_with_the_megawatts(session):
-    """Hyperion: 20,124 MW of tranches against a 5,000 MW campus."""
+    """Hyperion: 20,124 MW of tranches against a 5,000 MW campus.
+
+    Two phases that together run past the campus, with no campus-wide tranche to hold
+    them: which describes which is a judgement, so the excess is reported.
+    """
     campus = _campus(session, "Twice", mw_planned=1200.0)
-    _tranche(session, campus, "Campus", 1200.0)
-    _tranche(session, campus, "Building 1", 600.0)
+    _tranche(session, campus, "Phase 1", 1000.0)
+    _tranche(session, campus, "Phase 2", 800.0)
     (violation,) = _findings(session)["tranches_once"].violations
     assert violation.project_id == campus.id and violation.mw == 600.0
     assert "counted twice" in violation.detail
+
+
+def test_a_campus_wide_tranche_holds_the_buildings_that_fit_inside_it(session):
+    """The commonest double description: the campus, and again its buildings."""
+    campus = _campus(session, "Whole", mw_planned=1200.0)
+    _tranche(session, campus, "Campus", 1200.0)
+    _tranche(session, campus, "Building 1", 600.0)
+    assert _findings(session)["tranches_once"].holds
 
 
 def test_a_tranche_bigger_than_its_campus_is_reported_as_out_of_scale(session):

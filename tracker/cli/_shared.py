@@ -118,6 +118,12 @@ app.add_typer(users_app)
 news_app = typer.Typer(name="news", invoke_without_command=True)
 app.add_typer(news_app)
 
+#: How each campus's tranches nest: bare `tracker tranches` lists the campuses whose
+#: tranches still do not add up; `show` draws one as its tree, `review` puts them to
+#: the judgement model, `rule` and `undo` are a person's hand.
+tranches_app = typer.Typer(name="tranches", invoke_without_command=True)
+app.add_typer(tranches_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

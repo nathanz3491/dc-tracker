@@ -189,7 +189,8 @@ def _print_blocks(project: Project) -> None:
     serving = [b for b in all_blocks if blocks_mod.is_generation(b.label, b.parent)]
     blocks = [b for b in all_blocks if b not in serving]
 
-    got = blocks_mod.rollup(all_blocks)
+    nested = blocks_mod.structure(project)
+    got = blocks_mod.rollup(all_blocks, nested)
     table = Table(
         title=f"capacity blocks ({len(blocks)})",
         header_style="bold",
@@ -218,12 +219,17 @@ def _print_blocks(project: Project) -> None:
         label = escape(block.label)
         if block.parent:
             label = f"{escape(block.parent)} / {label}"
+        # How it nests (`tracker tranches show` has the reasons).
+        link = nested.link(block.block_key)
+        if link is not None:
+            shown = {"part_of": "part of", "same_as": "same as"}.get(link.relation, link.relation)
+            label += f" [dim]({shown}{' ' + escape(link.target) if link.target else ''})[/dim]"
         table.add_row(label, mw, status, escape(block.customer or NA), str(when or NA))
 
     # The residual lines, then the total. Without these the tranches visibly fail to
     # add up to `MW planned` — measured on 70 of 118 itemised projects — and a reader
     # who cannot make the arithmetic work stops trusting the rest of the row too.
-    account = blocks_mod.account(project)
+    account = blocks_mod.account(project, nested)
     if account.residuals:
         table.add_section()
         for residual in account.residuals:
