@@ -316,29 +316,62 @@ kbd {
 .pager small { display: block; font-size: 12.5px; color: var(--muted); }
 .pager span { font-weight: 600; }
 
-/* ---- the changelog, a part at a time ------------------------------------------
-   One closed row per part, fetched when opened (`docs.js`, "the changelog"). */
+/* ---- the changelog -------------------------------------------------------------
+   A header per month, a card per week, Added / Changed / Fixed inside, and a row per
+   change whose text is fetched when it opens (`docs.js`, "the changelog"). */
 
 .changelog { margin: 0 0 18px; }
-.cl-intro, .cl-total { color: var(--muted); font-size: 14.5px; }
-.cl-part { border: 1px solid var(--rule); border-radius: 10px; margin: 0 0 8px; background: var(--surface); }
-.cl-part > summary {
-  display: grid; gap: 2px; padding: 10px 14px 10px 32px; cursor: pointer; list-style: none; position: relative;
+.cl-intro, .cl-meta { color: var(--muted); font-size: 14.5px; }
+.cl-month { margin: 28px 0 0; }
+.cl-month > h3 { margin-top: 0; }
+
+.cl-week { border: 1px solid var(--rule); border-radius: 12px; margin: 0 0 10px; background: var(--surface); }
+.cl-week > summary {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  padding: 12px 16px 12px 36px; cursor: pointer; list-style: none; position: relative;
 }
-.cl-part > summary::-webkit-details-marker { display: none; }
-.cl-part > summary::before {
-  content: "›"; position: absolute; left: 14px; top: 9px; color: var(--faint); font-size: 16px;
-  transition: transform .15s ease;
+.cl-week > summary::-webkit-details-marker, .cl-entry > summary::-webkit-details-marker { display: none; }
+.cl-week > summary::before, .cl-entry > summary::before {
+  content: "\203A"; position: absolute; color: var(--faint); transition: transform .15s ease;
 }
-.cl-part[open] > summary::before { transform: rotate(90deg); }
-.cl-part > summary:hover .cl-head { color: var(--amber); }
-.cl-part > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 10px; }
-.cl-head { font: 600 12.5px/1.5 var(--mono); letter-spacing: .02em; color: var(--muted); }
-.cl-first { font-size: 14.5px; color: var(--ink); }
-.cl-body { padding: 2px 16px 4px 32px; border-top: 1px solid var(--rule); }
-.cl-body:empty { display: none; }
-.cl-body > ul { margin-top: 12px; }
-.cl-body > ul > li { margin: 0 0 12px; }
+.cl-week > summary::before { left: 16px; top: 11px; font-size: 17px; }
+.cl-week[open] > summary::before, .cl-entry[open] > summary::before { transform: rotate(90deg); }
+.cl-week > summary:focus-visible, .cl-entry > summary:focus-visible {
+  outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 8px;
+}
+.cl-week-title { font-weight: 640; font-size: 16px; }
+.cl-week-tally { font: 500 12.5px/1.5 var(--mono); color: var(--muted); }
+.cl-week-body { padding: 0 16px 10px 36px; border-top: 1px solid var(--rule); }
+
+.cl-tools { margin: 10px 0 0 !important; text-align: right; }
+.cl-all {
+  font: 500 12.5px/1 var(--mono); color: var(--amber); background: none; border: 0; padding: 4px 0; cursor: pointer;
+}
+.cl-all:hover { color: var(--amber-hover); text-decoration: underline; }
+
+h4.cl-group {
+  display: flex; align-items: baseline; gap: 8px; margin: 14px 0 6px;
+  font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.cl-count {
+  font: 600 11.5px/18px var(--mono); padding: 0 7px; border-radius: 99px; letter-spacing: 0;
+  color: var(--muted); background: var(--plate); border: 1px solid var(--rule);
+}
+
+.prose ul.cl-list { list-style: none; padding: 0; margin: 0 0 6px; }
+.prose ul.cl-list > li { margin: 0; border-top: 1px solid var(--rule); }
+.prose ul.cl-list > li:first-child { border-top: 0; }
+.cl-entry > summary {
+  display: flex; align-items: baseline; gap: 12px; padding: 7px 0 7px 18px;
+  cursor: pointer; list-style: none; position: relative;
+}
+.cl-entry > summary::before { left: 2px; top: 6px; font-size: 15px; }
+.cl-entry-title { flex: 1; min-width: 0; font-size: 14.5px; line-height: 1.45; }
+.cl-entry > summary:hover .cl-entry-title { color: var(--amber); }
+.cl-entry time { flex: none; font: 500 12px/1.45 var(--mono); color: var(--faint); }
+.cl-entry-body { padding: 2px 0 8px 18px; font-size: 14.5px; }
+.cl-entry-body:empty { display: none; }
+.cl-entry-body > :last-child { margin-bottom: 0; }
 
 .loading, .noscript { color: var(--muted); }
 .noscript { max-width: 640px; margin: 40px auto; padding: 0 24px; }

@@ -1243,8 +1243,9 @@ class Handler(BaseHTTPRequestHandler):
     def _docs_changelog(self, relative: str) -> None:
         """The changelog behind the release notes: its index, or one part of it.
 
-        ``changelog.json`` is the index the page loads first; ``changelog/<n>.md`` is
-        part *n*, fetched when a reader opens it (`docsite.parse_changelog`). The part
+        ``changelog.json`` is the index the page loads first — every change's title,
+        group and day, none of its text; ``changelog/<n>.json`` is part *n*'s entries,
+        fetched when a reader opens one of them (`docsite.parse_changelog`). The part
         is a number compared against the parts there are, so no request text reaches
         the filesystem.
         """
@@ -1252,21 +1253,15 @@ class Handler(BaseHTTPRequestHandler):
         if log is None:
             return self._error(404, "this install has no changelog")
         if relative == "changelog.json":
-            body = json.dumps(log.index(), ensure_ascii=False).encode("utf-8")
-            return self._send(
-                200, body, "application/json; charset=utf-8", cache="no-cache", csp=PUBLIC_CSP
-            )
-        match = re.fullmatch(r"changelog/(\d{1,4})\.md", relative)
-        if match is None or int(match.group(1)) >= len(log.parts):
-            return self._error(404, "not part of the documentation")
-        part = log.parts[int(match.group(1))]
-        self._send(
-            200,
-            part.text.encode("utf-8"),
-            "text/markdown; charset=utf-8",
-            cache="no-cache",
-            csp=PUBLIC_CSP,
-        )
+            payload: dict[str, Any] = log.index()
+        else:
+            match = re.fullmatch(r"changelog/(\d{1,4})\.json", relative)
+            if match is None or int(match.group(1)) >= len(log.parts):
+                return self._error(404, "not part of the documentation")
+            n = int(match.group(1))
+            payload = {"id": n, "entries": list(log.parts[n].entries)}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._send(200, body, "application/json; charset=utf-8", cache="no-cache", csp=PUBLIC_CSP)
 
     # --- hostnames this server does not serve -----------------------------------------
 

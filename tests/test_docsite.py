@@ -297,6 +297,9 @@ def test_the_changelog_is_cut_into_parts_with_every_entry_whole():
     assert "- not an entry, inside a fence" in added.entries[1]
     assert added.first == "One"
     assert log.parts[1].entries[0] == "Found while testing:"
+    # Where each entry starts, which is what dates it.
+    assert added.lines == (11, 15, 20)
+    assert log.parts[1].lines == (24, 26)
 
 
 def test_a_part_closes_before_it_passes_its_entry_or_byte_ceiling(monkeypatch):
@@ -323,24 +326,56 @@ def test_the_real_changelog_loads_a_part_at_a_time():
     for part in log.parts:
         size = len(part.text.encode("utf-8"))
         assert size <= docsite.PART_BYTES or len(part.entries) == 1
-    index = json.dumps(log.index()).encode("utf-8")
-    assert len(index) < len(whole) / 10, "the index is a list of parts, not the text"
+    index = log.index()
+    assert len(index["items"]) == index["entries"] == sum(len(p.entries) for p in log.parts)
+    for item in index["items"]:
+        assert log.parts[item["part"]].entries[item["at"]], item
+    raw = json.dumps(index).encode("utf-8")
+    assert len(raw) < len(whole) / 5, "the index is titles, not the text"
+
+
+def test_each_change_is_dated_by_the_commit_that_wrote_it():
+    """The headings carry no dates, so the page dates each change from git."""
+    dates = docsite.commit_dates(docsite.CHANGELOG)
+    assert dates, "this checkout has the changelog's history"
+    assert all(re.fullmatch(r"20\d\d-\d\d-\d\d", day) for day in dates.values())
+    index = docsite.changelog().index()
+    assert index["dated"] and all(item["date"] for item in index["items"])
+
+
+def test_a_commit_is_dated_in_its_authors_own_time_zone():
+    # 17:30 UTC on 20 October is 01:30 on the 21st in Beijing.
+    when = 1_792_517_400
+    assert docsite._local_day(when, "+0000") == "2026-10-20"
+    assert docsite._local_day(when, "+0800") == "2026-10-21"
+    assert docsite._local_day(when, "-0500") == "2026-10-20"
+
+
+def test_without_git_the_changes_are_listed_undated(tmp_path):
+    copy = tmp_path / "CHANGELOG.md"
+    copy.write_text(SAMPLE_CHANGELOG, encoding="utf-8")
+    assert docsite.commit_dates(copy) is None
+    index = docsite.parse_changelog(SAMPLE_CHANGELOG).index()
+    assert index["dated"] is False
+    assert [item["date"] for item in index["items"]] == [None] * 5
 
 
 def test_the_changelog_is_served_as_an_index_and_numbered_parts(gated):
     status, headers, body = _get(gated, "/docs/content/changelog.json")
     assert status == 200 and headers["Content-Type"].startswith("application/json")
     index = json.loads(body)
-    assert index["parts"] and index["parts"][0]["id"] == 0
-    status, headers, body = _get(gated, "/docs/content/changelog/0.md")
-    assert status == 200 and headers["Content-Type"].startswith("text/markdown")
-    assert body.lstrip().startswith(("- ", "* "))
+    assert index["parts"] and index["parts"][0]["id"] == 0 and index["items"]
+    status, headers, body = _get(gated, "/docs/content/changelog/0.json")
+    assert status == 200 and headers["Content-Type"].startswith("application/json")
+    part = json.loads(body)
+    assert part["id"] == 0 and part["entries"][0].startswith(("- ", "* "))
     last = len(index["parts"]) - 1
-    assert _get(gated, f"/content/changelog/{last}.md", host=DOCS_HOST)[0] == 200
+    assert _get(gated, f"/content/changelog/{last}.json", host=DOCS_HOST)[0] == 200
     for path in (
-        f"/docs/content/changelog/{last + 1}.md",
-        "/docs/content/changelog/99999.md",
-        "/docs/content/changelog/-1.md",
+        f"/docs/content/changelog/{last + 1}.json",
+        "/docs/content/changelog/99999.json",
+        "/docs/content/changelog/-1.json",
+        "/docs/content/changelog/0.md",
         "/docs/content/changelog/0.txt",
         "/docs/content/changelog/../CHANGELOG.md",
         "/docs/content/CHANGELOG.md",

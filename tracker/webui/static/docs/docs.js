@@ -14,8 +14,8 @@
  *                searched by substring, so Chinese works without a word splitter
  *   language     a switch to the same page in the other language, remembered
  *   theme        system, light or dark, remembered
- *   changelog    on the release notes, the project changelog as a list of parts,
- *                each fetched only when opened — never the whole file at once
+ *   changelog    on the release notes, the project changelog by month and week,
+ *                each change's text fetched only when opened — never the whole file
  *
  * Remembered means `localStorage`, wrapped so a browser that refuses it (a
  * private window, blocked site data) still gets a working page.
@@ -50,11 +50,12 @@
       changelog: {
         failed: "The changelog could not be loaded. Reload the page to try again.",
         none: "This installation has no changelog.",
-        partFailed: "This part could not be loaded. Close it and open it again to retry.",
-        part: (n, of) => `part ${n} of ${of}`,
-        entries: (n) => `${n} ${n === 1 ? "entry" : "entries"}`,
-        more: (n) => ` and ${n} more`,
-        total: (entries, parts, kb) => `${entries.toLocaleString()} entries in ${parts} parts, ${kb.toLocaleString()} KB in all. Each part loads when you open it.`,
+        partFailed: "This change could not be loaded. Close it and open it again to retry.",
+        summary: (n, since) => `${n.toLocaleString()} changes${since ? ` since ${since}` : ""}, newest first. Open a change to read it; its text loads then.`,
+        week: (date) => `Week of ${date}`,
+        undated: "Changes, by heading",
+        count: (n) => `${n} ${n === 1 ? "change" : "changes"}`,
+        openAll: "Open all", closeAll: "Close all",
         groups: {},
       },
     },
@@ -70,11 +71,12 @@
       changelog: {
         failed: "更新日志加载失败。请刷新页面重试。",
         none: "此安装没有更新日志。",
-        partFailed: "这一部分加载失败。收起后再展开即可重试。",
-        part: (n, of) => `第 ${n}/${of} 部分`,
-        entries: (n) => `${n} 条`,
-        more: (n) => `，另有 ${n} 条`,
-        total: (entries, parts, kb) => `共 ${entries.toLocaleString()} 条，分为 ${parts} 部分，合计 ${kb.toLocaleString()} KB。每一部分在展开时才会加载。`,
+        partFailed: "这一项加载失败。收起后再展开即可重试。",
+        summary: (n, since) => `${since ? `自${since}以来` : ""}共 ${n.toLocaleString()} 项改动，最新的在前。展开某一项即可阅读，其内容在展开时才加载。`,
+        week: (date) => `${date}这一周`,
+        undated: "按标题列出的改动",
+        count: (n) => `${n} 项改动`,
+        openAll: "全部展开", closeAll: "全部收起",
         groups: { Added: "新增", Changed: "变更", Fixed: "修复", Removed: "移除", Deprecated: "弃用", Security: "安全" },
       },
     },
@@ -276,9 +278,12 @@
     const crumb = `<p class="crumbs">${MD.escape(page.sectionTitle[lang])}</p>`;
     $("article").innerHTML = crumb + out.html;
     fixLinks($("article"));
-    mountChangelog($("article"));
     toc(out.headings);
     pager();
+    // The changelog's months join "On this page" once its index has arrived.
+    mountChangelog($("article")).then((months) => {
+      if (months.length && lang === wantLang && slug === wantSlug) toc([...out.headings, ...months]);
+    });
     document.title = `${out.title || page.title[lang]} — dc-tracker ${t.docs}`;
 
     const target = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
@@ -314,61 +319,175 @@
     route({ focus: true });
   }
 
-  /* ---- the changelog, in parts --------------------------------------------
+  /* ---- the changelog --------------------------------------------------------
    *
    * The release notes end with the project's CHANGELOG.md, which is over half a
-   * megabyte. The server cuts it into parts of a few dozen kilobytes behind a small
-   * index (`webui/docsite.py`); this lists the parts closed and fetches one only when
-   * the reader opens it. The newest part opens by itself, since that is usually what
-   * a reader came for. The changelog is written in English, so its parts render as
-   * English on both language pages, and search does not read it. */
+   * megabyte. The page never loads it whole. It loads an index first — every
+   * change's title, heading group and the day it was written, about a twentieth of
+   * the file (`webui/docsite.py`) — and draws the history from that: a header per
+   * month (also listed under "On this page"), a week at a time, Added / Changed /
+   * Fixed within each week, each change a row. A change's text is fetched when its
+   * row is opened, in a part shared with its neighbours, so a reader pays only for
+   * what they open. The newest week starts open.
+   *
+   * The changelog is written in English, so its titles and text are marked `lang="en"`
+   * on both language pages, and search does not read it. */
 
+  const GROUP_ORDER = ["Added", "Changed", "Fixed", "Removed", "Deprecated", "Security"];
+  // "Fixed (earlier)" is still a Fixed heading.
+  const groupOf = (name) => GROUP_ORDER.find((g) => name.startsWith(g)) || name;
+  const partCache = new Map();
+  const DATE_LOCALE = { en: "en-GB", zh: "zh-CN" };
+
+  function dateText(iso, options) {
+    return new Intl.DateTimeFormat(DATE_LOCALE[lang], { timeZone: "UTC", ...options })
+      .format(new Date(`${iso}T00:00:00Z`));
+  }
+
+  /* The Monday a day's week starts on. */
+  function weekOf(iso) {
+    const d = new Date(`${iso}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  }
+
+  /* An index's changes as months, weeks and groups, newest first. Undated, they are
+   * one block, grouped by heading. */
+  function shape(index) {
+    const items = index.items.map((it, n) => ({ ...it, n, group: groupOf(it.group) }));
+    const weeks = new Map();
+    for (const it of items) {
+      const key = index.dated && it.date ? weekOf(it.date) : "";
+      if (!weeks.has(key)) weeks.set(key, []);
+      weeks.get(key).push(it);
+    }
+    const months = [];
+    for (const key of [...weeks.keys()].sort().reverse()) {
+      const month = key ? key.slice(0, 7) : "";
+      if (!months.length || months[months.length - 1].key !== month) months.push({ key: month, weeks: [] });
+      const rank = (g) => (GROUP_ORDER.includes(g) ? GROUP_ORDER.indexOf(g) : GROUP_ORDER.length);
+      const groups = new Map();
+      for (const it of weeks.get(key)) {
+        if (!groups.has(it.group)) groups.set(it.group, []);
+        groups.get(it.group).push(it);
+      }
+      const ordered = [...groups.entries()]
+        .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+        .map(([name, list]) => ({
+          name,
+          items: list.sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.n - b.n),
+        }));
+      months[months.length - 1].weeks.push({ key, groups: ordered, count: weeks.get(key).length });
+    }
+    return months;
+  }
+
+  function renderWeek(week, open) {
+    const t = UI[lang].changelog;
+    const title = week.key ? t.week(dateText(week.key, { day: "numeric", month: "long" })) : t.undated;
+    const tally = week.groups.map((g) => `${t.groups[g.name] || g.name} ${g.items.length}`).join(" · ");
+    const groups = week.groups.map((g) => {
+      const rows = g.items.map((it) => {
+        const when = it.date
+          ? `<time datetime="${it.date}">${dateText(it.date, { day: "numeric", month: "short" })}</time>`
+          : "";
+        return `<li><details class="cl-entry" data-part="${it.part}" data-at="${it.at}">
+          <summary><span class="cl-entry-title" lang="en">${MD.escape(it.title)}</span>${when}</summary>
+          <div class="cl-entry-body" lang="en"></div></details></li>`;
+      }).join("");
+      return `<h4 class="cl-group">${MD.escape(t.groups[g.name] || g.name)}<span class="cl-count">${g.items.length}</span></h4>
+        <ul class="cl-list">${rows}</ul>`;
+    }).join("");
+    return `<details class="cl-week"${open ? " open" : ""}>
+      <summary><span class="cl-week-title">${MD.escape(title)}</span>
+        <span class="cl-week-tally">${t.count(week.count)} · ${MD.escape(tally)}</span></summary>
+      <div class="cl-week-body"><p class="cl-tools"><button type="button" class="cl-all">${t.openAll}</button></p>${groups}</div>
+    </details>`;
+  }
+
+  /* Draws the changelog into the page; returns its month headings for "On this page". */
   async function mountChangelog(root) {
     const host = root.querySelector("[data-changelog]");
-    if (!host) return;
+    if (!host) return [];
     const t = UI[lang].changelog;
     host.innerHTML = `<p class="loading">${UI[lang].loading}</p>`;
     let index;
     try {
       const response = await fetch(`${BASE}content/changelog.json`, { cache: "no-cache" });
-      if (response.status === 404) { host.innerHTML = `<p class="loading">${t.none}</p>`; return; }
+      if (response.status === 404) { host.innerHTML = `<p class="loading">${t.none}</p>`; return []; }
       if (!response.ok) throw new Error(`changelog: HTTP ${response.status}`);
       index = await response.json();
     } catch (_) {
       host.innerHTML = `<p class="loading">${t.failed}</p>`;
-      return;
+      return [];
     }
-    if (!host.isConnected) return; // the reader moved on while it loaded
-    const kb = Math.round(index.bytes / 1024);
-    const summary = (p) => {
-      const group = t.groups[p.group] || p.group;
-      const part = p.parts > 1 ? ` · ${t.part(p.part, p.parts)}` : "";
-      const more = p.entries > 1 ? t.more(p.entries - 1) : "";
-      return `<summary><span class="cl-head">${MD.escape(group)}${part} · ${t.entries(p.entries)}</span>
-        <span class="cl-first">${MD.escape(p.first)}${more}</span></summary>`;
-    };
+    if (!host.isConnected) return []; // the reader moved on while it loaded
+
+    const months = shape(index);
+    const dates = index.items.map((it) => it.date).filter(Boolean).sort();
+    const since = dates.length ? dateText(dates[0], { day: "numeric", month: "long", year: "numeric" }) : "";
+    const headings = [];
+    let first = true;
+    const html = months.map((m) => {
+      const label = m.key ? dateText(`${m.key}-01`, { month: "long", year: "numeric" }) : t.undated;
+      const id = `changelog-${m.key || "undated"}`;
+      headings.push({ level: 3, id, text: label });
+      const weeks = m.weeks.map((w) => { const out = renderWeek(w, first); first = false; return out; }).join("");
+      return `<section class="cl-month"><h3 id="${id}"><a class="anchor" href="#${id}" aria-hidden="true" tabindex="-1">#</a>${MD.escape(label)}</h3>${weeks}</section>`;
+    }).join("");
     host.innerHTML =
       (index.intro ? `<p class="cl-intro" lang="en">${MD.escape(index.intro)}</p>` : "") +
-      `<p class="cl-total">${t.total(index.entries, index.parts.length, kb)}</p>` +
-      index.parts.map((p) => `<details class="cl-part" data-id="${p.id}">${summary(p)}<div class="cl-body" lang="en"></div></details>`).join("");
-    host.querySelectorAll("details.cl-part").forEach((part, i) => {
-      part.addEventListener("toggle", () => { if (part.open) loadPart(part); });
-      if (i === 0) part.open = true;
+      `<p class="cl-meta">${t.summary(index.entries, since)}</p>` + html;
+    fixLinks(host);
+
+    // `toggle` does not bubble; a capturing listener on the host still hears it.
+    host.addEventListener("toggle", (event) => {
+      const entry = event.target;
+      if (entry.matches && entry.matches("details.cl-entry") && entry.open) loadEntry(entry);
+    }, true);
+    host.addEventListener("click", (event) => {
+      const button = event.target.closest("button.cl-all");
+      if (!button) return;
+      const entries = [...button.closest(".cl-week").querySelectorAll("details.cl-entry")];
+      const open = !entries.every((e) => e.open);
+      entries.forEach((e) => { e.open = open; });
+      button.textContent = open ? t.closeAll : t.openAll;
     });
+    return headings;
   }
 
-  async function loadPart(part) {
-    if (part.dataset.state === "loading" || part.dataset.state === "done") return;
-    part.dataset.state = "loading";
-    const body = part.querySelector(".cl-body");
+  function part(id) {
+    if (!partCache.has(id)) {
+      partCache.set(id, fetch(`${BASE}content/changelog/${id}.json`, { cache: "no-cache" })
+        .then((response) => {
+          if (!response.ok) throw new Error(`changelog part: HTTP ${response.status}`);
+          return response.json();
+        })
+        .catch((error) => { partCache.delete(id); throw error; }));
+    }
+    return partCache.get(id);
+  }
+
+  /* An entry as the changelog writes it — "- **Title** (files). Text…", the rest
+   * indented two spaces — as its text alone: the row above it shows the title. */
+  function entryBody(md) {
+    const [head, ...rest] = md.split("\n");
+    const text = [head.replace(/^[-*]\s+/, ""), ...rest.map((l) => l.replace(/^ {2}/, ""))].join("\n");
+    return text.replace(/^\*\*[\s\S]+?\*\*\s*/, "");
+  }
+
+  async function loadEntry(entry) {
+    if (entry.dataset.state) return; // loading, or done
+    entry.dataset.state = "loading";
+    const body = entry.querySelector(".cl-entry-body");
     body.innerHTML = `<p class="loading">${UI[lang].loading}</p>`;
     try {
-      const response = await fetch(`${BASE}content/changelog/${part.dataset.id}.md`, { cache: "no-cache" });
-      if (!response.ok) throw new Error(`changelog part: HTTP ${response.status}`);
-      body.innerHTML = MD.render(await response.text(), "en").html;
-      part.dataset.state = "done";
+      const data = await part(entry.dataset.part);
+      body.innerHTML = MD.render(entryBody(data.entries[Number(entry.dataset.at)] || ""), "en").html;
+      fixLinks(body);
+      entry.dataset.state = "done";
     } catch (_) {
-      part.dataset.state = "";
+      entry.dataset.state = "";
       body.innerHTML = `<p class="loading">${UI[lang].changelog.partFailed}</p>`;
     }
   }

@@ -73,6 +73,6 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## Full changelog
 
-Every change to the tracker as its developers record it, newest first: technical, in English, and long. It is loaded a part at a time — the newest part opens by itself, and any other loads when you open it.
+Every change to the tracker as its developers record it — technical, in English, and long — by month and week, newest first, each week split into what was added, changed and fixed. Only the titles load with the page; open a change to read it.
 
 {{changelog}}
