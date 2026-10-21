@@ -42,8 +42,14 @@ from tracker.vocab import NEST_RELATIONS, NEST_TARGETED
 
 log = logging.getLogger(__name__)
 
-#: Room for a reasoning model to read every tranche of a 45-tranche campus.
-MAX_TOKENS: Final = 8192
+#: Room for a reasoning model to weigh every tranche of a campus and then answer.
+#:
+#: 8,192 was the first figure, from `logic`. The first rehearsal on a production copy
+#: (2026-10-21) had 6 of 12 replies cut off mid-reasoning with no answer — PORTS-Pike's
+#: five tranches among them, so it is the deliberation and not the size of the campus
+#: — which paid for twelve calls and got six. The prompt asks it to keep the reasoning
+#: short; this is the ceiling, not the expectation.
+MAX_TOKENS: Final = 24_000
 
 #: Below this a ruling is discarded and the tranche left as it was. The bar
 #: `riskcheck` uses: a ruling here moves a company's figures, so a guess costs more
@@ -368,6 +374,13 @@ def review(project: Any, *, extractor, prompt_name: str = "nest-v1") -> Review:
     try:
         payload = parse_json_object(reply.text)
     except (LLMJsonError, ValueError):
+        from tracker.logic import _ran_out_of_room
+
+        if _ran_out_of_room(reply):
+            return Review(
+                project.id,
+                failure=f"the reply ran out of room before its answer ({MAX_TOKENS:,} tokens)",
+            )
         return Review(project.id, failure="unusable reply")
     return parse(project, payload)
 

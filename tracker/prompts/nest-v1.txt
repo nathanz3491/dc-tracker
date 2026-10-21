@@ -25,7 +25,7 @@ For each tranche you rule on, choose one relation:
   elsewhere   it describes a different campus: another county, another town,
               another of the operator's sites, a sister project.
 
-Seven rules.
+Nine rules.
 
 1. **The quotes decide, not the arithmetic.** The campus total is shown so you can
    check a reading, never so you can force one. Do not rule two tranches the same
@@ -52,6 +52,14 @@ Seven rules.
    links are shown as a starting point; you may confirm or replace them.
 
 7. **Give a calibrated confidence per ruling.** Below 0.65 a ruling is discarded.
+
+8. **One relation per tranche.** A tranche that is the same as another takes that
+   one's place: rule it same_as, and rule the other one part_of whatever holds it.
+   Never rule both of two twins part_of the same parent.
+
+9. **Think briefly.** Read each tranche once, decide, and answer; the answer is the
+   JSON, not the reasoning. A long deliberation runs out of room before the answer
+   and the whole review is lost.
 
 Return one JSON object and nothing else. No prose, no code fence.
 

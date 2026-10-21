@@ -42,7 +42,12 @@ initial build of the v1 PRD.
   the model's rulings on a campus are replaced by its next review of it. A campus
   still open afterwards is remembered with a hash of its tranches (`declines`, new
   kind `nest`) and not paid for again until they change. `--dry-run` measures at full
-  cost and writes nothing.
+  cost and writes nothing. Each call may spend 24,000 tokens: at 8,192 the first
+  rehearsal on a production copy had 6 of 12 replies cut off mid-reasoning, and the
+  prompt now asks for brief reasoning and one relation per tranche. On that copy the
+  six that answered settled three campuses outright (CyrusOne Freestone, Pecos, Sulphur
+  Springs) and took the double count from 80,410 to 67,322 MW, with no buyer's Capex
+  figure moving.
 - **A person's hand on it: `tracker tranches`, `show`, `rule`, `undo`, and the project
   page** (`tracker/cli/tranches.py`, `POST /api/admin/tranches/rule` and `/undo`). Bare
   `tracker tranches` lists the campuses still open with what is at stake; `show ID`
