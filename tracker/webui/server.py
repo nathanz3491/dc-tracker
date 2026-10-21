@@ -967,7 +967,8 @@ class Handler(BaseHTTPRequestHandler):
         bytes plus asset stamps and a base chosen here from two literals; the
         content is Markdown the repo ships, rendered by the browser with every
         character escaped. Nothing from the request reaches a response but the
-        choice of file, and that choice is an exact match against the manifest.
+        choice of file, and that choice is an exact match against the manifest —
+        or, for the changelog's parts, a number checked against how many there are.
         """
         role = self._host_role()
         on_docs_host = role == "docs"
@@ -1223,6 +1224,8 @@ class Handler(BaseHTTPRequestHandler):
         and a deploy's edits show at once, which matters more for a page of prose
         than the few kilobytes a cache would save.
         """
+        if relative == "changelog.json" or relative.startswith("changelog/"):
+            return self._docs_changelog(relative)
         try:
             path = docsite.content(relative)
         except (OSError, ValueError) as exc:
@@ -1236,6 +1239,34 @@ class Handler(BaseHTTPRequestHandler):
             else "application/json; charset=utf-8"
         )
         self._send(200, path.read_bytes(), kind, cache="no-cache", csp=PUBLIC_CSP)
+
+    def _docs_changelog(self, relative: str) -> None:
+        """The changelog behind the release notes: its index, or one part of it.
+
+        ``changelog.json`` is the index the page loads first; ``changelog/<n>.md`` is
+        part *n*, fetched when a reader opens it (`docsite.parse_changelog`). The part
+        is a number compared against the parts there are, so no request text reaches
+        the filesystem.
+        """
+        log = docsite.changelog()
+        if log is None:
+            return self._error(404, "this install has no changelog")
+        if relative == "changelog.json":
+            body = json.dumps(log.index(), ensure_ascii=False).encode("utf-8")
+            return self._send(
+                200, body, "application/json; charset=utf-8", cache="no-cache", csp=PUBLIC_CSP
+            )
+        match = re.fullmatch(r"changelog/(\d{1,4})\.md", relative)
+        if match is None or int(match.group(1)) >= len(log.parts):
+            return self._error(404, "not part of the documentation")
+        part = log.parts[int(match.group(1))]
+        self._send(
+            200,
+            part.text.encode("utf-8"),
+            "text/markdown; charset=utf-8",
+            cache="no-cache",
+            csp=PUBLIC_CSP,
+        )
 
     # --- hostnames this server does not serve -----------------------------------------
 

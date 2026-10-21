@@ -14,6 +14,8 @@
  *                searched by substring, so Chinese works without a word splitter
  *   language     a switch to the same page in the other language, remembered
  *   theme        system, light or dark, remembered
+ *   changelog    on the release notes, the project changelog as a list of parts,
+ *                each fetched only when opened — never the whole file at once
  *
  * Remembered means `localStorage`, wrapped so a browser that refuses it (a
  * private window, blocked site data) still gets a working page.
@@ -45,6 +47,16 @@
       notFoundBody: "There is no page at this address. It may have moved or been renamed.",
       home: "Go to the docs home", docs: "docs",
       theme: { system: "Theme: follows your system", light: "Theme: light", dark: "Theme: dark" },
+      changelog: {
+        failed: "The changelog could not be loaded. Reload the page to try again.",
+        none: "This installation has no changelog.",
+        partFailed: "This part could not be loaded. Close it and open it again to retry.",
+        part: (n, of) => `part ${n} of ${of}`,
+        entries: (n) => `${n} ${n === 1 ? "entry" : "entries"}`,
+        more: (n) => ` and ${n} more`,
+        total: (entries, parts, kb) => `${entries.toLocaleString()} entries in ${parts} parts, ${kb.toLocaleString()} KB in all. Each part loads when you open it.`,
+        groups: {},
+      },
     },
     zh: {
       name: "中文", htmlLang: "zh-CN", search: "搜索文档", onPage: "本页内容",
@@ -55,6 +67,16 @@
       notFoundBody: "这个地址没有页面，它可能已被移动或改名。",
       home: "回到文档首页", docs: "文档",
       theme: { system: "主题：跟随系统", light: "主题：浅色", dark: "主题：深色" },
+      changelog: {
+        failed: "更新日志加载失败。请刷新页面重试。",
+        none: "此安装没有更新日志。",
+        partFailed: "这一部分加载失败。收起后再展开即可重试。",
+        part: (n, of) => `第 ${n}/${of} 部分`,
+        entries: (n) => `${n} 条`,
+        more: (n) => `，另有 ${n} 条`,
+        total: (entries, parts, kb) => `共 ${entries.toLocaleString()} 条，分为 ${parts} 部分，合计 ${kb.toLocaleString()} KB。每一部分在展开时才会加载。`,
+        groups: { Added: "新增", Changed: "变更", Fixed: "修复", Removed: "移除", Deprecated: "弃用", Security: "安全" },
+      },
     },
   };
 
@@ -254,6 +276,7 @@
     const crumb = `<p class="crumbs">${MD.escape(page.sectionTitle[lang])}</p>`;
     $("article").innerHTML = crumb + out.html;
     fixLinks($("article"));
+    mountChangelog($("article"));
     toc(out.headings);
     pager();
     document.title = `${out.title || page.title[lang]} — dc-tracker ${t.docs}`;
@@ -289,6 +312,65 @@
       return;
     }
     route({ focus: true });
+  }
+
+  /* ---- the changelog, in parts --------------------------------------------
+   *
+   * The release notes end with the project's CHANGELOG.md, which is over half a
+   * megabyte. The server cuts it into parts of a few dozen kilobytes behind a small
+   * index (`webui/docsite.py`); this lists the parts closed and fetches one only when
+   * the reader opens it. The newest part opens by itself, since that is usually what
+   * a reader came for. The changelog is written in English, so its parts render as
+   * English on both language pages, and search does not read it. */
+
+  async function mountChangelog(root) {
+    const host = root.querySelector("[data-changelog]");
+    if (!host) return;
+    const t = UI[lang].changelog;
+    host.innerHTML = `<p class="loading">${UI[lang].loading}</p>`;
+    let index;
+    try {
+      const response = await fetch(`${BASE}content/changelog.json`, { cache: "no-cache" });
+      if (response.status === 404) { host.innerHTML = `<p class="loading">${t.none}</p>`; return; }
+      if (!response.ok) throw new Error(`changelog: HTTP ${response.status}`);
+      index = await response.json();
+    } catch (_) {
+      host.innerHTML = `<p class="loading">${t.failed}</p>`;
+      return;
+    }
+    if (!host.isConnected) return; // the reader moved on while it loaded
+    const kb = Math.round(index.bytes / 1024);
+    const summary = (p) => {
+      const group = t.groups[p.group] || p.group;
+      const part = p.parts > 1 ? ` · ${t.part(p.part, p.parts)}` : "";
+      const more = p.entries > 1 ? t.more(p.entries - 1) : "";
+      return `<summary><span class="cl-head">${MD.escape(group)}${part} · ${t.entries(p.entries)}</span>
+        <span class="cl-first">${MD.escape(p.first)}${more}</span></summary>`;
+    };
+    host.innerHTML =
+      (index.intro ? `<p class="cl-intro" lang="en">${MD.escape(index.intro)}</p>` : "") +
+      `<p class="cl-total">${t.total(index.entries, index.parts.length, kb)}</p>` +
+      index.parts.map((p) => `<details class="cl-part" data-id="${p.id}">${summary(p)}<div class="cl-body" lang="en"></div></details>`).join("");
+    host.querySelectorAll("details.cl-part").forEach((part, i) => {
+      part.addEventListener("toggle", () => { if (part.open) loadPart(part); });
+      if (i === 0) part.open = true;
+    });
+  }
+
+  async function loadPart(part) {
+    if (part.dataset.state === "loading" || part.dataset.state === "done") return;
+    part.dataset.state = "loading";
+    const body = part.querySelector(".cl-body");
+    body.innerHTML = `<p class="loading">${UI[lang].loading}</p>`;
+    try {
+      const response = await fetch(`${BASE}content/changelog/${part.dataset.id}.md`, { cache: "no-cache" });
+      if (!response.ok) throw new Error(`changelog part: HTTP ${response.status}`);
+      body.innerHTML = MD.render(await response.text(), "en").html;
+      part.dataset.state = "done";
+    } catch (_) {
+      part.dataset.state = "";
+      body.innerHTML = `<p class="loading">${UI[lang].changelog.partFailed}</p>`;
+    }
   }
 
   /* ---- search ------------------------------------------------------------ */

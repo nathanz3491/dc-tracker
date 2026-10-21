@@ -248,3 +248,113 @@ def test_nothing_of_the_console_answers_on_the_docs_hostname(gated):
         status, _, body = _get(gated, path, host=DOCS_HOST)
         assert status == 404, path
         assert "sign in first" not in body
+
+
+# --- the changelog, in parts -----------------------------------------------------------
+
+SAMPLE_CHANGELOG = """# Changelog
+
+All notable changes to this project are documented here.
+
+## [Unreleased]
+
+First working version. Nothing has been released yet.
+
+### Added
+
+- **One** (`a.py`). First.
+  More of the first.
+
+  - a nested point
+- **Two** has code:
+
+  ```bash
+  - not an entry, inside a fence
+  ```
+- **Three**.
+
+### Fixed (earlier)
+
+Found while testing:
+
+- **Four**.
+"""
+
+
+def test_the_changelog_is_cut_into_parts_with_every_entry_whole():
+    log = docsite.parse_changelog(SAMPLE_CHANGELOG)
+    assert log.intro == "First working version. Nothing has been released yet."
+    assert [(p.release, p.group, len(p.entries)) for p in log.parts] == [
+        ("Unreleased", "Added", 3),
+        ("Unreleased", "Fixed (earlier)", 2),
+    ]
+    added = log.parts[0]
+    assert "  - a nested point" in added.entries[0]
+    wrapped = docsite.parse_changelog(
+        "## [U]\n\n### Added\n\n- **A title that\n  wraps** (`x.py`).\n"
+    )
+    assert wrapped.parts[0].first == "A title that wraps"
+    assert "- not an entry, inside a fence" in added.entries[1]
+    assert added.first == "One"
+    assert log.parts[1].entries[0] == "Found while testing:"
+
+
+def test_a_part_closes_before_it_passes_its_entry_or_byte_ceiling(monkeypatch):
+    monkeypatch.setattr(docsite, "PART_ENTRIES", 2)
+    log = docsite.parse_changelog(SAMPLE_CHANGELOG)
+    assert [(p.group, p.part, p.parts, len(p.entries)) for p in log.parts] == [
+        ("Added", 1, 2, 2),
+        ("Added", 2, 2, 1),
+        ("Fixed (earlier)", 1, 1, 2),
+    ]
+    monkeypatch.setattr(docsite, "PART_ENTRIES", 99)
+    monkeypatch.setattr(docsite, "PART_BYTES", 10)
+    log = docsite.parse_changelog(SAMPLE_CHANGELOG)
+    assert all(len(p.entries) == 1 for p in log.parts), "an entry over the ceiling stands alone"
+
+
+def test_the_real_changelog_loads_a_part_at_a_time():
+    """The point of the parts: the release notes never download the whole file."""
+    log = docsite.changelog()
+    assert log is not None and log.parts
+    whole = docsite.CHANGELOG.read_bytes()
+    entries = sum(1 for line in whole.decode("utf-8").splitlines() if re.match(r"[-*] ", line))
+    assert sum(len(p.entries) for p in log.parts) >= entries
+    for part in log.parts:
+        size = len(part.text.encode("utf-8"))
+        assert size <= docsite.PART_BYTES or len(part.entries) == 1
+    index = json.dumps(log.index()).encode("utf-8")
+    assert len(index) < len(whole) / 10, "the index is a list of parts, not the text"
+
+
+def test_the_changelog_is_served_as_an_index_and_numbered_parts(gated):
+    status, headers, body = _get(gated, "/docs/content/changelog.json")
+    assert status == 200 and headers["Content-Type"].startswith("application/json")
+    index = json.loads(body)
+    assert index["parts"] and index["parts"][0]["id"] == 0
+    status, headers, body = _get(gated, "/docs/content/changelog/0.md")
+    assert status == 200 and headers["Content-Type"].startswith("text/markdown")
+    assert body.lstrip().startswith(("- ", "* "))
+    last = len(index["parts"]) - 1
+    assert _get(gated, f"/content/changelog/{last}.md", host=DOCS_HOST)[0] == 200
+    for path in (
+        f"/docs/content/changelog/{last + 1}.md",
+        "/docs/content/changelog/99999.md",
+        "/docs/content/changelog/-1.md",
+        "/docs/content/changelog/0.txt",
+        "/docs/content/changelog/../CHANGELOG.md",
+        "/docs/content/CHANGELOG.md",
+    ):
+        assert _get(gated, path)[0] == 404, path
+
+
+def test_an_install_with_no_changelog_says_so(gated, monkeypatch, tmp_path):
+    monkeypatch.setattr(docsite, "CHANGELOG", tmp_path / "CHANGELOG.md")
+    assert docsite.changelog() is None
+    assert _get(gated, "/docs/content/changelog.json")[0] == 404
+
+
+def test_the_release_notes_end_with_the_changelog_in_both_languages():
+    for lang in docsite.LANGUAGES:
+        text = (docsite.DOCS_ROOT / lang / "release-notes.md").read_text(encoding="utf-8")
+        assert "\n{{changelog}}\n" in text, lang

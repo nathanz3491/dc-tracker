@@ -70,3 +70,9 @@ Changes a reader of the console will notice, newest first. The console's version
 - **The email reports news days old, not weeks,** and says when each item was reported.
 - **Old articles found late no longer appear as news.** An article is dated by when it was published, not when the tracker found it.
 - **Stories from publishers that block automated reading** reach the tracker again, through other outlets carrying the same news.
+
+## Full changelog
+
+Every change to the tracker as its developers record it, newest first: technical, in English, and long. It is loaded a part at a time — the newest part opens by itself, and any other loads when you open it.
+
+{{changelog}}

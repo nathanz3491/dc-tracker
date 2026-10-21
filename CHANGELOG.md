@@ -12,6 +12,18 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The release notes end with this changelog, loaded a part at a time**
+  (`tracker/webui/docsite.py`, `tracker/webui/server.py`,
+  `tracker/webui/static/docs/docs.js`, `tracker/webui/static/docs/markdown.js`,
+  `tracker/webui/static/docs/docs.css`, reader docs *Release notes*). Asked for on
+  2026-10-21. The file is 585 KB and grows every day, so the docs never send it
+  whole: the server cuts it into parts — each entry kept whole, a part closed before
+  32 KB or 15 entries — behind a 14 KB index of the parts, re-read whenever the file
+  changes. The release notes list the 75 parts closed, each with its heading group
+  and its first entry's title; the newest opens by itself and any other is fetched
+  when opened. On a first visit the page loads the index and one part, about 30 KB,
+  instead of the whole file.
+
 - **A company page reads in megawatts, and names the campus its near-term supply rests
   on when that campus could slip** (`tracker/supply.py`, `tracker/company.py`,
   `tracker/webui/static/app.js`, reader docs *Company pages*). The client asked for

@@ -316,6 +316,30 @@ kbd {
 .pager small { display: block; font-size: 12.5px; color: var(--muted); }
 .pager span { font-weight: 600; }
 
+/* ---- the changelog, a part at a time ------------------------------------------
+   One closed row per part, fetched when opened (`docs.js`, "the changelog"). */
+
+.changelog { margin: 0 0 18px; }
+.cl-intro, .cl-total { color: var(--muted); font-size: 14.5px; }
+.cl-part { border: 1px solid var(--rule); border-radius: 10px; margin: 0 0 8px; background: var(--surface); }
+.cl-part > summary {
+  display: grid; gap: 2px; padding: 10px 14px 10px 32px; cursor: pointer; list-style: none; position: relative;
+}
+.cl-part > summary::-webkit-details-marker { display: none; }
+.cl-part > summary::before {
+  content: "›"; position: absolute; left: 14px; top: 9px; color: var(--faint); font-size: 16px;
+  transition: transform .15s ease;
+}
+.cl-part[open] > summary::before { transform: rotate(90deg); }
+.cl-part > summary:hover .cl-head { color: var(--amber); }
+.cl-part > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 10px; }
+.cl-head { font: 600 12.5px/1.5 var(--mono); letter-spacing: .02em; color: var(--muted); }
+.cl-first { font-size: 14.5px; color: var(--ink); }
+.cl-body { padding: 2px 16px 4px 32px; border-top: 1px solid var(--rule); }
+.cl-body:empty { display: none; }
+.cl-body > ul { margin-top: 12px; }
+.cl-body > ul > li { margin: 0 0 12px; }
+
 .loading, .noscript { color: var(--muted); }
 .noscript { max-width: 640px; margin: 40px auto; padding: 0 24px; }
 .notfound h1 { margin-top: 20px; }

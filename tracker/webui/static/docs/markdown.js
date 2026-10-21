@@ -14,6 +14,8 @@
  *   `code`  **bold**  *italic*  [text](link)
  *   {{v:reported|1,200 MW}}       a value drawn with the console's provenance underline
  *   {{tier:T2}}  {{kbd:/}}         a tier badge, a key
+ *   {{changelog}}                 on a line of its own: where the viewer mounts the
+ *                                 project changelog, loaded a part at a time
  *
  * SAFETY
  *   Every character of the source is escaped before any markup is added, and no
@@ -193,6 +195,12 @@
 
       if (isRule(line)) { out.push("<hr>"); i += 1; continue; }
 
+      if (line.trim() === "{{changelog}}") {
+        out.push('<div class="changelog" data-changelog></div>');
+        i += 1;
+        continue;
+      }
+
       if (isTableRow(line) && i + 1 < lines.length && isTableRule(lines[i + 1])) {
         const rows = [];
         while (i < lines.length && isTableRow(lines[i])) rows.push(lines[i++]);
@@ -266,6 +274,7 @@
         heading: p.heading,
         id: p.id,
         text: p.lines.join(" ")
+          .replace(/\{\{changelog\}\}/g, " ")
           .replace(/\{\{(?:v|tier|kbd):([^}|]+)(?:\|([^}]*))?\}\}/g, (_, a, b) => b || a)
           .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
           .replace(/[`*_>|#]|\[!\w+\]/g, " ")
