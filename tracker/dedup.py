@@ -219,6 +219,38 @@ def _reduce(slug: str, table: dict[str, str]) -> str:
             return slug
 
 
+#: Spellings a person folded into a company (`company_alias` rows not seeded from
+#: the code), loaded from the database this process opened (`companies.load_aliases`,
+#: on every connection and whenever the console sees the database change). Empty
+#: until then, so a process that never opens a database keys names as the code does.
+_PERSON_ALIASES: dict[str, str] = {}
+
+#: Called whenever the person's aliases change, so a cache of keys built from the
+#: old ones (`capex.company_key`) is dropped with them.
+alias_listeners: list = []
+
+
+def use_person_aliases(table: dict[str, str]) -> bool:
+    """Read these person-made aliases from now on. True if anything changed.
+
+    `table` maps a spelling, as `_company_slug` folds it, to the company key it is.
+    """
+    global _PERSON_ALIASES
+    fresh = {str(k): str(v) for k, v in table.items() if k and v and k != v}
+    if fresh == _PERSON_ALIASES:
+        return False
+    _PERSON_ALIASES = fresh
+    _alias_table.cache_clear()
+    for listener in alias_listeners:
+        listener()
+    return True
+
+
+def spelling_of(company: str) -> str:
+    """A name as `company_key` folds it before reducing: the form an alias is kept in."""
+    return _company_slug(company or "")
+
+
 @lru_cache(maxsize=1)
 def _alias_table() -> dict[str, str]:
     """`_COMPANY_ALIASES` plus every alias the operator roster records.
@@ -248,7 +280,7 @@ def _alias_table() -> dict[str, str]:
     try:
         data = tomllib.loads(seed_path("operators.toml").read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
-        return table
+        data = {}
     for entry in data.get("operator", []):
         name = str(entry.get("name") or "").strip()
         if not name:
@@ -258,7 +290,16 @@ def _alias_table() -> dict[str, str]:
             form = _company_slug(str(alias))
             if form and form != canonical:
                 table.setdefault(form, canonical)
+    # A person's fold is the last word: it is the one a reader asked for by name,
+    # after reading both companies' rows (`tracker company alias`).
+    table.update(_PERSON_ALIASES)
     return table
+
+
+def code_aliases() -> dict[str, str]:
+    """The aliases the code and the roster give, without a person's: what `tracker
+    init` writes into `company_alias` as 'code' and 'roster' rows."""
+    return {k: v for k, v in _alias_table().items() if _PERSON_ALIASES.get(k) != v}
 
 
 def company_key(company: str | None) -> str:

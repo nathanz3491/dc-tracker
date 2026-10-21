@@ -30,9 +30,10 @@ to know about, `tracker coverage` says which of them have no rows, and `prospect
 goes and looks for those specifically.
 
 Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
-`tracker coverage`, `tracker duplicates`, `tracker blocks`, `tracker review`,
-`tracker verify`,
-`tracker export {md,csv,json}`. `tracker merge` folds rows that turned out to be
+`tracker coverage`, `tracker duplicates`, `tracker blocks`, `tracker tranches`,
+`tracker company`, `tracker party list ID`, `tracker invariants`, `tracker facts`,
+`tracker review`, `tracker verify`,
+`tracker export {md,csv,json,facts}`. `tracker merge` folds rows that turned out to be
 one campus, and `tracker exclude` takes out a row that is not a data center — a chip
 fab, a battery plant — and keeps any later reading from creating it again; they are
 the only commands here that delete anything. `tracker rename ID "<name>" --why …` gives
@@ -83,7 +84,20 @@ whichever it cares about — so the Abilene campus was stored four times, under
 Crusoe, Oracle, OpenAI and "OpenAI/Oracle", each spelling minting its own dedup
 key. `project_party` records who plays which role, with a quote for each, and
 `tracker capex` attributes on it. `company` still means "who runs it": it is the
-UNIQUE dedup key and nothing moves it.
+UNIQUE dedup key and nothing moves it. Each company the rows name is one record
+(`tracker company`): its printed name, its kind, its parent and every spelling folded
+into it, and a person can fold a spelling the rules miss. A role that has ended — a
+tenant whose lease was rejected — is recorded with `tracker party end`, and the
+former party is nobody's buyer on any page.
+
+**Every statement is one row of one table.** A campus figure, a tranche's figure, a
+party's role, a milestone and an obstacle each sit in `fact` with the same columns —
+the value, its unit, the sentence, the citation, how far it can be trusted and whether
+the campus shows it — rebuilt from the sources on every write
+(`tracker export facts`, API `/v1/projects/{id}/facts`). And the relationships the
+figures must keep are declared in `tracker/invariants.py`: the held ones are checked
+on every write, which is refused if it would break one; the rest are reported on the
+campus's page and counted in the morning report.
 
 **`mw_planned` is one number and there are three kinds of megawatt.** The
 computing load, the whole site's draw (10-30% higher), and a generator's nameplate
@@ -465,7 +479,7 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest -n auto
 ```
 
-4,692 tests. `-n auto` (pytest-xdist) spreads them over every core: about 70 seconds on
+4,730 tests. `-n auto` (pytest-xdist) spreads them over every core: about 70 seconds on
 a 16-core machine, against five and a half minutes in one process. No single test is
 the cost — the slowest takes 5 seconds and the average 69 ms — so running them side by
 side is the only large saving. Leave `-n` off for one file or one test, where starting

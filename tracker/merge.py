@@ -209,6 +209,7 @@ def merge_projects(
         # row's sources carry across, so they still name the same tranches on the
         # survivor. One the survivor already ruled on is the survivor's.
         _move_nesting(session, keep, dupe)
+        _move_tenure(session, keep, dupe)
 
         session.delete(dupe)
         result.removed.append(dupe_id)
@@ -253,6 +254,26 @@ def _move_nesting(session: Session, keep: Project, dupe: Project) -> int:
     # the moved rulings down with it through the delete-orphan cascade.
     session.expire(dupe, ["nesting"])
     session.expire(keep, ["nesting"])
+    return moved
+
+
+def _move_tenure(session: Session, keep: Project, dupe: Project) -> int:
+    """Carry the folded row's ended roles to the survivor. Returns how many moved."""
+    from tracker.models import PartyTenure
+
+    taken = {
+        (t.party_key, t.role)
+        for t in session.scalars(select(PartyTenure).where(PartyTenure.project_id == keep.id))
+    }
+    moved = 0
+    for row in session.scalars(select(PartyTenure).where(PartyTenure.project_id == dupe.id)):
+        if (row.party_key, row.role) in taken:
+            session.delete(row)
+            continue
+        row.project_id = keep.id
+        taken.add((row.party_key, row.role))
+        moved += 1
+    session.flush()
     return moved
 
 

@@ -30,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from tracker import blocks as blocks_mod
-from tracker import delays
+from tracker import dedup, delays
 from tracker import parties as parties_mod
 from tracker.models import Project
 from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
@@ -101,7 +101,11 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: tranche key a ruling on the section names), and three residual reasons
 #: in `accounting` — `same_as`, `superseded`, `elsewhere` — and `accounting.by_state`,
 #: the counted capacity by tranche state. Additive.
-JSON_SCHEMA_TAG = "tracker/11"
+#: 12 adds `company_key`, the company the operator is filed under — the key of the
+#: company registry (migration 0043), the same as `parties[].key`, and
+#: `parties[].ended_on` / `parties[].ended_reason` for a role that has ended — a
+#: former tenant (migration 0044). Additive.
+JSON_SCHEMA_TAG = "tracker/12"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -619,6 +623,8 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
         "id": project.id,
         "name": project.name,
         "company": project.company,
+        # The company it is filed under (migration 0043), as `parties[].key` is.
+        "company_key": dedup.company_key(project.company) or None,
         "customer": project.customer,
         "city": project.city,
         "county": project.county,
@@ -772,6 +778,10 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
                 # When one of this row's citations first named the party, so the
                 # page can mark the ones that are news. See `parties.first_cited`.
                 "first_cited": iso(first_cited.get(p.party_key)),
+                # A role that has ended (migration 0044): a former tenant. Null for
+                # a current party. Never counted as a buyer.
+                "ended_on": iso(p.ended_on),
+                "ended_reason": p.ended_reason,
             }
             for p in sorted(project.parties, key=lambda p: (p.role, p.party_key))
         ],

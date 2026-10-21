@@ -780,6 +780,11 @@ say 'what is left'
 tracker clean < /dev/null || true
 echo
 tracker logic check < /dev/null 2>&1 | sed -n '1,12p' || true
+# How the figures relate (勾稽关系), and the change since last night: one line per
+# relationship, `!` on a held one that breaks (a bug). Recorded, so tomorrow's
+# report can say what tonight moved.
+say 'how the figures relate'
+tracker invariants --record < /dev/null || true
 echo
 tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
 

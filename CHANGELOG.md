@@ -12,6 +12,65 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A figure that breaks a relationship the tracker guarantees is never published**
+  (`tracker/invariants.py` `enforce`, `HeldBroken`, `campus_breaks`; `tracker/upsert.py`
+  `upsert_record`; `tracker/ingest/crawl.py` `run`; `tests/test_write_checks.py`). Step
+  4.6 of the client plan. Running never above planned, a campus's capacity lines adding
+  up to it and what it delivers never above its total were checked across the database
+  after the fact; now the last thing a write does is check them for that campus, and a
+  write that would break one is refused — the crawl rolls back that one record, counts
+  it in the summary as "refused: would break a held relationship", names the campus in
+  the log, and leaves the article to be read again after the fix. A re-derive logs
+  instead of refusing, since the row is already published. On the 10-21 evening copy
+  of production no campus breaks a held relationship, so nothing would have been
+  refused.
+- **The morning report says how each relationship moved overnight** (`tracker
+  invariants --record`, migration 0046 `invariant_tally`, `scripts/overnight.sh`
+  report). After `logic check`, the loop records how many campuses break each
+  relationship and by how many megawatts, and prints each beside the night before —
+  `tranches_once 113 (80,410 MW) -2, -1,200 MW`, or `unchanged` — so rulings landing and
+  new double descriptions arriving are visible day by day. First counts on the copy:
+  tranches describing a campus twice 113 (80,410 MW), tranches tied to no facility 70
+  (27,286 MW), live tranches past the running figure 19 (4,440 MW), a tranche larger
+  than its campus 1 (420 MW), announced after expected online 4.
+- **A campus's page lists the relationships its sources do not yet close** (the project
+  payload's `relations`, `tracker/webui/dataset.py`; the fold under *Capacity by
+  tranche*). Each in a sentence, with what breaks it there; none changes a figure.
+- **Every statement every source makes is one table, and can be downloaded** (`tracker/
+  facts.py`, migration 0045 `fact`, `tracker facts`, `tracker export facts`, API `GET
+  /v1/projects/{id}/facts`, `tests/test_facts.py`). Step 4.5, the client's "every
+  channel in one table, the relationships defined, the data classified". A campus
+  figure, a tranche's figure, a company's role, a milestone and an obstacle used to sit
+  in five shapes; each is now one row with the same columns — what it is about, the
+  value as stated and as a number, its unit, when it was true, the sentence, the
+  citation, how far it can be trusted (confirmed, directory, derived, inferred,
+  unconfirmed, ruled out) and whether it is the value the page shows. It is a cache,
+  rebuilt from the sources whenever a campus is written and by `tracker init`, and read
+  by nothing that decides a value. 59,273 statements on the 788 campuses of the copy.
+- **A role that has ended is recorded, and the former party is nobody's buyer**
+  (`tracker party list | end | resume`, migration 0044 `party_tenure`, `tracker/
+  parties.py` `end_role`, `former_customer`, `current_customer`, `tests/test_tenure.py`).
+  Step 4.4. Sources go on naming a tenant after it has gone — Cyxtera at Prime's
+  Comstock campus, whose lease was rejected in its 2023 bankruptcy, was still credited
+  the campus. A person records when and why a role ended (with who decided); it holds
+  through every re-read and moves with a merge. The party stays on the campus's page
+  under *Former* as evidence of which campus this is, and every reader of "who buys
+  this campus now" skips it: Capex, the campus's tranches, the page's header and
+  summary (*formerly for …*, *none now*), its company page, a watch, the open-obstacle
+  scan behind delay risk, and the AI briefing. The API's party rows gain `ended_on` and
+  `ended_reason`. No role is ended on production yet.
+- **Companies are records, not strings** (`tracker/companies.py`, migration 0043
+  `company`/`company_alias`, `tracker company [show | alias | unalias | rename |
+  parent]`, `tests/test_companies.py`). Step 4.3. The key every row is filed under is
+  unchanged; each key is now one record holding what a string could not — the name
+  printed everywhere and who chose it, the kind of company (from the roster and the
+  EDGAR list), its parent, and every spelling folded into it. A person can fold a
+  spelling the rules miss (`company alias`), and it re-keys the rows it touches at once
+  rather than at the next deploy; a parent puts *Part of* and *Subsidiaries* on the
+  company pages without moving a figure. Company pages and the API's company answer
+  gain the kind, the parent, the subsidiaries and the other spellings the campuses use.
+  On the copy: 1,250 companies, every campus and party pointed at one, names as before;
+  stored values and Capex (276,267 MW by buyer) identical under old and new code.
 - **A campus's tranches nest, and are summed as the tree they form** (`tracker/blocks.py`
   `structure`, migration 0042 `block_nesting`, `tests/test_blocks.py`). Step 4.2 of the
   client plan's master data model. Sources describe a campus as a whole, again phase

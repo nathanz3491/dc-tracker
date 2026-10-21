@@ -258,6 +258,27 @@ def test_a_campus_says_whether_it_is_a_suspected_delay(api, key):
     assert body["data"]["suspected_delays"] == {"count": 0, "mw_planned": 0, "project_ids": []}
 
 
+def test_every_statement_behind_a_campus_and_its_company_record(api, key):
+    """Appended to v1 (migrations 0043-0045): the facts route, the company record,
+    and when a party's role ended."""
+    address, _ = api
+    pid = call(address, "/v1/projects", key=key, host=API_HOST)[2]["data"][0]["id"]
+    status, _, body = call(address, f"/v1/projects/{pid}/facts", key=key, host=API_HOST)
+    assert status == 200
+    planned = [r for r in body["data"] if r["entity"] == "campus" and r["field"] == "mw_planned"]
+    assert planned and planned[0]["number"] == 900.0 and planned[0]["held"] is True
+    assert planned[0]["tier"] == "confirmed" and planned[0]["quote"] == "will draw 900 MW"
+    assert "project_id" not in planned[0], "the path already names the campus"
+    assert call(address, "/v1/projects/99999/facts", key=key, host=API_HOST)[0] == 404
+
+    status, _, body = call(address, f"/v1/projects/{pid}", key=key, host=API_HOST)
+    assert all("ended_on" in p and "ended_reason" in p for p in body["data"]["parties"])
+    status, _, body = call(address, "/v1/companies/acme", key=key, host=API_HOST)
+    company = body["data"]
+    assert {"kind", "parent", "subsidiaries", "also_written"} <= set(company)
+    assert company["parent"] is None and company["subsidiaries"] == []
+
+
 def test_a_missing_project_says_it_may_have_been_merged(api, key):
     address, _ = api
     status, _, body = call(address, "/v1/projects/99999", key=key, host=API_HOST)

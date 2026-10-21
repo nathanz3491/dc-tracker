@@ -509,6 +509,18 @@ against all 721 production rows, the name rule named those five and nothing else
 real campus the same company later builds in the same town would be refused too,
 which is what `tracker exclude --lift <id>` is for; `--list` shows every excluded key.
 
+**A write that would break a held relationship is refused, one record at a time.**
+Running never above planned, a campus's capacity lines adding up to it, what it
+delivers never above its total (`tracker/invariants.py`, the `held` kind) are
+guaranteed by the merge code, so a record whose write would break one is a bug, not
+a fact. The last thing `upsert_record` does is check them (`invariants.enforce`,
+which raises `HeldBroken`); the crawl rolls back that record alone — the article's
+earlier records are already committed — counts it as "refused: would break a held
+relationship", logs the campus and the relationship, and leaves the URL as read but
+not written, so the next read after the fix writes it. On production on 2026-10-22
+no campus broke any held relationship, so nothing a crawl wrote that night would
+have been refused.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -625,7 +637,13 @@ to skip after a phase that added sources:
   because those are only recomputed when something writes to the row. A whole-table
   run first records every row's current natural key (`tracker.keys.sync`), so a row
   whose identity has moved since its birth, or a spelling the company rules have
-  learned since, still reaches it.
+  learned since, still reaches it — and brings the company registry up to date
+  (`companies.sync`, migration 0043): one record per company, its chosen name, and
+  every campus and party pointed at it. Each row it re-derives also rebuilds that
+  row's statements (`facts.rebuild`, migration 0045), the one table every source's
+  claims sit in, so the download never lags the page. A re-derived row that breaks a
+  held relationship is logged as a bug (`invariants.campus_breaks`), not refused: its
+  sources have not changed, and the row is already published.
 * `recompute_confidence` runs because confidence is a cache of a function of the
   citations, so it is stale the moment a citation lands. It runs even when
   `--skip-derive` declined the first half.
@@ -704,12 +722,13 @@ Touching any of these means the poster is in scope. Re-render with
 | Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete`, `IngestReport.not_a_data_center` |
+| A write that breaks a held relationship | `tracker/upsert.py` — `upsert_record` (end), `recompute_from_sources` (end, logs only); `tracker/invariants.py` — `enforce`, `HeldBroken`, `campus_breaks`, `HELD`; `tracker/ingest/crawl.py` — `run` (rolls back one record); `tracker/ingest/records.py` — `IngestReport.held_refused` |
 | Not a data center | `tracker/upsert.py` — `upsert_record` (`action="excluded"`); `tracker/exclude.py` — `barred`, `not_a_data_center`, `excluded`, `exclude`, `keys_of`, `lift`; `tracker/cli/duplicates.py` — `exclude`; `tracker/migrations/0041_excluded_key.sql` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |
 | Identity arbiter | `tracker/upsert.py` — `upsert_record` (a route is remembered through `tracker/keys.py` — `remember`); `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |
-| Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
-| Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild`, `reconcile`, `parties_by_key`, `_inferred_parties` |
+| Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
+| Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
 | Whether a figure is one building's | `tracker/ingest/crawl.py` — `axis_gate`; `tracker/vocab.py` — `part_from_quote`, `PART_FIELDS`, `PART_WINDOW`, `INITIAL_WINDOW`; `tracker/backfill.py` — `regate_scope`; `tracker/upsert.py` — `contenders`; `tracker/gapfill.py` — `_fact_axes` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |

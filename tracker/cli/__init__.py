@@ -9,7 +9,7 @@ guarantee enforced by SQLite itself.
 entrance.** `_shared.py` holds the Typer app, its sub-groups, the two consoles and
 the dozen helpers every command uses; `_render.py` holds the printers more than one
 family needs. Each family is a module — `logic`, `duplicates`, `ingest`, `sync`,
-`enrich`, `projects`, `capacity`, `quality`, `people`, `serve`, `tranches` — imported below for
+`enrich`, `projects`, `capacity`, `quality`, `people`, `serve`, `tranches`, `companies` — imported below for
 the side effect of registering its commands on those groups.
 
 A new command goes in the family module that owns its subject, or starts a new one.
@@ -48,6 +48,7 @@ from tracker.cli import duplicates as _duplicates  # noqa: F401
 from tracker.cli import serve as _serve  # noqa: F401
 from tracker.cli import people as _people  # noqa: F401
 from tracker.cli import tranches as _tranches  # noqa: F401
+from tracker.cli import companies as _companies  # noqa: F401
 # isort: on
 
 

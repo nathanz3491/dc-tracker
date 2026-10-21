@@ -11,7 +11,7 @@ The page reads in an investor's order: what the campus is and when it delivers f
 ## The header
 
 - The campus's number, name and the **☆ Watch** button (see [Monitor](monitor)).
-- The operator, linked to its [company page](companies), and **for** the buyer when that is a different company. Each is shown under the company's one name, the same on every page; when the campus's sources spell it differently, their spelling follows in small type — *filed as “Amazon Web Services”* — so the header can be matched against the citations.
+- The operator, linked to its [company page](companies), and **for** the buyer when that is a different company. Each is shown under the company's one name, the same on every page; when the campus's sources spell it differently, their spelling follows in small type — *filed as “Amazon Web Services”* — so the header can be matched against the citations. When the buyer's role has ended — a lease rejected, a site sold — the header says *formerly for* the company and until when instead.
 - Where it is, and the regional grid operator area where known.
 - Its phase, its **confidence** (0–3; see [Confidence](confidence)) and how many obstacles are open — click that to jump to them.
 - **suspected delay · N days past its date**, in amber, when the campus's own online date has passed and nothing reported since says it is running. Hover it for the reason in one sentence; the summary below gives the date, and [Numbers and dates](numbers-and-dates) the full rule.
@@ -28,7 +28,7 @@ Six figures across the top. Hover over a figure, or tap it, for the sentence it 
 
 Under the figures, one line each:
 
-- **Buyer** — every company a source names as buying the campus's capacity. When there are several, the line says so: [Capex](capex) then credits none of them rather than choosing.
+- **Buyer** — every company a source names as buying the campus's capacity. When there are several, the line says so: [Capex](capex) then credits none of them rather than choosing. When the only buyer named has left, it reads *none now*, with who it was, until when and why.
 - **Operator**, linked to its company page.
 - **Power** — the utility a source confirms, and the grid operator area.
 - **Watch for** — the next milestone that would show the campus moving.
@@ -55,6 +55,7 @@ Many campuses are built in pieces: buildings, phases, halls. Each is a **tranche
 - **· N notes** on a line means there is something to check; click the line to read it — the other names sources gave the section, a section that could not be settled, *two sources confirm A and B MW — two figures, not one*, or a capacity marked **待确认** because no quote names that section.
 - **How the N MW adds up** opens the arithmetic: every megawatt of the campus on one line — cited per tranche, not yet itemised, stated but unconfirmed, not tied to a named building, counted twice over — down to the total. Capacity that is not counted in the total gets its own line rather than vanishing: out of scale, set aside as another name, superseded or another campus, and the utility's plant, under *Not part of the total*. A tranche larger than the whole campus is named under the list as *out of scale*.
 - **Power serving this campus** opens the utility's plant — substations, gas or solar generation — which is never added to the campus's own figures.
+- **N relationships not yet closed** lists the [relationships between the figures](invariants) that this campus's sources do not yet settle — tranches that describe it twice, a phase tied to no facility, dates out of order — each in a sentence, with what breaks it here. None of them changes a figure on the page.
 
 ## Who is involved
 
@@ -62,6 +63,7 @@ The companies named in connection with the campus, one line per role — operato
 
 - A **dashed outline** means no source stated the role outright: it is inferred from the operator or buyer column. An **amber** name was offered with a sentence that would not support the role (**待确认**, with the reason).
 - **new** marks a company first named by one of the campus's sources in the last 30 days. They are listed again at the top, under **Newly mentioned**, with the date.
+- **Former** lists a company whose role here has ended — a tenant whose lease ended, an owner that sold — with the role, until when and why. Sources go on naming a tenant after it has gone, so the ending is recorded by a person, and it holds through every later reading of those sources. A former company stays on the page as evidence of which campus this is, but it is nobody's buyer now: not in the summary, not on [Capex](capex), not on its company page and not in a watch.
 
 ## Delay risk and obstacles
 

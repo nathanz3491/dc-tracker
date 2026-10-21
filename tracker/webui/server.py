@@ -1123,6 +1123,12 @@ class Handler(BaseHTTPRequestHandler):
             elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "sources":
                 project = publicapi._project(session, parts[1])
                 answer = {"project_id": project.id, "data": publicapi.project_sources(project)}
+            elif len(parts) == 3 and parts[0] == "projects" and parts[2] == "facts":
+                project = publicapi._project(session, parts[1])
+                answer = {
+                    "project_id": project.id,
+                    "data": publicapi.project_facts(session, project),
+                }
             elif len(parts) == 2 and parts[0] == "companies":
                 answer = {"data": publicapi.company(session, parts[1], prefix, tally=tally)}
             elif parts == ("updates",):

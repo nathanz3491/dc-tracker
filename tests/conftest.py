@@ -448,3 +448,18 @@ def _clear_the_overview_cache():
     overview._cache.clear()
     yield
     overview._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _forget_a_persons_company_aliases():
+    """`dedup.company_key` reads the aliases a person recorded in the database opened.
+
+    Process-wide by design — one process, one database — so a test that folds a
+    spelling would leak it into every key its neighbours compute. Emptied on both
+    sides, as the caches above are.
+    """
+    from tracker import dedup
+
+    dedup.use_person_aliases({})
+    yield
+    dedup.use_person_aliases({})

@@ -858,7 +858,7 @@ def coverage(
 
 @app.command("export")
 def export_cmd(
-    fmt: Annotated[str, typer.Argument(help="md | csv | json | html")],
+    fmt: Annotated[str, typer.Argument(help="md | csv | json | html | facts")],
     out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
     company: Annotated[str | None, typer.Option("--company")] = None,
     state: Annotated[str | None, typer.Option("--state")] = None,
@@ -872,7 +872,12 @@ def export_cmd(
         ),
     ] = False,
 ) -> None:
-    """Write the database out as Markdown, CSV or JSON.
+    """Write the database out as Markdown, CSV or JSON — or every statement as one table.
+
+    `facts` is the master data table (migration 0045): one CSV row per statement any
+    source makes about a campus, a tranche, a party, a milestone or an obstacle, with
+    its tier (confirmed, directory, derived, inferred, unconfirmed, ruled out), the
+    quote, the citation, and whether it is the value the campus holds.
 
     Output is deterministic: the same data exports byte-identically every time,
     unless you ask for --stamp.
@@ -880,15 +885,22 @@ def export_cmd(
     from tracker.export import FORMATS, ExportFilter, fetch_projects, render, write_export
     from tracker.models import utcnow
 
-    if fmt not in FORMATS:
-        _fail(f"format must be one of: {', '.join(FORMATS)}")
+    if fmt not in (*FORMATS, "facts"):
+        _fail(f"format must be one of: {', '.join((*FORMATS, 'facts'))}")
     if phase and phase not in PHASES:
         _fail(f"--phase must be one of: {', '.join(PHASES)}")
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
         projects = fetch_projects(session, ExportFilter(company, state, phase, min_confidence))
-        text = render(fmt, projects, generated_at=utcnow().isoformat(sep=" ") if stamp else None)
+        if fmt == "facts":
+            from tracker import facts as facts_mod
+
+            text = facts_mod.render_csv(facts_mod.rows_for(session, [p.id for p in projects]))
+        else:
+            text = render(
+                fmt, projects, generated_at=utcnow().isoformat(sep=" ") if stamp else None
+            )
 
     if out is None:
         # Written directly rather than through Rich: an export is data, and Rich

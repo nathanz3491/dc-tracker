@@ -539,15 +539,15 @@ def sync() -> Canvas:
     c.arrow([gate.right(-34), (776, 598)])
     c.arrow([gate.right(56), (776, 690)], colour=TEAL)
     c.box(
-        776, 748, 190, 76, "Not created",
-        ["not a data center: a fab, a factory", "or a plant by its name, or a row", "removed by tracker exclude"],
+        776, 748, 190, 100, "Not written",
+        ["not a data center: a fab, a factory", "or a plant by its name, or a row", "removed by tracker exclude; or a", "write that would break a held", "relationship — rolled back, re-read", "after the fix"],
         role="red", title_size=11.5,
     )
     c.arrow([gate.right(72), (751, gate.right(72)[1]), (751, 786), (776, 786)], colour=RED)
 
     c.box(
-        1016, 560, 200, 164, "6 · settle",
-        ["derive reapplies every derived", "value — county, coordinates, capacity", "rollups, the party rows and which", "kind of megawatt each figure is —", "because those only move when", "something writes to the row.", "", "confidence is a cache of a pure", "function of the citations, so it is", "stale the moment one lands"],
+        1016, 560, 200, 196, "6 · settle",
+        ["derive reapplies every derived", "value — county, coordinates, capacity", "rollups, the party rows, which", "kind of megawatt each figure is,", "the company each name is filed", "under and every source's statements", "— because those only move when", "something writes to the row.", "", "confidence is a cache of a pure", "function of the citations, so it is", "stale the moment one lands"],
         role="teal", title_size=13,
     )
     c.arrow([rows.right(), (1016, 598)])

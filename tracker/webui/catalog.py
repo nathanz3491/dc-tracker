@@ -251,6 +251,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # the campuses whose tranches still do not add up, and draws one.
             "tranches",
             "tranches show",
+            # The company registry: every company, its spellings, kind and parent.
+            "company",
+            "company show",
+            "party list",
             "sources",
             "feeds",
             # Where this installation keeps its code and its data. A read, and the
@@ -268,7 +272,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "notify status",
         ),
     ),
-    ("Judge", ("review", "verify", "infer", "logic check", "audit", "audit check", "invariants")),
+    (
+        "Judge",
+        ("review", "verify", "infer", "logic check", "audit", "audit check", "invariants", "facts"),
+    ),
     (
         "Repair",
         (
@@ -291,6 +298,14 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "tranches review",
             "tranches rule",
             "tranches undo",
+            # A person folds a spelling into a company, names it, or records its parent.
+            "company alias",
+            "company unalias",
+            "company rename",
+            "company parent",
+            # A role that has ended: a former tenant, and taking that back.
+            "party end",
+            "party resume",
             "duplicates resolve",
             "queue check",
             "queue prune",

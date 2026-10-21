@@ -181,6 +181,14 @@ class ReadSide:
                     self._held["probe"] = probe
                     self._probe_identity = identity
                 (version,) = probe.execute("PRAGMA data_version").fetchone()
+                if self._held.get("aliases_at") != (identity, int(version)):
+                    # The database moved: a person may have folded a company spelling
+                    # at the terminal (`tracker company alias`), and every key this
+                    # process computes from now on must read it. One small query.
+                    from tracker import companies
+
+                    companies.load_aliases(probe)
+                    self._held["aliases_at"] = (identity, int(version))
             except sqlite3.Error as exc:
                 log.debug("console: could not read data_version (%s); not caching", exc)
                 stale = self._held.pop("probe", None)

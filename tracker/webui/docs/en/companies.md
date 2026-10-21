@@ -6,6 +6,8 @@ Each company has a page at `/companies/<name>`, with every campus it builds or u
 
 - The company's logo (its own website icon) or its initials, its name, and its website.
 - A summary such as *15 campuses · builds 12 · tenant on 3 · in 7 states · 4 open obstacles*.
+- **Part of** its parent company, when one is recorded, and on the parent's page its **Subsidiaries**, each linked. The figures stay each company's own: a subsidiary's campuses count on its page and on [Capex](capex) under its own name, never added into the parent's.
+- **Also written** — the other spellings its campuses' sources use (*QTS Data Centers · QTS Realty Trust*), so a name in a citation can be matched to this page.
 - **☆ Watch company** adds the company to your watchlist, which covers every campus where it is operator, developer or tenant. **★ Watching** removes it again.
 
 ## The figures
@@ -69,6 +71,10 @@ When any of the company's campuses is a suspected delay — its own online date 
 
 The page gathers campuses by the company's name across all the roles a source can give it. Spelling variants are folded together (Meta and Facebook, AWS and Amazon, RagingWire and NTT), and two genuinely different companies with similar names stay apart. A campus the Capex page credits to the company because a source names it the customer, even though the campus is filed under another company's name, is listed too.
 
-The company is shown under **one name**, here and on every other page of the console: the name on the tracker's list of operators when it is on it, otherwise the spelling most campuses use. A campus's own page also shows the spelling its sources use when that differs.
+The company is shown under **one name**, here and on every other page of the console: the name on the tracker's list of operators when it is on it, otherwise the spelling most campuses use, unless a person has chosen one. A campus's own page also shows the spelling its sources use when that differs.
+
+Since 22 October 2026 each company is one record in the tracker: its name, what kind of company it is (a hyperscaler, a landlord, a neocloud, an AI lab, a utility, a contractor), its parent, and every spelling folded into it. Most spellings are folded by the tracker's own rules; where those miss one, a person folds it, and it applies to every campus at once, with no wait for the sources to be read again.
+
+A campus whose tenant has left — a lease ended, a site sold — is no longer listed on that tenant's page or counted in its figures. The campus's own page keeps it under *Former*, with when and why.
 
 If a campus you expect is missing, its source may have named a subsidiary or a joint venture instead.

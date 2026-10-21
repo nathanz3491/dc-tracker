@@ -301,6 +301,10 @@ class IngestReport:
     #: data-center word beside it. See `tracker.exclude`. Shown only when there are
     #: some.
     not_a_data_center: int = 0
+    #: Records refused because writing them would break a relationship the tracker
+    #: guarantees (`invariants.HeldBroken`) — a bug to fix, never a fact. Rolled
+    #: back one at a time and named in the log. Shown only when there are some.
+    held_refused: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -350,6 +354,11 @@ class IngestReport:
             if self.not_a_data_center
             else []
         )
+        broken = (
+            [("refused: would break a held relationship", self.held_refused)]
+            if self.held_refused
+            else []
+        )
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -367,6 +376,7 @@ class IngestReport:
             ("not cached", self.skipped_uncached),
             *placeless,
             *other_kind,
+            *broken,
             *foreign,
             *same,
             *ignored,

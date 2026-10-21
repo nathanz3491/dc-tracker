@@ -16,6 +16,8 @@ Each relationship is one of two kinds:
 | What a campus delivers is never more than its total. | 园区正在交付的容量不超过园区总容量。 |
 | A company's capacity is the sum of the campuses credited to it: each campus counted once, and in full, across its buyers. When a campus's tranches name buyers but describe the campus more than once, one buyer named across them gets the campus and no more; several are not told apart, and the campus is credited whole. | 公司容量等于其名下各园区之和：每个园区只计一次，且在各买方之间完整分配。 |
 
+Since 22 October 2026 the first three are also checked on every write. A write that would break one is refused: the article's record is not saved, the nightly log names it, and the article is left to be read again once the fault is fixed. So a page never shows a campus that breaks a held relationship, even for a night.
+
 ## Reported
 
 | Relationship | 关系 | What a break means |
@@ -28,3 +30,9 @@ Each relationship is one of two kinds:
 | A campus is announced before it is expected online. | 园区宣布时间早于预计上线时间。 | Usually the earliest article found is later than the real announcement — an existing site first reported when it expanded. |
 
 A break never changes a figure by itself. The figures on every page already follow the rules above — a tranche out of scale is excluded, a double description is counted once — and the report is the list of what is left to settle.
+
+A campus's own page lists the ones it breaks, under *Capacity by tranche*, as **N relationships not yet closed** — each relationship in a sentence with what breaks it there (see [A project's page](project-page)).
+
+## Night by night
+
+Each night, after the data has been checked, the loop counts how many campuses break each relationship and by how many megawatts, and the morning report sets that beside the night before: *tranches_once 113 (80,410 MW) -2, -1,200 MW*, or *unchanged*. A count that falls is rulings landing; one that rises is new articles describing a campus again, which the next night's review takes up.

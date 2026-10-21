@@ -240,7 +240,21 @@ def make_engine(db_path: Path | str, *, readonly: bool = False, echo: bool = Fal
 
     engine = create_engine(url, echo=echo, future=True)
     event.listen(engine, "connect", _apply_pragmas)
+    event.listen(engine, "connect", _read_company_aliases)
     return engine
+
+
+def _read_company_aliases(dbapi_conn, _record) -> None:
+    """Let `company_key` read the aliases a person recorded in this database.
+
+    On every new connection, because the aliases belong to the database and not the
+    code: a process that opens production reads production's (migration 0043,
+    `tracker.companies`). Cheap — one small query — and a database migrated before
+    the table existed simply has none.
+    """
+    from tracker import companies
+
+    companies.load_aliases(dbapi_conn)
 
 
 @contextmanager

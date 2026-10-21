@@ -118,6 +118,22 @@ app.add_typer(users_app)
 news_app = typer.Typer(name="news", invoke_without_command=True)
 app.add_typer(news_app)
 
+#: The company registry (migration 0043): bare `tracker company` lists every company
+#: with its campuses and spellings; `show`, `alias`, `unalias`, `rename` and `parent`
+#: read and edit it.
+company_app = typer.Typer(name="company", invoke_without_command=True)
+app.add_typer(company_app)
+
+#: Who plays which role on one campus, and whose role has ended (migration 0044):
+#: `tracker party list ID` lists them; `end` and `resume` are a person's hand. No
+#: bare form: a group that took a campus number would read `end` as the campus.
+party_app = typer.Typer(
+    name="party",
+    help="Who plays which role on a campus, and whose role has ended.",
+    no_args_is_help=True,
+)
+app.add_typer(party_app)
+
 #: How each campus's tranches nest: bare `tracker tranches` lists the campuses whose
 #: tranches still do not add up; `show` draws one as its tree, `review` puts them to
 #: the judgement model, `rule` and `undo` are a person's hand.

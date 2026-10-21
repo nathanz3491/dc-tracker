@@ -224,9 +224,13 @@ def run(session: Session, *, project_id: int | None = None) -> DeriveReport:
         # Before the recompute, and on every whole-table run: a change to the
         # company rules reaches stored rows only through here and `tracker init`,
         # and the nightly loop runs this twice a round. See `tracker.keys`.
+        from tracker import companies as companies_mod
         from tracker import keys as keys_mod
 
         report.keys_remembered = len(keys_mod.sync(session).added)
+        # The company registry too, so a spelling learned since the last deploy and
+        # a name the rows now favour reach every surface the same night.
+        companies_mod.sync(session)
     for project in session.scalars(query).all():
         report.projects += 1
         if not project.sources:

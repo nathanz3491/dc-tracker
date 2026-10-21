@@ -158,6 +158,15 @@ def init() -> None:
         resized = recompute_h200(session)
         reblocked = recompute_blocks(session)
         reparted = recompute_parties(session)
+        # After the parties, which name the companies it files: the registry
+        # (migration 0043) catches up with the code's aliases and the rows' names.
+        from tracker import companies as companies_mod
+
+        registry = companies_mod.sync(session)
+        # Last: the statements table reads the parties and tranches rebuilt above.
+        from tracker import facts as facts_mod
+
+        statements = facts_mod.recompute(session)
 
     console.print(f"database: [bold]{path}[/bold]")
     if applied:
@@ -173,6 +182,22 @@ def init() -> None:
         console.print(f"rebuilt capacity blocks on {reblocked} project(s)")
     if reparted:
         console.print(f"rebuilt parties on {reparted} project(s)")
+    console.print(f"facts: {statements:,} statement(s) on file")
+    changed = [
+        f"{n} {what}"
+        for n, what in (
+            (registry.created, "new"),
+            (len(registry.renamed), "renamed"),
+            (registry.aliases_added, "spelling(s) recorded"),
+            (registry.attached, "row(s) re-pointed"),
+            (registry.orphans_removed, "no longer named"),
+        )
+        if n
+    ]
+    console.print(
+        f"companies: {registry.total:,} on file"
+        + (f" [dim]({', '.join(changed)})[/dim]" if changed else "")
+    )
     if resized:
         from tracker.compute import kw_per_h200
 
@@ -742,12 +767,69 @@ def sources_policy(
 
 
 @app.command()
+def facts(
+    project_id: Annotated[
+        int | None, typer.Option("--project", help="List one campus's statements.")
+    ] = None,
+    field: Annotated[str | None, typer.Option("--field", help="Only this field.")] = None,
+) -> None:
+    """Every statement the sources make, by what it is about and how far it is trusted.
+
+    The master data table (migration 0045): one row per statement about a campus, a
+    tranche, a party, a milestone or an obstacle, rebuilt from the sources whenever a
+    row is written. Free and read-only. `--project ID` lists one campus's; `tracker
+    export facts` writes them all as CSV.
+    """
+    from tracker import facts as facts_mod
+
+    with session_scope(_read_engine(), commit=False) as session:
+        if project_id is None:
+            report = facts_mod.summary(session)
+            if json_mode():
+                emit(report)
+                return
+            console.print(
+                f"[bold]{report['statements']:,}[/bold] statement(s) on "
+                f"{report['campuses']:,} campus(es)\n"
+            )
+            for entity, tiers in sorted(report["by_entity"].items()):
+                line = ", ".join(f"{n:,} {tier}" for tier, n in sorted(tiers.items()))
+                console.print(f"  {entity:<10} {line}")
+            return
+        rows = facts_mod.rows_for(session, [project_id])
+    if field:
+        rows = [r for r in rows if r["field"] == field]
+    if json_mode():
+        emit({"project_id": project_id, "facts": rows})
+        return
+    if not rows:
+        console.print(f"[dim]no statements on #{project_id}[/dim]")
+        return
+    for r in rows:
+        held = "[green]held[/green] " if r["held"] else "     "
+        where = f"{r['entity']}{':' + r['entity_key'] if r['entity_key'] else ''}"
+        console.print(
+            f"  {held}{escape(where[:28]):<28} {escape(r['field']):<16} "
+            f"{escape(str(r['value'])[:28]):<28} [dim]{r['tier']}"
+            f"{' · ' + escape(r['reason']) if r['reason'] else ''}[/dim]"
+        )
+
+
+@app.command()
 def invariants(
     key: Annotated[
         list[str] | None,
         typer.Option("--key", "-k", help="Only these invariants (repeatable)."),
     ] = None,
     limit: Annotated[int, typer.Option(help="Examples shown per invariant.")] = 5,
+    record: Annotated[
+        bool,
+        typer.Option(
+            "--record",
+            help="Keep tonight's counts and print one line each with the change since "
+            "the last record — the morning report's lines.",
+        ),
+    ] = False,
 ) -> None:
     """How the figures must relate (勾稽关系), and every place they do not.
 
@@ -755,9 +837,11 @@ def invariants(
     tranches — running never above planned, a campus's lines adding up to it,
     tranches describing it once, a company equal to its campuses — each checked
     across the whole database (`tracker/invariants.py`). *Held* ones are enforced
-    when a row is written, so a break is a bug; *reported* ones say what the data
-    does not yet close, most of it the campus → building → phase hierarchy that
-    Batch 4 of the client plan builds.
+    when a row is written — a write that would break one is refused — so a break is
+    a bug; *reported* ones say what the data does not yet close, most of it tranches
+    that describe a campus twice until a ruling nests them (`tracker tranches`).
+    `--record` keeps the counts and prints the change since the last record, which
+    the nightly loop's morning report ends with.
 
     Free — no LLM, no network, read-only.
     """
@@ -767,6 +851,36 @@ def invariants(
     unknown = sorted(set(key or ()) - known)
     if unknown:
         _fail(f"no invariant {', '.join(unknown)}; known: {', '.join(sorted(known))}")
+
+    if record:
+        # The morning report's lines: one per relationship, with the change since the
+        # last record (`invariant_tally`, migration 0046). The only write this makes.
+        with _explain_db_locks(), session_scope(_writable("invariants --record")) as session:
+            changes = invariants_mod.record(
+                session, invariants_mod.check(session, keys=key or None)
+            )
+        if json_mode():
+            emit(
+                {
+                    "changes": [
+                        {
+                            "key": c.invariant.key,
+                            "kind": c.invariant.kind,
+                            "violations": c.violations,
+                            "mw": round(c.mw, 1),
+                            "before": list(c.before) if c.before else None,
+                        }
+                        for c in changes
+                    ]
+                }
+            )
+            return
+        for change in changes:
+            mark = (
+                "!" if change.invariant.kind == invariants_mod.HELD and change.violations else " "
+            )
+            console.print(f"  {mark} {escape(change.line)}")
+        return
 
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:

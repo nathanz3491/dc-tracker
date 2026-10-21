@@ -250,7 +250,11 @@ is folded into the survivor's copy rather than dropped with the other, so the ch
 decides a value only where two copies of one article disagree — the survivor's
 stands and the other is named in its notes. A reader who pressed ☆ on the folded
 row keeps following the campus: the watch moves to the survivor before the row is
-deleted, rather than going with it.
+deleted, rather than going with it. So do the decisions people and the nightly
+review made about the folded row that live outside its citations: how its tranches
+nest (`block_nesting`, migration 0042) and a role that has ended there — a former
+tenant (`party_tenure`, migration 0044). Each is moved unless the survivor already
+holds its own for the same tranche or party, which then stands.
 
 `folded` carries a run's merges forward, so a later pair naming a row this run just
 deleted is asked about the survivor instead. That is what settles a group of four
@@ -275,7 +279,12 @@ nothing answered to. Two things close that before any pair is raised:
   ("Amazon (AWS)") and dotted initialisms ("Prologis, L.P."), and reads the operator
   roster's aliases — renames and acquisitions such as RagingWire → NTT and DuPont
   Fabros → Digital Realty, which only the coverage report used to read. On the
-  2026-10-19 copy that took 286 spellings from 260 keys to 232.
+  2026-10-19 copy that took 286 spellings from 260 keys to 232. Since migration
+  0043 every key is one record in the company registry (`tracker company`), and a
+  spelling the rules miss can be folded by a person (`tracker company alias`): the
+  key function reads a person's aliases last, on every connection, and the alias
+  re-keys the rows it touches at once, the way a deploy that learned the spelling
+  would.
 * **Every row reachable by the key it would be filed under today.** `dedup_key` is
   written once and never rewritten, so `tracker.keys` records a row's *current*
   natural key in `project_alias` when it differs — a town learned since, a spelling
@@ -310,7 +319,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The four detection passes | `tracker/capex.py` — `suspected_duplicates`, `_pair_evidence`, `_locality_buckets`, `_locality_word`, `_one_edit_apart` |
 | A new row against its likeliest twin | `tracker/capex.py` — `twin_pairs`, `_place_words`; `tracker/triage.py` — `resolve_pairs(pairs=)`; `tracker/cli/duplicates.py` — `duplicates_resolve(--created-since, --limit)`; `scripts/overnight.sh` — `TWIN_SINCE`, `TWIN_DAYS`, `TWINS`, `ingest geo` before the pass |
 | The party signal, and the guard on it | `tracker/parties.py` — `shared_across_companies`, `_identifying_keys`, `_NOT_IDENTIFYING_ROLES`, `keys_for` |
-| One company, one key | `tracker/dedup.py` — `company_key`, `_company_slug`, `_reduce`, `_alias_table`, `_COMPANY_SUFFIXES`, `_COMPANY_ALIASES`, `same_operator`; `tracker/seed/operators.toml` — `aliases` |
+| One company, one key | `tracker/dedup.py` — `company_key`, `_company_slug`, `_reduce`, `_alias_table`, `_COMPANY_SUFFIXES`, `_COMPANY_ALIASES`, `same_operator`, `use_person_aliases`, `alias_listeners`; `tracker/seed/operators.toml` — `aliases`; `tracker/companies.py` — `add_alias`, `load_aliases`, `sync`; `tracker/db.py` — `_read_company_aliases`; migration `0043_company` |
 | Every key a row answers to | `tracker/keys.py` — `sync`, `remember`, `natural_key`, `renormalise`; `tracker/upsert.py` — `upsert_record` (end); `tracker/merge.py` — `merge_projects`; `tracker/derive.py` — `run`; `tracker/cli/quality.py` — `init` |
 | Evidence classes, labels, ranking | `tracker/capex.py` — `EVIDENCE_ORDER`, `EVIDENCE_LABELS`, `strongest_evidence`, `DuplicatePair.rank` |
 | Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw` |
@@ -323,6 +332,6 @@ Touching any of these means the poster is in scope. Re-render with
 | The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`; `tracker/llm.py` — `without_thinking` |
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
-| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
+| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |

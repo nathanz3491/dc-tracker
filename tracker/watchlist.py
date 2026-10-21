@@ -314,13 +314,22 @@ def _project_keys(project: Project) -> list[tuple[str, str]]:
     Operator first, so a project whose builder and tenant are both watched reports
     the builder — the row is filed under the company that is doing the work.
     """
+    from tracker.parties import current_customer, former
+
     keys = [(company_key(project.company), VIA_OPERATOR)]
-    tenant = customer_key(project.customer)
+    # A tenant whose role here has ended is not watched through this campus, by its
+    # column or by a tranche that still names it.
+    gone = {
+        customer_key(p.name)
+        for p in former(list(getattr(project, "parties", ()) or ()))
+        if p.role == "customer"
+    }
+    tenant = customer_key(current_customer(project))
     if tenant:
         keys.append((tenant, VIA_CUSTOMER))
     for block in getattr(project, "blocks", ()) or ():
         block_tenant = customer_key(getattr(block, "customer", None))
-        if block_tenant:
+        if block_tenant and block_tenant not in gone:
             keys.append((block_tenant, VIA_BLOCK))
     return keys
 

@@ -46,6 +46,7 @@ from tracker.ingest.records import (
     RiskRecord,
     SourceRecord,
 )
+from tracker.invariants import HeldBroken
 from tracker.llm import (
     Extractor,
     LLMError,
@@ -4077,18 +4078,30 @@ def run(
             # project id for the same reason — the caller decides per article,
             # from what that article turned out to say.
             target = route(record) if route is not None else None
-            upsert = upsert_record(
-                session,
-                record,
-                existing_only=existing_only,
-                route_to=target,
-                # Only consulted when this record would create a NEW row and a
-                # near-match already exists — so on a normal crawl it costs
-                # nothing, and on the ambiguous inserts it is the one chance to
-                # not make the duplicate. See `gatekeeper`.
-                arbiter=record_arbiter,
-                reading=reading,
-            )
+            try:
+                upsert = upsert_record(
+                    session,
+                    record,
+                    existing_only=existing_only,
+                    route_to=target,
+                    # Only consulted when this record would create a NEW row and a
+                    # near-match already exists — so on a normal crawl it costs
+                    # nothing, and on the ambiguous inserts it is the one chance to
+                    # not make the duplicate. See `gatekeeper`.
+                    arbiter=record_arbiter,
+                    reading=reading,
+                )
+            except HeldBroken as exc:
+                # A bug, not a fact: the write would publish figures that break a
+                # relationship the tracker guarantees. This record only is rolled
+                # back — the article's earlier records are already committed — and
+                # the URL is left as read-but-not-written, so a re-read after the
+                # fix writes it.
+                session.rollback()
+                report.held_refused += 1
+                outcome.status, outcome.error = "parse_error", f"write refused: {exc}"[:500]
+                log.error("refused a write from %s: %s", result.url, exc)
+                continue
             # Before the next record, not after the article: the next record's
             # arbitration is a model call, and it must not run with these writes
             # still holding the lock. See the docstring.

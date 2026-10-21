@@ -11,6 +11,13 @@ Changes a reader of the console will notice, newest first. The console's version
 - **Who placed each tranche is on the page.** A rule (the same name in other words, a parent the source names, a campus-wide tranche its parts fit inside), the nightly review (a model reading the quoted sentences), or a person by name. Admins can rule on any tranche, or take a ruling back.
 - **Fewer campuses count the same megawatts twice.** See [How the figures relate](invariants).
 
+### Companies, former tenants, and every statement
+
+- **A company page says what the company is.** Its kind, its parent and subsidiaries, and the other spellings its campuses' sources use. A subsidiary's figures stay its own. See [Company pages](companies).
+- **A tenant that has left is no longer the buyer.** Sources go on naming a tenant after its lease ends; when its role is recorded as ended, the campus's page lists it under *Former* with when and why, and it is credited nothing on [Capex](capex), its company page or a watch. See [A project's page](project-page).
+- **Every statement behind a campus can be downloaded**, the ones the page does not show included: each with how far it can be trusted and its sentence. See [Where a value came from](provenance) and the API's new `/v1/projects/{id}/facts`.
+- **A figure that would break a held relationship is never published.** The write is refused and named in the nightly log; a campus's page lists the relationships its sources do not yet close, and the morning report says how each count moved. See [How the figures relate](invariants).
+
 ## 21 October 2026
 
 ### How the figures relate

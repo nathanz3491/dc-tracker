@@ -1896,6 +1896,7 @@ def upsert_record(
     # Blocks first, then the rollup, then h200 — so `apply_h200_equivalent` sees a
     # `mw_built` that already reflects the energised tranches.
     from tracker import blocks as blocks_mod
+    from tracker import companies as companies_mod
     from tracker import parties as parties_mod
 
     blocks_written = blocks_mod.rebuild(session, project)
@@ -1907,6 +1908,9 @@ def upsert_record(
     # ordering and same reason as in `recompute_from_sources`.
     parties_mod.rebuild(session, project)
     party_notes = parties_mod.reconcile(project)
+    # Operator and parties onto their company rows (migration 0043), after the
+    # rebuild that may have named new ones.
+    companies_mod.attach(session, project)
     # After the rollup, which may have filled a null capacity from the tranches —
     # so the basis describes the figure the row ends up holding.
     apply_mw_basis(project, by_field)
@@ -2011,6 +2015,21 @@ def upsert_record(
         else:
             project.updated_at = utcnow()
     session.flush()
+
+    # --- Every statement, in one table (migration 0045) ---------------------
+    # Last, after the events and obstacles this record wrote: a cache of every
+    # statement the row's sources make, read by the facts download, never by a merge.
+    from tracker import facts as facts_mod
+
+    facts_mod.rebuild(session, project)
+
+    # --- The relationships every write must keep (step 4.6) -----------------
+    # Running never above planned, a campus's lines adding up to it, what it
+    # delivers never above its total: guaranteed by the code above, so a break is a
+    # bug, and the record is refused rather than published (`invariants.HeldBroken`).
+    from tracker import invariants as invariants_mod
+
+    invariants_mod.enforce(project)
 
     # --- Every key this row answers to --------------------------------------
     # The identity check's route is remembered: an article spelled that way will
@@ -2610,6 +2629,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     )
 
     from tracker import blocks as blocks_mod
+    from tracker import companies as companies_mod
     from tracker import parties as parties_mod
 
     blocks_mod.rebuild(session, project)
@@ -2623,6 +2643,9 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     # first refusal and this fills only what they left empty.
     parties_mod.rebuild(session, project)
     party_notes = parties_mod.reconcile(project)
+    # Operator and parties onto their company rows (migration 0043), after the
+    # rebuild that may have named new ones.
+    companies_mod.attach(session, project)
     apply_date_precision(project, by_field)
     apply_mw_basis(project, by_field)
     apply_h200_equivalent(project, by_field)
@@ -2657,6 +2680,15 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     # The same cap an ingest applies — see `standing_duplicate`.
     project.confidence = min(value, 1) if duplicate_of is not None else value
     session.flush()
+    from tracker import facts as facts_mod
+
+    facts_mod.rebuild(session, project)
+    # A recompute is not refused — the row already exists and its sources are
+    # unchanged — but a held relationship it breaks is a bug, said loudly.
+    from tracker import invariants as invariants_mod
+
+    for invariant, violation in invariants_mod.campus_breaks(project, kind=invariants_mod.HELD):
+        log.error("#%s breaks %s: %s", project.id, invariant.key, violation.detail)
     return conflict_fields
 
 
@@ -2709,6 +2741,7 @@ def recompute_parties(session: Session) -> int:
     `source.parties`, `tracker init` recomputes them, and
     `test_parties_cache_is_consistent` asserts a second pass is a no-op.
     """
+    from tracker import companies as companies_mod
     from tracker import parties as parties_mod
 
     changed = 0
@@ -2716,6 +2749,7 @@ def recompute_parties(session: Session) -> int:
         before = _reconciled(project)
         touched = parties_mod.rebuild(session, project)
         parties_mod.reconcile(project)
+        companies_mod.attach(session, project)
         if touched or _reconciled(project) != before:
             changed += 1
     session.flush()

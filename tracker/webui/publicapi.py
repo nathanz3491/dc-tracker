@@ -215,6 +215,10 @@ def project_detail(project: Any, prefix: str) -> dict[str, Any]:
             "role": p["role"],
             "quote": p.get("quote"),
             "confirmed": p.get("unconfirmed") is None,
+            # Appended (migration 0044): null, or when and why the role ended — a
+            # former tenant, a sold site. A party with one is not a current buyer.
+            "ended_on": p.get("ended_on"),
+            "ended_reason": p.get("ended_reason"),
         }
         for p in obj.get("parties") or []
     ]
@@ -255,6 +259,7 @@ def project_detail(project: Any, prefix: str) -> dict[str, Any]:
     ]
     out["source_count"] = len(obj.get("sources") or [])
     out["links"]["sources"] = f"{prefix}/projects/{obj['id']}/sources"
+    out["links"]["facts"] = f"{prefix}/projects/{obj['id']}/facts"
     return out
 
 
@@ -272,6 +277,22 @@ def project_sources(project: Any) -> list[dict[str, Any]]:
             "quotes": s.get("quotes") or {},
         }
         for s in obj.get("sources") or []
+    ]
+
+
+def project_facts(session: Any, project: Any) -> list[dict[str, Any]]:
+    """Every statement the sources make about one campus (migration 0045).
+
+    One row each: what it is about, the field, the value, how far it can be trusted,
+    the sentence and the citation, and whether it is the value the campus holds — the
+    rows of `tracker export facts`, less the campus columns the path already names.
+    """
+    from tracker import facts
+
+    rows = facts.rows_for(session, [project.id])
+    return [
+        {k: v for k, v in row.items() if k not in ("project_id", "company", "campus")}
+        for row in rows
     ]
 
 
@@ -306,6 +327,7 @@ def index(prefix: str, docs: str) -> dict[str, Any]:
             f"GET {prefix}/projects": "campuses, filtered, sorted and paged",
             f"GET {prefix}/projects/{{id}}": "one campus, each field with its source",
             f"GET {prefix}/projects/{{id}}/sources": "every citation behind one campus",
+            f"GET {prefix}/projects/{{id}}/facts": "every statement about one campus, with its tier",
             f"GET {prefix}/companies/{{slug}}": "one company's campuses and recent news",
             f"GET {prefix}/capex": "capacity and investment by buyer",
             f"GET {prefix}/updates": "recent news on the key's account's watchlist",
@@ -374,6 +396,13 @@ def company(session: Session, slug: str, prefix: str, *, tally: Any = None) -> d
     return {
         "slug": profile["slug"],
         "name": profile["name"],
+        # The company as an entity (migration 0043): its kind, whose subsidiary it
+        # is and which are its (each `{name, slug}`), and the other ways sources
+        # write its name. Additive.
+        "kind": profile["kind"],
+        "parent": profile["parent"],
+        "subsidiaries": profile["subsidiaries"],
+        "also_written": profile["also_written"],
         "website": profile["domain"],
         "totals": profile["totals"],
         "states": [{"state": s, "projects": n} for s, n in profile["states"]],
@@ -467,6 +496,7 @@ __all__ = [
     "index",
     "me",
     "project_detail",
+    "project_facts",
     "project_sources",
     "projects",
     "updates",

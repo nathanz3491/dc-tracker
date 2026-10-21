@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import func, select
@@ -508,6 +509,24 @@ def _names(project: Any, names: Any) -> Any:
     return display_names(session) if session is not None else Names()
 
 
+def _former_customer(project: Any, names: Any) -> dict[str, Any] | None:
+    """The tenant the `customer` field still names whose role here has ended, or None.
+
+    The page then names nobody as the buyer and says who was, and until when —
+    the reading Capex, the company pages and a watch make (`parties.current_customer`).
+    """
+    from tracker.parties import former_customer
+
+    party = former_customer(project)
+    if party is None:
+        return None
+    return {
+        "name": names.customer(party.name) or party.name,
+        "ended_on": party.ended_on.isoformat() if party.ended_on else None,
+        "reason": party.ended_reason,
+    }
+
+
 def project_payload(project: Any, *, claims: bool = False, names: Any = None) -> dict[str, Any]:
     """One project as the console reads it: the export shape, plus what the page adds.
 
@@ -547,6 +566,7 @@ def project_payload(project: Any, *, claims: bool = False, names: Any = None) ->
     # the project page shows them beside the name when they differ.
     payload["company_name"] = names.company(project.company)
     payload["customer_name"] = names.customer(project.customer)
+    payload["customer_former"] = _former_customer(project, names)
     # The page's summary (client review, 2026-10-21): how likely the campus is to
     # miss its date, and every buyer the site names. Both are the readings the
     # company page and Capex already make — `supply.delay_risk` and
@@ -567,6 +587,23 @@ def project_payload(project: Any, *, claims: bool = False, names: Any = None) ->
     payload["buyers"] = [
         {"name": names.customer(party.name), "slug": company_slug(customer_key(party.name))}
         for party in parties_mod.named_buyers(project.parties)
+    ]
+    # The relationships this campus does not yet close (勾稽关系, `tracker/invariants.py`),
+    # read from the campus alone: tranches that describe it twice, a phase naming no
+    # facility, dates out of order. Held ones are refused on write and never appear.
+    from tracker import invariants as invariants_mod
+
+    payload["relations"] = [
+        {
+            "key": invariant.key,
+            "statement": invariant.statement,
+            "zh": invariant.zh,
+            "detail": violation.detail,
+            "mw": round(violation.mw, 1),
+        }
+        for invariant, violation in invariants_mod.campus_breaks(
+            project, kind=invariants_mod.REPORTED
+        )
     ]
     _split_serving(payload)
     return payload
@@ -674,6 +711,7 @@ LIST_OMITS: tuple[str, ...] = (
     "buyers",
     "still_to_come",
     "expected_online_stated",
+    "relations",
 )
 
 #: The four fields the table's obstacle filters and the map's markers read. The
@@ -748,7 +786,7 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
     loads sources, events, blocks and parties — the four things this deliberately
     does not send.
     """
-    from tracker.models import Event, Project, Risk, Source
+    from tracker.models import Event, Project, ProjectParty, Risk, Source
 
     projects = list(
         session.scalars(
@@ -786,6 +824,15 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
     from tracker.company import display_names
 
     names = display_names(session)
+    # Tenants whose role has ended (migration 0044), in one query rather than the
+    # party list of every row: `_former_customer` reads them off this stand-in.
+    gone: dict[int, list[Any]] = {}
+    for party in session.scalars(
+        select(ProjectParty).where(
+            ProjectParty.role == "customer", ProjectParty.ended_reason.is_not(None)
+        )
+    ):
+        gone.setdefault(party.project_id, []).append(party)
     rows = []
     for project in projects:
         row: dict[str, Any] = {field: getattr(project, field) for field in INDEX_FIELDS}
@@ -805,6 +852,13 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
         row["company_slug"] = company_slug(company_key(project.company))
         row["customer_name"] = names.customer(project.customer)
         row["customer_slug"] = company_slug(tenant) if tenant else None
+        row["customer_former"] = (
+            _former_customer(
+                SimpleNamespace(customer=project.customer, parties=gone[project.id]), names
+            )
+            if project.id in gone
+            else None
+        )
         rows.append(row)
     return rows
 

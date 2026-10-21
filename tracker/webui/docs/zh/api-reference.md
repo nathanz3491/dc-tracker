@@ -12,7 +12,8 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | `GET /v1/projects` | 园区列表，可筛选、排序和分页。 |
 | `GET /v1/projects/{id}` | 单个园区的完整信息，每个字段都附有来源。 |
 | `GET /v1/projects/{id}/sources` | 单个园区背后的全部引用。 |
-| `GET /v1/companies/{slug}` | 单个公司的园区和近期新闻。 |
+| `GET /v1/projects/{id}/facts` | 来源关于单个园区的每一条陈述，每条一行。 |
+| `GET /v1/companies/{slug}` | 单个公司：它是什么、它的园区和近期新闻。 |
 | `GET /v1/capex` | 按买方统计的容量和投资。 |
 | `GET /v1/updates` | 你关注列表中的近期新闻。 |
 
@@ -108,7 +109,7 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | 键 | 含义 |
 | --- | --- |
 | `fields` | 每个追踪字段，形式为 `{value, label, quote, quote_is_exact, source_url}`；在有意义时还附带 `scope`、`bound`、`modality`、`as_of`、`basis` 或 `date_precision`。`label` 取值为 `quoted`、`derived`、`unconfirmed`、`inferred`、`default`、`missing` 或 `not_applicable`。 |
-| `parties` | 涉及的公司：`name`、`role`（`developer` 开发商、`owner` 业主、`operator` 运营商、`customer` 客户、`utility` 公用事业公司、`contractor` 承包商）、`quote` 和 `confirmed`。 |
+| `parties` | 涉及的公司：`name`、`role`（`developer` 开发商、`owner` 业主、`operator` 运营商、`customer` 客户、`utility` 公用事业公司、`contractor` 承包商）、`quote`、`confirmed`，以及 `ended_on` 和 `ended_reason` —— 为 null，或说明该角色何时、因何结束（以往的租户、已出售的场址）。角色已结束的客户不是该园区的买方：[Capex](capex) 和公司页面都不会给它计入任何容量。`customer` 字段保留来源的说法。 |
 | `tranches` | 楼栋和分期：`label`、`status`、`mw`、`mw_counted`（该容量是否计入园区总数）、`customer`、`expected_online`、`energized_on`、`investment_usd`。 |
 | `obstacles` | `category`、`severity`、`status`、`summary`、`quote`、`first_seen`、`resolved_at`。 |
 | `milestones` | `date`、`type`、`description`、`quote` 和 `confirmed`。 |
@@ -139,9 +140,39 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 
 每条引用：`url`、`type`（`company_filing` 公司文件、`government_doc` 政府文件、`trade_press` 行业媒体、`general_media` 综合媒体、`iso_queue` 电网并网队列或 `manual` 人工录入）、`published_at`、`fetched_at`、`excerpt`，以及 `quotes`，即该来源所支持的每个字段记录下的原句。
 
+## GET /v1/projects/{id}/facts
+
+该园区的来源所作的每一条陈述，每条一行，无论陈述的对象是什么 —— 页面上每个数字背后的主数据，包括页面没有显示的那些。参见[数值从哪里来](provenance)。
+
+| 键 | 含义 |
+| --- | --- |
+| `entity`、`entity_key` | 陈述的对象：`campus` 园区；`tranche` 分期（其键）；`party` 相关方（公司的键，角色在 `field` 中）；`milestone` 里程碑（其类型）；`obstacle` 障碍（其类别）。 |
+| `field`、`value`、`number`、`unit` | 字段、按原样陈述的值、可作为数字时的数值，以及单位（`MW`、`USD`、`date`……）。 |
+| `tier`、`reason` | 可信程度：`confirmed`、`directory`、`derived`、`inferred`、`unconfirmed` 或 `ruled_out`，以及未确认时的原因。 |
+| `held` | 是否为园区所显示的值。 |
+| `as_of`、`source_url`、`source_type`、`quote`、`axes` | 何时成立、引用、原句，以及读取时的范围、界限和计量口径。 |
+
+```json
+{
+  "data": [
+    {
+      "entity": "campus", "entity_key": "", "field": "mw_planned",
+      "value": "900", "number": 900.0, "unit": "MW",
+      "tier": "confirmed", "reason": null, "held": true,
+      "as_of": "2026-09-01", "source_url": "https://news.example.com/north/",
+      "source_type": "company_filing", "quote": "will draw 900 MW", "axes": null
+    }
+  ]
+}
+```
+
+`entity`、`entity_key` 和 `field` 相同的多行，就是来源之间存在分歧；`held: true` 的那一行是合并时保留的值，园区页面上的[字段与证据](project-page)说明了原因。
+
 ## GET /v1/companies/{slug}
 
-以数据形式提供的公司页面：`name`、`website`、`totals`（园区数，分别按运营商和租户身份统计，规划和运行的兆瓦数，未解决的障碍）、`states`、`phases`、它的 `projects`（每个都附有其角色、阶段、容量、障碍和 `suspected_delay`）、最近两个月报道的 `updates`，以及 `suspected_delays` —— 疑似延期园区的数量 `count`、它们合计的规划容量 `mw_planned`，以及按逾期从久到短排列的 `project_ids`。slug 是公司名称的小写连字符形式，与控制台中该公司页面地址里的一样：`compass-datacenters`。
+以数据形式提供的公司页面：`name`、`website`、`totals`（园区数，分别按运营商和租户身份统计，规划和运行的兆瓦数，未解决的障碍）、`states`、`phases`、它的 `projects`（每个都附有其角色、阶段、容量、障碍和 `suspected_delay`）、最近两个月报道的 `updates`，以及 `suspected_delays` —— 疑似延期园区的数量 `count`、它们合计的规划容量 `mw_planned`，以及按逾期从久到短排列的 `project_ids`。slug 与控制台中该公司页面地址里的一样：Compass Datacenters 为 `compass`，Amazon 和 AWS 都是 `amazon`。
+
+系统关于公司本身记录的信息：`kind`（`hyperscaler`、`landlord`、`neocloud`、`ai_lab`、`utility`、`contractor`，或 null）、`parent` 和 `subsidiaries`（均为 `{name, slug}`），以及 `also_written` —— 其各园区来源使用的其他写法。母公司的数字不包括子公司的：每家公司的容量就是它自己的园区，与 [Capex](capex) 一致。
 
 `name` 是公司唯一的名称，在每个页面上都相同；每个项目除来源原文的 `company` 和 `customer` 外，还带有 `company_name` 和 `customer_name`。`totals` 中规划和运行的兆瓦数按 [Capex](capex)（资本支出）的方式计算——疑似重复的园区只算一次，暂停和取消的园区不计入，租户只计入自己的分期——`totals.counting` 把它们拆成 `capex_row`（该公司在 `/v1/capex` 中的那一行）和 `no_named_buyer`（它建设、但没有具名买方的园区），并给出因 `duplicates`（重复）、`stopped`（暂停或取消）或计入其他买方（`elsewhere`）而被搁置的园区数量。每个项目的 `counted` 说明它贡献了什么：`status`（`counted`、`part`、`elsewhere`、`duplicate` 或 `stopped`）、`mw_planned`、`mw_built`，以及 `for`（其他买方）或 `of`（重复项所归入的园区）。
 

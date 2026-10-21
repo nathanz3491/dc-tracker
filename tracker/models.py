@@ -115,6 +115,12 @@ class Project(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
     last_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    #: The company `company` is filed under (`companies.attach`): derived from the
+    #: string by `dedup.company_key`, recomputed whenever the row is written, so an
+    #: alias a person adds moves it. NULL only before `tracker init` has run.
+    company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("company.id", ondelete="SET NULL")
+    )
 
     sources: Mapped[list[Source]] = relationship(
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True
@@ -167,6 +173,7 @@ class Project(Base):
         Index("ix_project_state", "state"),
         Index("ix_project_phase", "phase"),
         Index("ix_project_confidence", "confidence"),
+        Index("ix_project_company_id", "company_id"),
         # A merged-away row's number is never issued again (migration 0032).
         {"sqlite_autoincrement": True},
     )
@@ -538,8 +545,21 @@ class ProjectParty(Base):
     source_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("source.id", ondelete="SET NULL")
     )
+    #: The company `party_key` names, set as the party rows are rebuilt.
+    company_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("company.id", ondelete="SET NULL")
+    )
+    #: When this party's role here ended, and why — copied from `PartyTenure` on
+    #: every rebuild. A row with a reason is a former party: shown, still evidence of
+    #: which campus this is, never a current buyer (`parties.of_role`).
+    ended_on: Mapped[dt.date | None] = mapped_column(Date)
+    ended_reason: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="parties")
+
+    @property
+    def ended(self) -> bool:
+        return self.ended_reason is not None
 
     __table_args__ = (
         UniqueConstraint(
@@ -550,6 +570,7 @@ class ProjectParty(Base):
         CheckConstraint("length(party_key) > 0", name="ck_project_party_key"),
         Index("ix_project_party_project_id", "project_id"),
         Index("ix_project_party_party_key", "party_key"),
+        Index("ix_project_party_company_id", "company_id"),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -584,6 +605,193 @@ class BlockAlias(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<BlockAlias {self.from_key}->{self.to_key} p={self.project_id}>"
+
+
+#: What a statement in `fact` is about. A campus field, a tranche's, a party's role,
+#: a milestone, an obstacle.
+FACT_ENTITIES: tuple[str, ...] = ("campus", "tranche", "party", "milestone", "obstacle")
+#: How far a statement can be trusted, most first. See `tracker/facts.py`.
+FACT_TIERS: tuple[str, ...] = (
+    "confirmed",
+    "directory",
+    "derived",
+    "inferred",
+    "unconfirmed",
+    "ruled_out",
+)
+
+
+class Fact(Base):
+    """One statement one source makes about a campus or a part of it (migration 0045).
+
+    A cache rebuilt from the sources (`facts.rebuild`), like `CapacityBlock`.
+    """
+
+    __tablename__ = "fact"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    entity: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_key: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    field: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str | None] = mapped_column(Text)
+    number: Mapped[float | None] = mapped_column(REAL)
+    unit: Mapped[str | None] = mapped_column(Text)
+    source_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("source.id", ondelete="SET NULL")
+    )
+    as_of: Mapped[dt.date | None] = mapped_column(Date)
+    tier: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    quote: Mapped[str | None] = mapped_column(Text)
+    axes: Mapped[str | None] = mapped_column(Text)
+    held: Mapped[bool] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        CheckConstraint(sql_in("entity", FACT_ENTITIES), name="ck_fact_entity"),
+        CheckConstraint(sql_in("tier", FACT_TIERS), name="ck_fact_tier"),
+        CheckConstraint("held IN (0, 1)", name="ck_fact_held"),
+        Index("ix_fact_project_id", "project_id"),
+        Index("ix_fact_field", "entity", "field"),
+        Index("ix_fact_source_id", "source_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Fact {self.entity}:{self.entity_key} {self.field}={self.value!r} {self.tier}>"
+
+
+class InvariantTally(Base):
+    """One relationship's count of breaks, at one run (migration 0046)."""
+
+    __tablename__ = "invariant_tally"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    taken_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    violations: Mapped[int] = mapped_column(Integer, nullable=False)
+    mw: Mapped[float] = mapped_column(REAL, nullable=False, server_default=text("0"))
+
+    __table_args__ = (
+        CheckConstraint("violations >= 0 AND mw >= 0", name="ck_invariant_tally_counts"),
+        Index("ix_invariant_tally_key", "key", "taken_at"),
+    )
+
+
+class PartyTenure(Base):
+    """That a party's role on a campus has ended: Cyxtera's lease at Comstock, 2023.
+
+    Party rows are rebuilt from the sources, which keep naming a tenant after it has
+    gone, so this is where the statement lives (migration 0044); `parties.rebuild`
+    copies it onto the row.
+    """
+
+    __tablename__ = "party_tenure"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    party_key: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    ended_on: Mapped[dt.date | None] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("source.id", ondelete="SET NULL")
+    )
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'operator'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "party_key", "role", name="uq_party_tenure_project_key_role"
+        ),
+        CheckConstraint(sql_in("role", PARTY_ROLES), name="ck_party_tenure_role"),
+        CheckConstraint("length(party_key) > 0", name="ck_party_tenure_key"),
+        CheckConstraint("length(reason) > 0", name="ck_party_tenure_reason"),
+        Index("ix_party_tenure_project_id", "project_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return (
+            f"<PartyTenure {self.party_key} {self.role} ended {self.ended_on} p={self.project_id}>"
+        )
+
+
+class Company(Base):
+    """One company, under the key every row is already filed by.
+
+    `key` is `dedup.company_key` of any of its spellings, so the table changes nothing
+    that stores or compares a key; it holds what a key cannot — the one name printed,
+    the kind of company, its parent — and the spellings that fold to it. See
+    migration 0043 and `tracker/companies.py`.
+    """
+
+    __tablename__ = "company"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The name printed everywhere: the roster's, else the spelling most rows use,
+    #: else what a person set.
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Who chose `name`: 'roster', 'rows', or a person's name. A person's stands.
+    name_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'rows'"))
+    #: hyperscaler, ai_lab, neocloud, landlord (the roster); utility, contractor (EDGAR).
+    kind: Mapped[str | None] = mapped_column(Text)
+    parent_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("company.id", ondelete="SET NULL")
+    )
+    parent_by: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    aliases: Mapped[list[CompanyAlias]] = relationship(
+        back_populates="company", cascade="all, delete-orphan", passive_deletes=True
+    )
+    parent: Mapped[Company | None] = relationship(remote_side=[id])
+
+    __table_args__ = (
+        UniqueConstraint("key", name="uq_company_key"),
+        CheckConstraint("length(key) > 0", name="ck_company_key"),
+        CheckConstraint("length(name) > 0", name="ck_company_name"),
+        CheckConstraint("parent_id IS NULL OR parent_id <> id", name="ck_company_not_own_parent"),
+        Index("ix_company_parent_id", "parent_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Company {self.id} {self.key!r} {self.name!r}>"
+
+
+class CompanyAlias(Base):
+    """A spelling that is this company, as `company_key` folds it before reducing.
+
+    'code' and 'roster' aliases are copies of the lists in the code, re-seeded by
+    `tracker init`; a person's is the only one this table is the source of, and
+    `company_key` reads it (`companies.load_aliases`).
+    """
+
+    __tablename__ = "company_alias"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("company.id", ondelete="CASCADE"), nullable=False
+    )
+    spelling: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_by: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'code'"))
+    decided_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    company: Mapped[Company] = relationship(back_populates="aliases")
+
+    __table_args__ = (
+        UniqueConstraint("spelling", name="uq_company_alias_spelling"),
+        CheckConstraint("length(spelling) > 0", name="ck_company_alias_spelling"),
+        Index("ix_company_alias_company_id", "company_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<CompanyAlias {self.spelling!r} -> {self.company_id} by {self.decided_by}>"
 
 
 class BlockNesting(Base):

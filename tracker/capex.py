@@ -70,6 +70,8 @@ from tracker.vocab import (
 #: is not this module's rollup to change.
 company_key = lru_cache(maxsize=8192)(dedup.company_key)
 customer_key = lru_cache(maxsize=8192)(dedup.customer_key)
+# A person's alias (`tracker company alias`) changes what a spelling keys to.
+dedup.alias_listeners.extend([company_key.cache_clear, customer_key.cache_clear])
 
 #: Attribution bucket for capacity with no identifiable buyer.
 UNATTRIBUTED = "(no named customer)"
@@ -251,9 +253,12 @@ def attribute(project: Project) -> tuple[str, str, bool]:
     if named:
         return named[0].name, customer_key(named[0].name), False
 
-    key = customer_key(project.customer)
+    # A tenant the row still names whose role here has ended (migration 0044):
+    # Cyxtera's rejected lease at Comstock is history, not a buyer's position.
+    tenant = parties_mod.current_customer(project)
+    key = customer_key(tenant)
     if key:
-        return project.customer or key, key, False
+        return tenant or key, key, False
 
     end_users = end_user_keys()
     # The operator party, then the column. Same ladder as before once the party
@@ -342,10 +347,19 @@ def block_shares(project: Project) -> tuple[list[BlockShare], float]:
     if not blocks:
         return [], float(project.mw_planned or 0.0)
 
+    from tracker import parties as parties_mod
+
+    # A tenant whose role on this campus has ended (migration 0044) holds none of
+    # it, whichever tranche still names it; that capacity stays with the campus.
+    gone = {
+        customer_key(p.name)
+        for p in parties_mod.former(list(getattr(project, "parties", ()) or ()))
+        if p.role == "customer"
+    }
     by_key: dict[str, dict[str, Any]] = {}
     for share in blocks_mod.tree_shares(blocks_mod.tranche_tree(project)):
         key = customer_key(share.customer)
-        if not key or share.mw_planned <= 0:
+        if not key or key in gone or share.mw_planned <= 0:
             continue
         entry = by_key.setdefault(
             key, {"name": share.customer or key, "planned": 0.0, "built": 0.0, "online": None}
@@ -918,14 +932,28 @@ def blocking_risks(session: Session) -> dict[str, str]:
     Keyed as `blocking_risk` matches — the tenant's key, else the operator's — so
     a key with no open obstacle is simply absent.
     """
+    from tracker.models import PartyTenure
+
     rows = session.execute(
-        select(Risk.category, Risk.severity, Project.company, Project.customer)
+        select(Risk.category, Risk.severity, Project.id, Project.company, Project.customer)
         .join(Project, Risk.project_id == Project.id)
         .where(Risk.status == OPEN_RISK_STATUS)
     ).all()
+    # A tenant whose role on the campus has ended carries none of its obstacles —
+    # the same rule `attribute` applies to its megawatts (`parties.current_customer`).
+    gone = set(
+        session.execute(
+            select(PartyTenure.project_id, PartyTenure.party_key).where(
+                PartyTenure.role == "customer"
+            )
+        ).all()
+    )
     worst: dict[str, tuple[str, str]] = {}
-    for category, severity, company, customer in rows:
-        key = customer_key(customer) or company_key(company)
+    for category, severity, project_id, company, customer in rows:
+        tenant = customer_key(customer)
+        if tenant and (project_id, tenant) in gone:
+            tenant = ""
+        key = tenant or company_key(company)
         held = worst.get(key)
         if held is None or severity_rank(severity) > severity_rank(held[1]):
             worst[key] = (category, severity)

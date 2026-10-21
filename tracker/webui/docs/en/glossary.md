@@ -16,6 +16,8 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Citation** — a source attached to a campus, with the values it supports.
 
+**Company** — one record per company: its one name, what kind of company it is, its parent, and every spelling folded into it. See [Company pages](companies).
+
 **Confidence** — a score from 0 to 3 for how well backed a campus is. See [Confidence](confidence).
 
 **Default** — a value shown because nobody stated one and the field cannot be empty; in practice a phase of *announced*. See [Where a value came from](provenance).
@@ -34,9 +36,13 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Forecast** — a milestone that is only expected. Never counted as reached.
 
+**Former** — a party whose role on a campus has ended: a tenant whose lease ended, an owner that sold. Kept on the campus's page; nobody's buyer now.
+
 **GW** — gigawatt: 1,000 megawatts.
 
 **H200-equivalent** — capacity restated as NVIDIA H200 accelerators, about 770 per megawatt.
+
+**Held** — a relationship between the figures the tracker enforces on every write; a write that would break one is refused. See [How the figures relate](invariants).
 
 **Hyperscaler** — a large cloud company building or leasing capacity for its own use.
 
@@ -78,6 +84,8 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Quoted** — a value backed by a sentence the tracker checked is in the article and states it.
 
+**Relationship not yet closed** — a relationship between a campus's figures that its sources do not yet settle, such as tranches that describe it twice. Listed on its page; changes no figure. See [How the figures relate](invariants).
+
 **Ruled out** — a pair of rows judged to be different sites; or a claim judged not to describe this campus.
 
 **Scope** — what a figure covers: this site, one building, a programme, a region or a portfolio.
@@ -88,7 +96,11 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Signal to watch for** — the next milestone on a track: the news that would show a campus moving.
 
+**Statement** — one thing one source says about a campus, a tranche, a party, a milestone or an obstacle, with how far it can be trusted and the sentence behind it. Every figure is chosen from them. See [Where a value came from](provenance).
+
 **Superseded** — a claim that was correct when published but has since been restated.
+
+**Subsidiary** — a company recorded as part of another, its parent. Its campuses and figures stay its own.
 
 **Supply** — on a company page, the capacity it is credited with that is not yet running, by the year each campus is due, over this year and the next two.
 

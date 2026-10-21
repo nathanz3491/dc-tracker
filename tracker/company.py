@@ -54,7 +54,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from tracker import capex, company_logo, delays, feed, watchlist
+from tracker import capex, company_logo, dedup, delays, feed, watchlist
 from tracker import supply as supply_mod
 from tracker.dedup import company_slug as slug
 from tracker.models import CapacityBlock, Project, Source
@@ -87,6 +87,10 @@ def rostered_names() -> dict[str, str]:
         if key:
             named.setdefault(key, operator.name)
     return named
+
+
+# A person's alias can fold a rostered spelling into another key.
+dedup.alias_listeners.append(rostered_names.cache_clear)
 
 
 def display_name(
@@ -170,6 +174,12 @@ def display_names(session: Session) -> Names:
     by_key.update(
         {key: display_name(key, spellings, roster=roster) for key, spellings in counts.items()}
     )
+    # The company registry has the last word (migration 0043): the same rule chose
+    # its names at the last `sync`, and a name a person set is only there. A key it
+    # does not hold yet — a company first named since — keeps the rule's answer.
+    from tracker import companies
+
+    by_key.update(companies.names(session))
     return Names(by_key)
 
 
@@ -399,10 +409,27 @@ def profile(
         s.url for s in sources.values()
     ]
     statuses = Counter(r["counted"]["status"] for r in rows)
+    # What the registry knows about the company itself (migration 0043): its kind,
+    # whose subsidiary it is and which are its, and the other ways the rows write it.
+    from tracker import companies
+
+    family = companies.family(session, key)
+    written = Counter()
+    for project, _via in matched.values():
+        for raw, of in (
+            (project.company, capex.company_key),
+            (project.customer, capex.customer_key),
+        ):
+            if raw and of(raw) == key and raw.strip() != name:
+                written[raw.strip()] += 1
     return {
         "slug": wanted,
         "key": key,
         "name": name,
+        "kind": family["kind"],
+        "parent": family["parent"],
+        "subsidiaries": family["subsidiaries"],
+        "also_written": [spelling for spelling, _ in written.most_common(12)],
         "domain": company_logo.website(key, urls),
         "states": Counter(r["state"] for r in rows if r["state"]).most_common(),
         "phases": Counter(r["phase"] for r in rows if r["phase"]).most_common(),

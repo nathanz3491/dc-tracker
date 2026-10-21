@@ -210,7 +210,11 @@ const place = (p) => (p.city || (p.county ? p.county + " Co." : "")) + (p.state 
  * (`company.display_names` — the roster's, else the spelling most rows use), not
  * whichever of NTT's eight spellings this row's source happened to use. */
 const companyName = (p) => p.company_name || p.company;
-const customerName = (p) => p.customer_name || p.customer;
+/* Null when the tenant the field names has left (`customer_former`, migration 0044):
+ * every surface that asks "who buys this campus now" reads that as nobody. */
+const customerName = (p) => p.customer_former ? null : (p.customer_name || p.customer);
+/* "Cyxtera, until 2023 — lease rejected": who the field still names, and why not now. */
+const formerText = (f) => `${f.name}${f.ended_on ? `, until ${f.ended_on.slice(0, 4)}` : ""}`;
 /*: A risk category in a reader's words, and its severity separately.
  *
  * The table printed the stored pair verbatim — `grid_capacity/blocking`,
@@ -1660,12 +1664,15 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
                            onClick=${() => onOpenCompany(p.company_slug)}>${companyName(p)}</button>`
             : html`<span style=${{ fontSize: 14, fontWeight: 500 }}>${companyName(p)}</span>`}
           ${filedAs(p.company, companyName(p))}
-          ${p.customer && p.customer_slug && p.customer_slug !== p.company_slug && onOpenCompany && html`
+          ${customerName(p) && p.customer_slug && p.customer_slug !== p.company_slug && onOpenCompany && html`
             <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>for</span>
             <button type="button" class="dc-linkish" style=${{ fontSize: 14 }}
                     title=${`Every campus of ${customerName(p)}`}
                     onClick=${() => onOpenCompany(p.customer_slug)}>${customerName(p)}</button>
             ${filedAs(p.customer, customerName(p))}`}
+          ${p.customer_former && html`
+            <span style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}
+                  title=${p.customer_former.reason || ""}>formerly for ${formerText(p.customer_former)}</span>`}
           <span style=${{ color: "var(--border)" }}>·</span>
           <span class="dc-num" style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
             ${place(p)}${p.iso ? " · " + p.iso : ""}</span>
@@ -1792,7 +1799,11 @@ function PartyList({ p }) {
   const [pop, setPop] = useState(null);
   //: Tapped stays until dismissed; hovered follows the pointer — as `useQuote`.
   const sticky = useRef(false);
-  const parties = p.parties || [];
+  /* A role that has ended — a former tenant (migration 0044) — is listed apart,
+   * with when and why: still part of the campus's story, no longer its buyer. */
+  const all = p.parties || [];
+  const parties = all.filter((x) => !x.ended_reason);
+  const gone = all.filter((x) => x.ended_reason);
   const fresh = parties.filter((x) => partyIsNew(x));
   const roles = [...PARTY_ROLES,
     ...[...new Set(parties.map((x) => x.role))]
@@ -1879,6 +1890,15 @@ function PartyList({ p }) {
               <div style=${{ display: "flex", flexWrap: "wrap", gap: 6, minWidth: 0 }}>${list.map(name)}</div>
             </div>`;
         })}
+        ${gone.length > 0 && html`
+          <div style=${{ display: "grid", gridTemplateColumns: "150px minmax(0,1fr)", gap: 14,
+                         alignItems: "baseline", padding: "9px 20px", borderTop: "1px solid var(--border)" }}>
+            <span style=${{ fontSize: 12.5, fontWeight: 600, color: "var(--muted-foreground)" }}>Former</span>
+            <span style=${{ fontSize: 13, lineHeight: "20px", color: "var(--muted-foreground)" }}>
+              ${gone.map((x) => `${x.name} (${partyRoleLabel(x.role).toLowerCase()}${
+                x.ended_on ? `, until ${x.ended_on.slice(0, 4)}` : ""}) — ${x.ended_reason}`).join(" · ")}
+            </span>
+          </div>`}
         <p style=${{ margin: 0, padding: "9px 20px 11px", borderTop: "1px solid var(--border)",
                      fontSize: 12, color: "var(--muted-foreground)" }}>
           Hover or tap a name for the sentence behind it. A dashed outline is a role nobody
@@ -3187,6 +3207,10 @@ function ProjectSummary({ p, onQuote, onOpenCompany, onJump, populated, open }) 
           <dd>
             ${buyers.length
               ? html`<span>${buyers.map((b, i) => html`${i ? ", " : ""}${company(b.name, b.slug)}`)}</span>`
+              : p.customer_former
+              ? html`<span class="dc-quiet">none now</span>
+                  <span class="dc-fact-note" title=${p.customer_former.reason || ""}>
+                    formerly ${formerText(p.customer_former)}${p.customer_former.reason ? ` — ${p.customer_former.reason}` : ""}</span>`
               : p.customer
               ? figure("customer", customerName(p))
               : html`<span class="dc-quiet">none named</span>`}
@@ -3801,6 +3825,23 @@ function BlocksTab({ p, admin = false, onRuled }) {
           </div>
         </details>`}
 
+      ${/* The relationships this campus does not yet close (`tracker/invariants.py`):
+            each said in a sentence, with what breaks it here. */ ""}
+      ${(p.relations || []).length > 0 && html`
+        <details class="dc-fold">
+          <summary>${p.relations.length} relationship${p.relations.length === 1 ? "" : "s"} not yet closed
+            <span class="dc-quiet"> — how this campus's figures relate (勾稽关系)</span></summary>
+          <div class="dc-fold-body">
+            ${p.relations.map((r, i) => html`
+              <div key=${i} class="dc-recon-row" style=${{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+                <span>${r.statement} <span class="dc-quiet">${r.zh}</span></span>
+                <span class="dc-quiet">${r.detail}</span>
+              </div>`)}
+            <p class="dc-tr-note" style=${{ marginTop: 8 }}><a href="/help" target="_blank" rel="noopener">How the figures relate</a> is in the help.
+              None of these changes a figure on this page; each says what the sources do not yet settle.</p>
+          </div>
+        </details>`}
+
       ${/* The utility's plant, folded under the campus it serves. Entergy building
             2,262 MW of gas for Hyperion is one of the most important facts about that
             campus, and it is not the campus's capacity: a plant's output and a data
@@ -3978,7 +4019,14 @@ function CompanyMark({ slug, name, size = 64 }) {
  * Laid out as a profile rather than a report: who it is (mark, name, website),
  * four numbers, then the campuses beside where they are and what stage they are
  * at, then what moved on them recently. */
-function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
+/* A company named on another's page, opened in place. */
+function CompanyLink({ co, onOpenCompany }) {
+  return onOpenCompany
+    ? html`<button type="button" class="dc-linkish" onClick=${() => onOpenCompany(co.slug)}>${co.name}</button>`
+    : html`<a href=${`/companies/${co.slug}`}>${co.name}</a>`;
+}
+
+function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany }) {
   const [state, setState] = useState({ loading: true, company: null, error: null });
   const [busy, setBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
@@ -4093,6 +4141,15 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged }) {
                    class="dc-co-site">${c.domain} ↗</a>`}
               <span>${summary}</span>
             </div>
+            ${/* The company as an entity (migration 0043): whose subsidiary it is, which
+                  are its, and the other ways sources write its name. */ ""}
+            ${(c.parent || (c.subsidiaries || []).length > 0 || (c.also_written || []).length > 0) && html`
+              <div class="dc-co-family">
+                ${c.parent && html`<span>Part of <${CompanyLink} co=${c.parent} onOpenCompany=${onOpenCompany} /></span>`}
+                ${(c.subsidiaries || []).length > 0 && html`<span>Subsidiaries: ${c.subsidiaries.map((s, i) => html`${i ? ", " : ""}<${CompanyLink}
+                  key=${s.slug} co=${s} onOpenCompany=${onOpenCompany} />`)}</span>`}
+                ${(c.also_written || []).length > 0 && html`<span class="dc-quiet">Also written ${c.also_written.join(" · ")}</span>`}
+              </div>`}
           </div>
           ${c.allow_watch && html`
             <button type="button" class=${`dc-star dc-star--wide${c.watching ? " dc-star--on" : ""}`}
@@ -6903,7 +6960,7 @@ function App() {
                                                   onListChanged=${watch.refresh} />`}
         ${view === "company" && companySlug && html`
           <${CompanyPage} slug=${companySlug} data=${data} onOpen=${openProject}
-                          onGoto=${goto} onListChanged=${watch.refresh} />`}
+                          onGoto=${goto} onListChanged=${watch.refresh} onOpenCompany=${openCompany} />`}
         ${/* One project's page, or the table. The page fetches its own detail, so it
               needs the id rather than a row out of the list payload. */ ""}
         ${view === "projects" && projectId != null && projectSub === "sources"

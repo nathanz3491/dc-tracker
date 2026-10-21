@@ -292,19 +292,34 @@ def rebuild(session: Any, project: Any) -> int:
     from one article is no evidence the obstacle cleared — which is why risks are
     never dropped this way and parties are.
     """
-    from tracker.models import ProjectParty
+    from sqlalchemy import select
+
+    from tracker.models import PartyTenure, ProjectParty
 
     wanted = parties_by_key(list(project.sources))
     existing = {(p.party_key, p.role): p for p in list(project.parties)}
+    # Whose role here has ended (migration 0044): a decision, so it lives in its own
+    # table and is copied onto the rebuilt rows rather than lost with them.
+    ended = {}
+    if getattr(project, "id", None) is not None:
+        ended = {
+            (t.party_key, t.role): t
+            for t in session.scalars(
+                select(PartyTenure).where(PartyTenure.project_id == project.id)
+            )
+        }
     changed = 0
 
     for slot, party in wanted.items():
         row = existing.pop(slot, None)
+        tenure = ended.get(slot)
         fresh = {
             "name": party.name,
             "quote": party.quote,
             "unconfirmed": party.unconfirmed,
             "source_id": party.source_id,
+            "ended_on": tenure.ended_on if tenure is not None else None,
+            "ended_reason": tenure.reason if tenure is not None else None,
         }
         if row is None:
             project.parties.append(ProjectParty(party_key=party.key, role=party.role, **fresh))
@@ -324,12 +339,54 @@ def rebuild(session: Any, project: Any) -> int:
     return changed
 
 
-def of_role(parties: list[Any], role: str) -> list[Any]:
-    """Every party in one role, confirmed ones first."""
+def of_role(parties: list[Any], role: str, *, former: bool = False) -> list[Any]:
+    """Every current party in one role, confirmed ones first.
+
+    A party whose role here has ended — a former tenant (migration 0044) — is left
+    out unless `former` asks for it: every reader of this means "who is it now".
+    """
     return sorted(
-        (p for p in parties if p.role == role),
+        (
+            p
+            for p in parties
+            if p.role == role and (former or getattr(p, "ended_reason", None) is None)
+        ),
         key=lambda p: (p.unconfirmed is not None, p.party_key),
     )
+
+
+def former(parties: list[Any]) -> list[Any]:
+    """The parties whose role here has ended, by role then name."""
+    return sorted(
+        (p for p in parties if getattr(p, "ended_reason", None) is not None),
+        key=lambda p: (p.role, p.party_key),
+    )
+
+
+def former_customer(project: Any) -> Any | None:
+    """The ended customer party that `project.customer` still names, if it does.
+
+    The column is whichever tenant name reached it first, and sources keep naming a
+    tenant after it has gone — Cyxtera at Comstock. Every reader of "who buys this
+    campus now" asks this first, so the page, Capex, the company pages and a watch
+    all drop a former tenant together (`current_customer`).
+    """
+    from tracker.dedup import customer_key
+
+    key = customer_key(getattr(project, "customer", None))
+    if not key:
+        return None
+    for party in former(list(getattr(project, "parties", ()) or ())):
+        if party.role == "customer" and key in (party.party_key, customer_key(party.name)):
+            return party
+    return None
+
+
+def current_customer(project: Any) -> str | None:
+    """`project.customer`, unless the tenant it names has left (`former_customer`)."""
+    if former_customer(project) is not None:
+        return None
+    return getattr(project, "customer", None)
 
 
 def operator_party(parties: list[Any]) -> Any | None:
@@ -492,17 +549,129 @@ def _identifying_keys(project: Any) -> set[str]:
 
 
 def buying_keys(project: Any) -> set[str]:
-    """Party keys that could hold a capex position. Excludes utility and contractor."""
+    """Party keys that could hold a capex position. Excludes utility and contractor,
+    and a party whose role here has ended."""
     rows = list(getattr(project, "parties", ()) or ())
-    return {p.party_key for p in rows if p.party_key and p.role in PARTY_ROLES_BUYING}
+    return {
+        p.party_key
+        for p in rows
+        if p.party_key and p.role in PARTY_ROLES_BUYING and getattr(p, "ended_reason", None) is None
+    }
+
+
+class TenureError(ValueError):
+    """A role that cannot be ended or resumed, in words a person can act on."""
+
+
+def find_party(project: Any, text: str, role: str | None = None) -> list[Any]:
+    """The party rows a person meant: by key or by name, optionally in one role."""
+    from tracker.dedup import company_key as key_of
+
+    wanted = key_of(text) or (text or "").strip().lower()
+    return [
+        p
+        for p in getattr(project, "parties", ()) or ()
+        if p.party_key == wanted and (role is None or p.role == role)
+    ]
+
+
+def end_role(
+    session: Any,
+    project: Any,
+    party: str,
+    role: str,
+    *,
+    reason: str,
+    by: str,
+    ended_on: Any = None,
+    source_id: int | None = None,
+) -> Any:
+    """Record that a party's role on this campus has ended. Idempotent per role.
+
+    The party stays on the page as former and stays evidence of which campus this
+    is; it stops being a current buyer. Rebuilds the campus's parties so every
+    surface reads it at once.
+    """
+    from sqlalchemy import select
+
+    from tracker.dedup import company_key as key_of
+    from tracker.models import PartyTenure, utcnow
+
+    if role not in PARTY_ROLES:
+        raise TenureError(f"role must be one of {', '.join(PARTY_ROLES)}")
+    if not (reason or "").strip():
+        raise TenureError("a reason is required: why the role ended")
+    if not (by or "").strip():
+        raise TenureError("an ended role records who decided it")
+    key = key_of(party)
+    if not key:
+        raise TenureError(f"{party!r} names no company")
+    if not find_party(project, party, role):
+        raise TenureError(f"#{project.id} names no {role} {party!r}")
+    row = session.scalar(
+        select(PartyTenure).where(
+            PartyTenure.project_id == project.id,
+            PartyTenure.party_key == key,
+            PartyTenure.role == role,
+        )
+    )
+    if row is None:
+        row = PartyTenure(project_id=project.id, party_key=key, role=role, reason=reason)
+        session.add(row)
+    row.reason = " ".join(reason.split())[:400]
+    row.ended_on = ended_on
+    row.source_id = source_id
+    row.decided_by = by.strip()
+    row.decided_at = utcnow()
+    session.flush()
+    _refresh(session, project)
+    return row
+
+
+def resume_role(session: Any, project: Any, party: str, role: str) -> bool:
+    """Take back an ended role: the party is current again. True if one was ended."""
+    from sqlalchemy import select
+
+    from tracker.dedup import company_key as key_of
+    from tracker.models import PartyTenure
+
+    row = session.scalar(
+        select(PartyTenure).where(
+            PartyTenure.project_id == project.id,
+            PartyTenure.party_key == key_of(party),
+            PartyTenure.role == role,
+        )
+    )
+    if row is None:
+        return False
+    session.delete(row)
+    session.flush()
+    _refresh(session, project)
+    return True
+
+
+def _refresh(session: Any, project: Any) -> None:
+    from tracker import companies
+
+    rebuild(session, project)
+    reconcile(project)
+    companies.attach(session, project)
+    session.flush()
 
 
 __all__ = [
     "INFERRED_ROLE",
     "Party",
+    "TenureError",
     "buying_keys",
+    "current_customer",
     "customer_party",
+    "end_role",
+    "find_party",
+    "former",
+    "former_customer",
     "keys_for",
+    "named_buyers",
     "of_role",
     "operator_party",
     "parse",
@@ -510,5 +679,6 @@ __all__ = [
     "party_key",
     "rebuild",
     "reconcile",
+    "resume_role",
     "shared_across_companies",
 ]

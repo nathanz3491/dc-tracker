@@ -1646,6 +1646,11 @@ button.dc-tile:disabled { cursor: default; }
   display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline;
   font-size: 13.5px; color: var(--muted-foreground);
 }
+/* Parent, subsidiaries and other spellings under a company's name (migration 0043). */
+.dc-co-family {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12.5px; color: var(--muted-foreground);
+}
+.dc-co-family .dc-linkish { font-size: inherit; padding: 0; }
 .dc-co-site { color: var(--primary); text-decoration: none; font-family: var(--font-mono); font-size: 12.5px; }
 .dc-co-site:hover { text-decoration: underline; text-underline-offset: 2px; }
 .dc-co-stats {

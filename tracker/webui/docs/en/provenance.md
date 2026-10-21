@@ -54,3 +54,20 @@ Each campus is rebuilt from what all its sources say, never edited by hand a lit
 5. Then the field's own rule: the latest and strongest source for most fields, the largest for running capacity (it only grows), the earliest for the announcement date.
 
 The project page's **N other claims** shows every competing value and which was kept. [Field dictionary](fields) gives each field's rule.
+
+## Every statement, in one table
+
+Behind the page, every statement each source makes — a campus figure, a tranche's capacity or date, a company's role, a milestone, an obstacle — is kept as one row with the same columns, whatever it is about: what it is about, the value, how far it can be trusted, the sentence, the citation, and whether it is the value the campus shows. Since 22 October 2026 this table is rebuilt from the sources every time a campus is written, so it always matches the page.
+
+How far a statement can be trusted, most first:
+
+| Tier | Meaning |
+| --- | --- |
+| **confirmed** | Quoted, and from a first-hand source. |
+| **directory** | Quoted, but from a directory or digest that gathers other sources. |
+| **derived** | Worked out from a public dataset, such as the Census place a town sits in — not stated. |
+| **inferred** | A role nobody stated, read off the operator or buyer column. |
+| **unconfirmed** | 待确认: stated, but no sentence backs it. |
+| **ruled out** | Decided against: about something else, or replaced by a later statement. |
+
+It is the master data the figures are chosen from, including every value that lost, and it can be downloaded: per campus from the API (`GET /v1/projects/{id}/facts`, see [API reference](api-reference)), or whole with `tracker export facts`.

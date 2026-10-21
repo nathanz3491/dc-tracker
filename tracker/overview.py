@@ -137,6 +137,11 @@ def fingerprint(project: Project) -> str:
     parts += sorted(f"{e.event_type}:{e.event_date}" for e in project.events or ())
     parts += sorted(f"{r.category}:{r.status}" for r in project.risks or ())
     parts += sorted(s.url for s in project.sources or ())
+    # A role that has ended changes who the briefing names as the buyer. Adds
+    # nothing for a campus with none, so every other briefing keeps its hash.
+    from tracker.parties import former
+
+    parts += [f"ended:{p.role}:{p.party_key}" for p in former(list(project.parties or ()))]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
@@ -150,6 +155,17 @@ def _remember(overview: Overview, *, key: str | None = None) -> None:
     if len(_cache) >= CACHE_SIZE:
         _cache.pop(next(iter(_cache)))
     _cache[key if key is not None else f"{overview.project_id}"] = overview
+
+
+def _customer_now(project: Project, show) -> str:
+    """The buyer as the page states it: a tenant whose role has ended is history."""
+    from tracker.parties import former_customer
+
+    gone = former_customer(project)
+    if gone is None:
+        return show(project.customer)
+    until = f" until {gone.ended_on.year}" if gone.ended_on else ""
+    return f"none now (formerly {gone.name}{until}: {gone.ended_reason})"
 
 
 def build_context(project: Project) -> dict[str, str]:
@@ -208,7 +224,7 @@ def build_context(project: Project) -> dict[str, str]:
         "project_id": str(project.id),
         "name": show(project.name),
         "company": show(project.company),
-        "customer": show(project.customer),
+        "customer": _customer_now(project, show),
         "location": f"{project.city or project.county or 'unknown'}, {project.state}",
         "mw_planned": show(project.mw_planned),
         "mw_built": show(project.mw_built),
@@ -478,7 +494,10 @@ def build_position_context(position: Any, projects: list[Project]) -> dict[str, 
     shape = [f"{len(projects)} site(s) counted"]
     if unsized:
         shape.append(f"{unsized} of them with no cited capacity at all")
-    operators = {p.company for p in projects}
+    # Companies, not spellings: "Meta" and "Meta Platforms" are one operator.
+    from tracker.dedup import company_key
+
+    operators = {company_key(p.company) or p.company for p in projects}
     if len(operators) > 1:
         shape.append(f"{len(operators)} different operators build them")
 

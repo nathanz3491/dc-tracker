@@ -12,7 +12,8 @@ Every endpoint of the API, version 1. All are `GET`, answer JSON, and live under
 | `GET /v1/projects` | Campuses, filtered, sorted and paged. |
 | `GET /v1/projects/{id}` | One campus in full, each field with its source. |
 | `GET /v1/projects/{id}/sources` | Every citation behind one campus. |
-| `GET /v1/companies/{slug}` | One company's campuses and recent news. |
+| `GET /v1/projects/{id}/facts` | Every statement its sources make about one campus, one row each. |
+| `GET /v1/companies/{slug}` | One company: what it is, its campuses and recent news. |
 | `GET /v1/capex` | Capacity and investment by buyer. |
 | `GET /v1/updates` | Recent news on your watchlist. |
 
@@ -108,7 +109,7 @@ One campus: everything a summary has, plus:
 | Key | Meaning |
 | --- | --- |
 | `fields` | Each tracked field as `{value, label, quote, quote_is_exact, source_url}`, plus `scope`, `bound`, `modality`, `as_of`, `basis` or `date_precision` where they say something. `label` is `quoted`, `derived`, `unconfirmed`, `inferred`, `default`, `missing` or `not_applicable`. |
-| `parties` | Companies involved: `name`, `role` (`developer`, `owner`, `operator`, `customer`, `utility`, `contractor`), `quote`, and `confirmed`. |
+| `parties` | Companies involved: `name`, `role` (`developer`, `owner`, `operator`, `customer`, `utility`, `contractor`), `quote`, `confirmed`, and `ended_on` and `ended_reason` — null, or when and why the role ended (a former tenant, a sold site). A customer whose role has ended is not the campus's buyer: [Capex](capex) and the company pages credit it nothing. The `customer` field keeps what the sources say. |
 | `tranches` | Buildings and phases: `label`, `status`, `mw`, `mw_counted` (whether that capacity is in the campus total), `customer`, `expected_online`, `energized_on`, `investment_usd`. |
 | `obstacles` | `category`, `severity`, `status`, `summary`, `quote`, `first_seen`, `resolved_at`. |
 | `milestones` | `date`, `type`, `description`, `quote`, and `confirmed`. |
@@ -139,9 +140,39 @@ A `quote_is_exact` of `false` means the text is the source's excerpt rather than
 
 Every citation: `url`, `type` (`company_filing`, `government_doc`, `trade_press`, `general_media`, `iso_queue` or `manual`), `published_at`, `fetched_at`, `excerpt`, and `quotes` — the sentence recorded for each field the source supports.
 
+## GET /v1/projects/{id}/facts
+
+Every statement the campus's sources make, one row each, whatever it is about — the master data behind every figure on the page, including the ones the page does not show. See [Where a value came from](provenance).
+
+| Key | Meaning |
+| --- | --- |
+| `entity`, `entity_key` | What the statement is about: `campus`; a `tranche` (its key); a `party` (the company's key, with the role in `field`); a `milestone` (its type); an `obstacle` (its category). |
+| `field`, `value`, `number`, `unit` | The field, the value as stated, the value as a number where it is one, and its unit (`MW`, `USD`, `date`…). |
+| `tier`, `reason` | How far it can be trusted: `confirmed`, `directory`, `derived`, `inferred`, `unconfirmed` or `ruled_out`, and why when it is not confirmed. |
+| `held` | Whether this is the value the campus shows. |
+| `as_of`, `source_url`, `source_type`, `quote`, `axes` | When it was true, the citation, the sentence, and the scope, bound and measure it was read with. |
+
+```json
+{
+  "data": [
+    {
+      "entity": "campus", "entity_key": "", "field": "mw_planned",
+      "value": "900", "number": 900.0, "unit": "MW",
+      "tier": "confirmed", "reason": null, "held": true,
+      "as_of": "2026-09-01", "source_url": "https://news.example.com/north/",
+      "source_type": "company_filing", "quote": "will draw 900 MW", "axes": null
+    }
+  ]
+}
+```
+
+Several rows with the same `entity`, `entity_key` and `field` are sources disagreeing; the one with `held: true` is the value the merge kept, and [Fields and evidence](project-page) on the campus's page says why.
+
 ## GET /v1/companies/{slug}
 
-A company's page as data: `name`, `website`, `totals` (campuses, as operator and as tenant, planned and running MW, open obstacles), `states`, `phases`, its `projects` (each with its role, phase, capacity, obstacles and `suspected_delay`), `updates` reported in the last two months, and `suspected_delays` — `count`, the `mw_planned` those campuses hold, and their `project_ids`, most overdue first. The slug is the company's name in lowercase with hyphens, as in the console's address for it: `compass-datacenters`.
+A company's page as data: `name`, `website`, `totals` (campuses, as operator and as tenant, planned and running MW, open obstacles), `states`, `phases`, its `projects` (each with its role, phase, capacity, obstacles and `suspected_delay`), `updates` reported in the last two months, and `suspected_delays` — `count`, the `mw_planned` those campuses hold, and their `project_ids`, most overdue first. The slug is the one in the console's address for the company: `compass` for Compass Datacenters, `amazon` for Amazon and AWS alike.
+
+What the tracker records about the company itself: `kind` (`hyperscaler`, `landlord`, `neocloud`, `ai_lab`, `utility`, `contractor`, or null), `parent` and `subsidiaries` (each `{name, slug}`), and `also_written` — the other spellings its campuses' sources use. A parent's figures do not include its subsidiaries': each company's capacity is its own campuses, as on [Capex](capex).
 
 `name` is the company's one name, the same on every page; each project also carries `company_name` and `customer_name` beside the source's own `company` and `customer`. The planned and running MW in `totals` are counted as on [Capex](capex) — a suspected duplicate once, paused and cancelled campuses not at all, a tenant credited with its own tranches — and `totals.counting` splits them into `capex_row` (the company's row in `/v1/capex`) and `no_named_buyer` (campuses it builds that name no buyer), with how many campuses were set aside as `duplicates`, `stopped` (paused or cancelled) or counted for another buyer (`elsewhere`). Each project's `counted` says what it adds: `status` (`counted`, `part`, `elsewhere`, `duplicate` or `stopped`), `mw_planned`, `mw_built`, and `for` (the other buyers) or `of` (the campus a duplicate is counted as).
 

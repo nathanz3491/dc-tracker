@@ -4814,3 +4814,28 @@ def test_past_and_present_wording_states_the_phase(phase, sentence):
 )
 def test_a_forecast_or_a_lookalike_does_not_state_the_phase(phase, sentence):
     assert not crawl._stated_in("phase", phase, sentence)
+
+
+def test_a_write_that_would_break_a_held_relationship_is_refused_alone(
+    session, prompt, monkeypatch
+):
+    """Step 4.6: the record is rolled back and counted, the run goes on, and the page
+    is left read-but-not-written so a re-read after the fix writes it."""
+    from tracker import invariants
+
+    def refuse(session_, record, **_kwargs):
+        raise invariants.HeldBroken(None, [])
+
+    monkeypatch.setattr(crawl, "upsert_record", refuse)
+    report = crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        run_id="held",
+    )
+    assert (report.held_refused, report.written) == (1, 0)
+    assert ("refused: would break a held relationship", 1) in report.as_rows()
+    row = session.scalar(select(IngestUrl))
+    assert row.status == "parse_error" and "write refused" in (row.error or "")
+    assert session.scalar(select(func.count()).select_from(Project)) == 0

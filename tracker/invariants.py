@@ -504,6 +504,110 @@ def check(
     return out
 
 
+# --- one campus, on the write path ------------------------------------------------
+
+
+class HeldBroken(RuntimeError):
+    """A write would leave a campus breaking a relationship the tracker guarantees.
+
+    The held relationships hold by construction — the write path is what enforces
+    them — so this is a bug in the tracker, never a fact about the world, and the
+    write is refused rather than published (step 4.6 of the client plan). The crawl
+    rolls back the one record, counts it and names it; nothing else stops.
+    """
+
+    def __init__(self, project: Any, breaks: list[tuple[Invariant, Violation]]) -> None:
+        self.project_id = getattr(project, "id", None)
+        self.breaks = breaks
+        detail = "; ".join(f"{inv.key}: {v.detail}" for inv, v in breaks)
+        super().__init__(
+            f"#{self.project_id} would break {len(breaks)} held relationship(s): {detail}"
+        )
+
+
+def campus_breaks(project: Any, *, kind: str | None = None) -> list[tuple[Invariant, Violation]]:
+    """The relationships one campus breaks, read from the campus alone.
+
+    Every invariant below the company level can be checked on one row, with no
+    query — which is what lets the write path ask it of each row it writes, and the
+    project page list the ones a campus does not yet close.
+    """
+    context = _Context(None)
+    out: list[tuple[Invariant, Violation]] = []
+    for invariant in INVARIANTS:
+        if invariant.level == "company" or (kind is not None and invariant.kind != kind):
+            continue
+        out.extend((invariant, v) for v in invariant.check([project], context))
+    return out
+
+
+def enforce(project: Any) -> None:
+    """Raise `HeldBroken` if writing this campus would break a held relationship."""
+    breaks = campus_breaks(project, kind=HELD)
+    if breaks:
+        raise HeldBroken(project, breaks)
+
+
+# --- night by night ------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Change:
+    """One relationship's count now, and at the last record."""
+
+    invariant: Invariant
+    violations: int
+    mw: float
+    before: tuple[int, float] | None
+
+    @property
+    def line(self) -> str:
+        """One line of the morning report."""
+        now = f"{self.violations:,}" + (f" ({self.mw:,.0f} MW)" if self.mw else "")
+        if self.before is None:
+            change = "first count"
+        else:
+            d_count, d_mw = self.violations - self.before[0], self.mw - self.before[1]
+            if not d_count and abs(d_mw) < _TOLERANCE_MW:
+                change = "unchanged"
+            else:
+                change = f"{d_count:+,}" + (f", {d_mw:+,.0f} MW" if abs(d_mw) >= 1 else "")
+        return f"{self.invariant.key:<26} {now:<22} {change}"
+
+
+def record(session: Any, findings: list[Finding]) -> list[Change]:
+    """Keep tonight's counts (`invariant_tally`) and say how each moved since the last."""
+    from sqlalchemy import select
+
+    from tracker.models import InvariantTally, utcnow
+
+    changes = []
+    now = utcnow()
+    for finding in findings:
+        key = finding.invariant.key
+        last = session.scalars(
+            select(InvariantTally)
+            .where(InvariantTally.key == key)
+            .order_by(InvariantTally.taken_at.desc(), InvariantTally.id.desc())
+            .limit(1)
+        ).first()
+        changes.append(
+            Change(
+                finding.invariant,
+                len(finding.violations),
+                finding.mw,
+                (last.violations, last.mw) if last is not None else None,
+            )
+        )
+        session.add(
+            InvariantTally(
+                taken_at=now, key=key, violations=len(finding.violations), mw=round(finding.mw, 1)
+            )
+        )
+    session.flush()
+    return changes
+
+
 def report_json(findings: list[Finding], *, limit: int | None = 10) -> dict[str, Any]:
     return {
         "as_of": dt.date.today().isoformat(),
@@ -516,9 +620,14 @@ __all__ = [
     "HELD",
     "INVARIANTS",
     "REPORTED",
+    "Change",
     "Finding",
+    "HeldBroken",
     "Invariant",
     "Violation",
+    "campus_breaks",
     "check",
+    "enforce",
+    "record",
     "report_json",
 ]
