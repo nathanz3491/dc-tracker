@@ -186,6 +186,8 @@ _ADMIN = re.compile(r"\b(count(?:y|ies)|parish(?:es)?|boroughs?)\b", re.I)
 _CODENAME = re.compile(r"\bproject\s+[a-z0-9][\w-]*", re.I)
 _COARSE = re.compile(r"\b(week|month|year)s?\s+ago\b", re.I)
 _WORDS = re.compile(r"[^A-Za-z0-9\u00c0-\u024f]+")
+#: A builder's site code: "IAD3", "MP2", "AZ15", "VA-2" (split to "VA 2").
+_SITE_CODE = re.compile(r"[A-Za-z]{1,4} ?\d{1,3}[A-Za-z]?")
 
 _SUFFIX = re.compile(
     r"[,\s]+(inc|incorporated|l\.?l\.?c|corp|corporation|co|company|ltd|limited|l\.?l\.?p|l\.?p|plc)\.?$",
@@ -339,6 +341,13 @@ def _names(project: Project) -> list[str]:
     "Gateway". A phrase made only of descriptive words (:data:`_VAGUE`), a state's
     name, or the company's own name under another spelling is dropped: each would
     widen the query to everything the company does.
+
+    **A phrase of four letters or fewer is dropped too, unless it is a site code
+    or the campus's whole name.** "One" in "Houston One", "Edge", "Meta" in
+    "Hillsboro Meta Campus" are words, not names. But "IAD3", "MP2" and "AZ15" are
+    how the trade press names a building (:data:`_SITE_CODE`), and "Dojo" and "Lux"
+    are the campus's entire name: until 2026-10-22 all of them were dropped, so
+    Tesla's go-live search never said "Dojo" and could not find its shutdown.
     """
     from tracker.dedup import company_key
     from tracker.ingest.discover import _GENERIC_NAME_TOKENS, _company_words
@@ -367,12 +376,16 @@ def _names(project: Project) -> list[str]:
                 phrases.append([])
             continue
         phrases[-1].append(word)
+    meaningful = [w for w in _WORDS.split(name) if w and w.lower() not in generic]
     kept = []
     for words in phrases:
         phrase = " ".join(words)
         low = phrase.lower()
+        short = len(phrase) <= 4 and not (
+            _SITE_CODE.fullmatch(phrase) or (len(phrase) > 2 and words == meaningful)
+        )
         if (
-            len(phrase) <= 4
+            short
             or set(low.split()) <= _VAGUE
             or low in states
             or (own and company_key(phrase) == own)

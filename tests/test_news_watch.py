@@ -459,6 +459,24 @@ def test_the_query_names_the_company_as_the_press_does_and_the_place():
     assert watch.anchor(Project(name="Data Center Campus", company="Acme")) is None
 
 
+def test_a_site_code_or_a_short_whole_name_is_searched_and_a_short_word_is_not():
+    """Tesla's go-live search never said "Dojo" and could not find its shutdown; a
+    DataBank building is "IAD3" in the trade press. "One" in "Houston One" is a word."""
+    dojo = Project(name="Dojo", company="Tesla", city="Palo Alto")
+    assert watch.anchor(dojo) == '"Tesla" ("Palo Alto" OR "Dojo")'
+    mp2 = Project(name="Savvis MP2", company="Savvis", city="Shakopee")
+    assert watch.anchor(mp2) == '"Savvis" ("Shakopee" OR "MP2")'
+    split = Project(name="VA-2", company="Iron Mountain", city="Manassas")
+    assert watch.anchor(split) == '"Iron Mountain" ("Manassas" OR "VA 2")'
+    for name, city in (
+        ("Houston One", "Houston"),
+        ("Hillsboro Meta Campus", "Hillsboro"),
+        ("San Antonio Edge Data Center", "San Antonio"),
+    ):
+        row = Project(name=name, company="Acme", city=city, state="TX")
+        assert watch.anchor(row) == f'"Acme" "{city}"', name
+
+
 def test_a_follow_up_asks_for_the_dates_since_the_last_look_newest_first():
     """Google's fixed windows rank a page of ten by relevance; a busy place's older
     stories could fill it and push out the one published since the last look."""

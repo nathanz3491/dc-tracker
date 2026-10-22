@@ -939,6 +939,16 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus is searched for by its site code, or by a short name that is its whole
+  name** (`tracker/ingest/watch.py` `_names`, `_SITE_CODE`; `tests/test_news_watch.py`).
+  The news watch and the go-live search dropped every campus name of four letters or
+  fewer, to keep words like "One" in "Houston One" out of the query. That also dropped
+  how the trade press names a building ("IAD3", "MP2", "AZ15") and campuses whose
+  whole name is short: Tesla's go-live search never said "Dojo", so it could not find
+  the news that Dojo was shut down. A site code, or a short name that is the campus's
+  entire name, is now searched; a short word inside a longer name still is not. 73 of
+  832 campuses' nightly queries gain the term, 66 of them a site code; none costs an
+  extra search.
 - **A late campus's search results are read before anything else in the queue**
   (`tracker/ingest/discover.py` `deciding`, `pending`; `docs/workflows/sync.md` +
   `sync.svg`; `tests/test_news_watch.py`). A campus past its date is flagged once its
