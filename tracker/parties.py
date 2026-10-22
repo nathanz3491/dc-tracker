@@ -48,6 +48,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -268,10 +269,9 @@ def first_cited(sources: list[Any]) -> dict[str, dt.date]:
     """
     out: dict[str, dt.date] = {}
     for source in sources:
-        when = getattr(source, "published_at", None) or getattr(source, "fetched_at", None)
-        if when is None:
+        day = _cited_on(source)
+        if day is None:
             continue
-        day = when.date() if isinstance(when, dt.datetime) else when
         declared = [
             party_key(str(entry.get("name") or "").strip())
             for entry in parse(getattr(source, "parties", None))
@@ -280,6 +280,215 @@ def first_cited(sources: list[Any]) -> dict[str, dt.date]:
         for key in keys:
             if key not in out or day < out[key]:
                 out[key] = day
+    return out
+
+
+def _cited_on(source: Any) -> dt.date | None:
+    """The day a citation counts from: the article's publication, else when it was read."""
+    when = getattr(source, "published_at", None) or getattr(source, "fetched_at", None)
+    if when is None:
+        return None
+    return when.date() if isinstance(when, dt.datetime) else when
+
+
+#: How long a party counts as newly named: the project page's *new* mark and the
+#: company page's list both read thirty days. The Updates page asks for the window
+#: it is showing — a week, a month or two months.
+NEW_DAYS: int = 30
+
+
+def newly_named(
+    session: Any,
+    *,
+    days: int = NEW_DAYS,
+    roles: Iterable[str] | None = None,
+    project_ids: Iterable[int] | None = None,
+    today: dt.date | None = None,
+    names: Any = None,
+) -> dict[str, Any]:
+    """Companies a source named on a campus for the first time in the last `days`.
+
+    The portfolio form of the project page's *new* mark (client review,
+    2026-10-21/22: "recently mentioned new suppliers"). A new contractor or utility
+    on a known campus is news a reader of one campus could already see; this is the
+    same reading across every campus, or across one company's (`project_ids`), so a
+    reader can ask which suppliers are winning new work this month.
+
+    **"First named" is `first_cited`, unchanged.** The earliest citation of the
+    campus that names the party, dated by the article's publication where recorded,
+    so an old article the crawler only just read does not make an old supplier new
+    — the same rule the Updates page applies to everything else it calls news.
+
+    **One entry per company, however many campuses named it.** Grouped by party key
+    (`dedup.company_key`), so Turner on three campuses is one line listing three,
+    and printed under the company registry's one name where it has one. Each campus
+    keeps its own role, date, sentence and source, and says whether the campus
+    itself is new to the tracker in the window — a party on a campus first reported
+    this month is new because the campus is, which is a different piece of news
+    from a new supplier on a campus already followed.
+
+    **Left out: a role that has ended** (`ended_reason`, migration 0044). A former
+    tenant is not a newly named one, however recent the article that named it.
+
+    `roles` narrows to some of `vocab.PARTY_ROLES`; None is every role, suppliers
+    (`vocab.PARTY_ROLES_SUPPLYING`) first, then by date. The console opens on the
+    suppliers and offers the rest as filters — see `NewPartiesPanel` in `app.js`.
+    A 待确认 role is kept and says so (`unconfirmed`), as the project page shows it:
+    the name is in the article even where the role was not licensed by its wording.
+
+    **Three narrow reads, whatever the fleet's size**: the citations of every campus
+    with a citation in the window (bare columns, no rows hydrated), the current
+    parties of those campuses with their campus and source, and the one-name table.
+    No per-campus query — the trap `capex.working_set` records — and nothing loaded
+    for a campus no recent article touched.
+    """
+    from sqlalchemy import func, select
+
+    from tracker import delays
+    from tracker.models import Project, ProjectParty, Source
+    from tracker.vocab import PARTY_ROLES_SUPPLYING
+
+    wanted = tuple(PARTY_ROLES) if roles is None else tuple(dict.fromkeys(roles))
+    for role in wanted:
+        if role not in PARTY_ROLES:
+            raise ValueError(f"unknown role {role!r}: one of {', '.join(PARTY_ROLES)}")
+    if days < 1:
+        raise ValueError("days must be at least 1")
+    today = today or delays.as_of()
+    since = today - dt.timedelta(days=days)
+    out: dict[str, Any] = {"days": days, "since": since.isoformat(), "parties": []}
+    if not wanted:
+        return out
+
+    # The campuses a citation in the window touches. A party first named in the
+    # window was named by such a citation, so no other campus can hold one.
+    when = func.coalesce(Source.published_at, Source.fetched_at)
+    touched = select(Source.project_id).where(when >= dt.datetime.combine(since, dt.time.min))
+    if project_ids is not None:
+        scope = sorted(set(project_ids))
+        if not scope:
+            return out
+        touched = touched.where(Source.project_id.in_(scope))
+    touched = touched.distinct()
+
+    # Every citation of those campuses, because "first" needs the old ones too.
+    cited: dict[int, list[Any]] = {}
+    for row in session.execute(
+        select(
+            Source.project_id,
+            Source.parties,
+            Source.claims,
+            Source.published_at,
+            Source.fetched_at,
+        ).where(Source.project_id.in_(touched))
+    ):
+        cited.setdefault(row.project_id, []).append(row)
+    fresh: dict[tuple[int, str], dt.date] = {}
+    new_campus: set[int] = set()
+    for pid, rows in cited.items():
+        for key, day in first_cited(rows).items():
+            if day >= since:
+                fresh[(pid, key)] = day
+        days_cited = [d for d in map(_cited_on, rows) if d is not None]
+        if days_cited and min(days_cited) >= since:
+            new_campus.add(pid)
+    if not fresh:
+        return out
+
+    if names is None:
+        from tracker.company import display_names
+
+        names = display_names(session)
+
+    order = {role: i for i, role in enumerate(PARTY_ROLES)}
+    # (party key, campus) -> the campus entry; a company named in two roles on one
+    # campus is one campus entry, under the role it is likeliest to be read for.
+    campuses: dict[tuple[str, int], dict[str, Any]] = {}
+    spelled: dict[str, str] = {}
+    for row in session.execute(
+        select(
+            ProjectParty.project_id,
+            ProjectParty.party_key,
+            ProjectParty.name,
+            ProjectParty.role,
+            ProjectParty.quote,
+            ProjectParty.unconfirmed,
+            Source.url,
+            Project.name.label("campus"),
+            Project.company,
+            Project.city,
+            Project.county,
+            Project.state,
+        )
+        .join(Project, Project.id == ProjectParty.project_id)
+        .outerjoin(Source, Source.id == ProjectParty.source_id)
+        .where(
+            ProjectParty.project_id.in_(touched),
+            ProjectParty.ended_reason.is_(None),
+            ProjectParty.role.in_(wanted),
+        )
+    ):
+        day = fresh.get((row.project_id, row.party_key))
+        if day is None:
+            continue
+        rank = (row.unconfirmed is not None, order[row.role])
+        slot = (row.party_key, row.project_id)
+        entry = campuses.get(slot)
+        if entry is not None:
+            entry["roles"] = sorted({*entry["roles"], row.role}, key=order.__getitem__)
+            if rank >= entry["_rank"]:
+                continue
+        campuses[slot] = {
+            "_rank": rank,
+            "id": row.project_id,
+            "name": row.campus,
+            "company": names.company(row.company),
+            "place": row.city or row.county,
+            "state": row.state,
+            "role": row.role,
+            "roles": entry["roles"] if entry is not None else [row.role],
+            "first_cited": day.isoformat(),
+            "quote": row.quote,
+            "unconfirmed": row.unconfirmed,
+            "url": row.url,
+            "new_campus": row.project_id in new_campus,
+        }
+        if row.unconfirmed is None or row.party_key not in spelled:
+            spelled[row.party_key] = row.name
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for (key, _pid), entry in campuses.items():
+        entry.pop("_rank")
+        grouped.setdefault(key, []).append(entry)
+    parties_out = []
+    for key, entries in grouped.items():
+        entries.sort(
+            key=lambda e: (
+                -dt.date.fromisoformat(e["first_cited"]).toordinal(),
+                e["name"].casefold(),
+            )
+        )
+        held = sorted({r for e in entries for r in e["roles"]}, key=order.__getitem__)
+        parties_out.append(
+            {
+                "key": key,
+                "name": names.of_key(key, spelled[key]),
+                "roles": held,
+                "supplier": any(r in PARTY_ROLES_SUPPLYING for r in held),
+                "confirmed": any(e["unconfirmed"] is None for e in entries),
+                "latest": entries[0]["first_cited"],
+                "campuses": entries,
+            }
+        )
+    parties_out.sort(
+        key=lambda p: (
+            not p["supplier"],
+            -dt.date.fromisoformat(p["latest"]).toordinal(),
+            -len(p["campuses"]),
+            p["name"].casefold(),
+        )
+    )
+    out["parties"] = parties_out
     return out
 
 
@@ -661,6 +870,7 @@ def _refresh(session: Any, project: Any) -> None:
 
 __all__ = [
     "INFERRED_ROLE",
+    "NEW_DAYS",
     "Party",
     "TenureError",
     "buying_keys",
@@ -672,6 +882,7 @@ __all__ = [
     "former_customer",
     "keys_for",
     "named_buyers",
+    "newly_named",
     "of_role",
     "operator_party",
     "parse",

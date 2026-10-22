@@ -157,6 +157,13 @@ PartyRole = Literal[
 #: whether an operator is its own end user.
 PARTY_ROLES_BUYING: Final[frozenset[str]] = frozenset({"customer", "operator", "owner"})
 
+#: Roles that sell something *to* a campus rather than build, hold or buy it: the
+#: contractor (construction, engineering, equipment — the project page's
+#: "Contractors & suppliers") and the utility (its power). What the client means by
+#: a campus's suppliers (2026-10-22), and what `parties.newly_named` lists first.
+#: Disjoint from `PARTY_ROLES_BUYING`, and the test suite says so.
+PARTY_ROLES_SUPPLYING: Final[frozenset[str]] = frozenset({"contractor", "utility"})
+
 #: The role `parties.derive_company` reads first, then in order. `project.company`
 #: is NOT NULL, so this ladder must be total over any non-empty party set that
 #: contains one of these — `derive_company` falls back to the stored value

@@ -65,6 +65,10 @@ A tenant's share uses the campus's own date; a tranche's separate date is not ye
 
 When any of the company's campuses is a suspected delay — its own online date has passed and nothing reported since says it is running — a **Suspected delays** section lists them, most overdue first: the campus, its expected online date as the source stated it, how many days late it is, and its phase. The heading counts them and says how much planned capacity they hold between them. Hover a row for the reason; click it to open the campus. The section is left out when there are none. [Numbers and dates](numbers-and-dates) gives the rule.
 
+## Newly mentioned suppliers
+
+**Newly mentioned suppliers** names the companies a source named on one of these campuses for the first time in the last 30 days — a new contractor, utility or tenant — the company itself left out. It reads exactly like the section of the same name on [Updates](updates): one line per company, each campus with the company's role there, the date it was first named and the article, the sentence on hover or tap, and **Suppliers / Customers / Builders & owners / All** to choose the roles. It opens on suppliers: contractors and utilities.
+
 ## Recent news
 
 **Reported in the last two months** lists the updates about these campuses, the same cards as on [Updates](updates).

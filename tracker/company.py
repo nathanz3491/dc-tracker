@@ -468,6 +468,13 @@ def profile(
         ):
             if raw and of(raw) == key and raw.strip() != name:
                 written[raw.strip()] += 1
+    # Who its campuses' sources named for the first time this month — a new
+    # contractor, utility or tenant (`parties.newly_named`). The company itself is
+    # left out: Meta named on a Meta campus is not news about Meta's suppliers.
+    from tracker import parties as parties_mod
+
+    new_parties = parties_mod.newly_named(session, project_ids=ids, today=today, names=names)
+    new_parties["parties"] = [p for p in new_parties["parties"] if p["key"] != key]
     return {
         "slug": wanted,
         "key": key,
@@ -511,6 +518,7 @@ def profile(
         # added to the totals above, which must keep adding up to Capex.
         "builds": _builds(built, today=today, suspected=late_by_id),
         "updates": [s.as_json() for s in feed.rank(feed.fold(signals))][:20],
+        "new_parties": new_parties,
         # The campuses whose own online date has passed with nothing saying they
         # run, most overdue first, and the capacity they hold — counted as the
         # totals above count it, so a twin or a tenant's one building is not the

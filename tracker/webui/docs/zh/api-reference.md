@@ -176,6 +176,8 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 
 `name` 是公司唯一的名称，在每个页面上都相同；每个项目除来源原文的 `company` 和 `customer` 外，还带有 `company_name` 和 `customer_name`。`totals` 中规划和运行的兆瓦数按 [Capex](capex)（资本支出）的方式计算——疑似重复的园区只算一次，暂停和取消的园区不计入，租户只计入自己的分期——`totals.counting` 把它们拆成 `capex_row`（该公司在 `/v1/capex` 中的那一行）和 `no_named_buyer`（它建设、但没有具名买方的园区），并给出因 `duplicates`（重复）、`stopped`（暂停或取消）或计入其他买方（`elsewhere`）而被搁置的园区数量。每个项目的 `counted` 说明它贡献了什么：`status`（`counted`、`part`、`elsewhere`、`duplicate` 或 `stopped`）、`mw_planned`、`mw_built`，以及 `for`（其他买方）或 `of`（重复项所归入的园区）。
 
+`new_parties` 即页面上的 *Newly mentioned suppliers*（最近被提到的新供应商）：过去 `days`（30）天内（自 `since` 起）首次被来源点名出现在这些园区之一上的公司，公司本身不计在内。`parties` 每家公司一项 —— 先列供应商（承包商和电力公司），再按日期从新到旧 —— 包含 `key`、`name`（它唯一的名称）、`roles`、`supplier`、`confirmed`（至少在一个园区上有原句支持其角色时为 true）、`latest`（它在某个园区上首次被提到的最近日期）和 `campuses`。每个园区包含 `id`、`name`、`company`（其运营方）、`place`、`state`、`role` 和 `roles`（该公司在那里的角色）、`first_cited`、`quote`、`unconfirmed`（null、`role_inferred`，或该角色为何是待确认）、`url`（文章）以及 `new_campus`（园区本身在该时间窗口内首次被报道时为 true）。角色已结束的不会列出。
+
 ## GET /v1/capex
 
 以数据形式提供的 [Capex](capex)（资本支出）。`buyers` 中每个买方一行，包括 `(no named customer)`：

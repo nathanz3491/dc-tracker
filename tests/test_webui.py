@@ -5260,6 +5260,66 @@ def test_a_company_nobody_builds_for_is_a_404(server):
     assert request(address, "/api/company?slug=Not_A_Slug")[0] == 400
 
 
+def _new_contractor(db_path, *, name="Turner Construction", role="contractor"):
+    """A citation read two days ago naming a new party on Fairwater."""
+    from tracker.db import open_db
+    from tracker.ingest.records import PartyRecord
+    from tracker.models import utcnow
+
+    with session_scope(open_db(db_path, readonly=False)) as session:
+        upsert_record(
+            session,
+            IngestRecord(
+                project={
+                    "company": "Microsoft",
+                    "name": "Fairwater",
+                    "city": "Mount Pleasant",
+                    "state": "WI",
+                },
+                sources=[
+                    SourceRecord(
+                        url=f"https://example.test/{role}",
+                        source_type="trade_press",
+                        fetched_at=utcnow() - dt.timedelta(days=2),
+                        excerpt=f"{name} is the {role}.",
+                        claims={"name": "Fairwater", "company": "Microsoft"},
+                        parties=[PartyRecord(name=name, role=role, quote=f"{name} is the {role}.")],
+                    )
+                ],
+            ),
+        )
+
+
+def test_newly_named_suppliers_have_their_own_route(server, seeded_db):
+    """The Updates page's section: every campus, one entry per company, each campus
+    with its role, date, sentence and source. Cached, so a new commit must show."""
+    address, _ = server
+    status, before = request(address, "/api/new-parties")
+    assert status == 200 and before["days"] == 30 and before["parties"] == []
+
+    _new_contractor(seeded_db)
+    _new_contractor(seeded_db, name="WE Energies", role="utility")
+    status, body = request(address, "/api/new-parties?days=7")
+    assert status == 200 and body["days"] == 7
+    names = [p["name"] for p in body["parties"]]
+    assert names == ["Turner Construction", "WE Energies"], "one day, so by name"
+    (campus,) = body["parties"][0]["campuses"]
+    assert campus["name"] == "Fairwater" and campus["role"] == "contractor"
+    assert campus["quote"] == "Turner Construction is the contractor."
+    assert campus["url"] == "https://example.test/contractor"
+    assert campus["new_campus"] is False, "Fairwater was first cited in January"
+
+    _status, only = request(address, "/api/new-parties?days=7&role=utility")
+    assert [p["name"] for p in only["parties"]] == ["WE Energies"]
+    for bad in ("days=0", "days=soon", "days=400", "role=landlord"):
+        assert request(address, f"/api/new-parties?{bad}")[0] == 400, bad
+
+    # The company page carries the same list for its own campuses, itself left out.
+    _status, company = request(address, "/api/company?slug=microsoft")
+    listed = [p["name"] for p in company["new_parties"]["parties"]]
+    assert "Turner Construction" in listed and "Microsoft" not in listed
+
+
 def test_a_company_path_cannot_inject_script_into_the_shell(server):
     """Same rule as the project path: only a slug can reach the interpolation."""
     address, _ = server

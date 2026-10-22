@@ -19,7 +19,10 @@ drifts to whatever is cheapest to say.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+
+import pytest
 
 from tracker import parties
 from tracker.models import Project, ProjectParty, Source, utcnow
@@ -27,6 +30,7 @@ from tracker.vocab import (
     COMPANY_ROLE_ORDER,
     PARTY_ROLES,
     PARTY_ROLES_BUYING,
+    PARTY_ROLES_SUPPLYING,
 )
 
 # --- vocabulary -------------------------------------------------------------
@@ -599,3 +603,217 @@ def test_the_export_carries_when_each_party_was_first_named(session):
     (party,) = to_json_object(project)["parties"]
     assert party["name"] == "Oracle"
     assert party["first_cited"] == project.sources[0].fetched_at.date().isoformat()
+
+
+# --- newly named across campuses ---------------------------------------------
+
+
+def _dated(session, project, entries, *, days_ago, url, published_days_ago=None):
+    """A citation read `days_ago` days ago, optionally published earlier."""
+    now = utcnow()
+    row = Source(
+        project_id=project.id,
+        url=url,
+        source_type="trade_press",
+        fetched_at=now - dt.timedelta(days=days_ago),
+        published_at=(
+            now - dt.timedelta(days=published_days_ago) if published_days_ago is not None else None
+        ),
+        parties=json.dumps(entries, ensure_ascii=False),
+    )
+    session.add(row)
+    session.flush()
+    session.refresh(project)
+    return row
+
+
+def _campus(session, n):
+    return _project(
+        session, name=f"Campus {n}", city=f"Town {n}", dedup_key=f"crusoe|city:town {n}|TX"
+    )
+
+
+def _named(name, role, quote=None, **extra):
+    return {"name": name, "role": role, "quote": quote or f"{name} is the {role}.", **extra}
+
+
+def test_the_supplying_roles_sell_to_a_campus_and_never_buy_it():
+    assert set(PARTY_ROLES) >= PARTY_ROLES_SUPPLYING
+    assert not PARTY_ROLES_SUPPLYING & PARTY_ROLES_BUYING
+
+
+def test_a_company_named_on_several_campuses_is_one_entry(session):
+    """Turner on two campuses is one line listing both, newest first, under the
+    registry's one name — and each campus keeps its own sentence and source."""
+    from tracker.models import Company
+
+    a, b = _campus(session, 1), _campus(session, 2)
+    _dated(session, a, [], days_ago=200, url="https://example.test/a-old")
+    _dated(
+        session,
+        a,
+        [_named("Turner Construction", "contractor")],
+        days_ago=12,
+        url="https://example.test/a-new",
+    )
+    _dated(
+        session,
+        b,
+        [_named("Turner Construction Co.", "contractor", "Turner Construction Co. will build it.")],
+        days_ago=3,
+        url="https://example.test/b",
+    )
+    for project in (a, b):
+        parties.rebuild(session, project)
+    session.add(Company(key=parties.party_key("Turner Construction"), name="Turner"))
+    session.flush()
+
+    got = parties.newly_named(session, days=30)
+    assert got["days"] == 30
+    (turner,) = [p for p in got["parties"] if p["key"] == "turner construction"]
+    assert turner["name"] == "Turner"
+    assert turner["roles"] == ["contractor"] and turner["supplier"] is True
+    assert [c["name"] for c in turner["campuses"]] == ["Campus 2", "Campus 1"]
+    assert turner["latest"] == turner["campuses"][0]["first_cited"]
+    newest, older = turner["campuses"]
+    assert newest["quote"] == "Turner Construction Co. will build it."
+    assert newest["url"] == "https://example.test/b"
+    assert newest["new_campus"] is True, "campus 2's only citation is in the window"
+    assert older["new_campus"] is False, "campus 1 was first cited 200 days ago"
+
+
+def test_only_a_first_mention_inside_the_window_is_new(session):
+    """Named again last week is not named for the first time, and an old article the
+    crawler only just read is dated by its publication — as the project page does."""
+    campus = _campus(session, 1)
+    turner = _named("Turner Construction", "contractor")
+    _dated(session, campus, [turner], days_ago=90, url="https://example.test/old")
+    _dated(session, campus, [turner], days_ago=2, url="https://example.test/again")
+    _dated(
+        session,
+        campus,
+        [_named("Entergy Louisiana", "utility")],
+        days_ago=1,
+        published_days_ago=400,
+        url="https://example.test/archive",
+    )
+    _dated(
+        session,
+        campus,
+        [_named("Oncor", "utility")],
+        days_ago=40,
+        url="https://example.test/month-ago",
+    )
+    parties.rebuild(session, campus)
+
+    assert parties.newly_named(session, days=30)["parties"] == []
+    assert [p["name"] for p in parties.newly_named(session, days=60)["parties"]] == ["Oncor"]
+
+
+def test_a_role_that_has_ended_is_not_newly_named(session):
+    """A former tenant is not a new one, however recent the article naming it."""
+    campus = _campus(session, 1)
+    _dated(
+        session,
+        campus,
+        [_named("Oracle", "customer"), _named("Turner Construction", "contractor")],
+        days_ago=5,
+        url="https://example.test/a",
+    )
+    parties.rebuild(session, campus)
+    parties.end_role(session, campus, "Oracle", "customer", reason="lease ended", by="test")
+
+    keys = {p["key"] for p in parties.newly_named(session)["parties"]}
+    assert "oracle" not in keys
+    assert "turner construction" in keys
+
+
+def test_the_role_filter_and_suppliers_first(session):
+    campus = _campus(session, 1)
+    _dated(
+        session,
+        campus,
+        [_named("Oracle", "customer"), _named("Turner Construction", "contractor")],
+        days_ago=5,
+        url="https://example.test/a",
+    )
+    _dated(session, campus, [_named("Oncor", "utility")], days_ago=20, url="https://example.test/b")
+    parties.rebuild(session, campus)
+
+    every = [p["name"] for p in parties.newly_named(session)["parties"]]
+    # Suppliers first, newest first among them; then everybody else.
+    assert every[:2] == ["Turner Construction", "Oncor"]
+    assert "Oracle" in every[2:]
+    only = parties.newly_named(session, roles=["customer"])["parties"]
+    assert [p["name"] for p in only] == ["Oracle"]
+    assert parties.newly_named(session, roles=[])["parties"] == []
+    with pytest.raises(ValueError, match="unknown role"):
+        parties.newly_named(session, roles=["landlord"])
+    with pytest.raises(ValueError, match="at least 1"):
+        parties.newly_named(session, days=0)
+
+
+def test_a_refused_role_is_kept_and_says_so(session):
+    """The name is in the article even where its wording did not license the role."""
+    campus = _campus(session, 1)
+    _dated(
+        session,
+        campus,
+        [
+            _named(
+                "MUFG",
+                "contractor",
+                "MUFG served as administrative agent.",
+                unconfirmed="quote_off_target",
+            )
+        ],
+        days_ago=4,
+        url="https://example.test/a",
+    )
+    parties.rebuild(session, campus)
+
+    (mufg,) = parties.newly_named(session, roles=["contractor"])["parties"]
+    assert mufg["confirmed"] is False
+    assert mufg["campuses"][0]["unconfirmed"] == "quote_off_target"
+
+
+def test_newly_named_is_scoped_to_campuses_and_reads_in_constant_queries(session):
+    """The company page asks for its own campuses; and no campus costs a query of
+    its own — the trap `capex.working_set` records."""
+    from sqlalchemy import event
+
+    from tracker.company import Names
+
+    campuses = [_campus(session, n) for n in range(1, 5)]
+    for n, campus in enumerate(campuses, 1):
+        _dated(
+            session,
+            campus,
+            [_named(f"Builder {n}", "contractor")],
+            days_ago=n,
+            url=f"https://example.test/{n}",
+        )
+        parties.rebuild(session, campus)
+    session.flush()
+
+    scoped = parties.newly_named(session, project_ids=[campuses[0].id], roles=["contractor"])
+    assert [p["name"] for p in scoped["parties"]] == ["Builder 1"]
+    assert parties.newly_named(session, project_ids=[])["parties"] == []
+
+    statements: list[str] = []
+
+    def count(_conn, _cursor, statement, *_args):
+        statements.append(statement)
+
+    engine = session.get_bind()
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        one = parties.newly_named(session, project_ids=[campuses[0].id], names=Names())
+        n_one = len(statements)
+        statements.clear()
+        four = parties.newly_named(session, names=Names())
+        n_four = len(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert len(one["parties"]) < len(four["parties"])
+    assert n_one == n_four == 2

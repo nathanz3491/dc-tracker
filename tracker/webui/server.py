@@ -1612,6 +1612,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._publishers()
         if route == "/api/updates":
             return self._updates(query)
+        if route == "/api/new-parties":
+            return self._new_parties(query)
         if route in {"/api/monitor", "/api/watch-for"}:
             # The second is the old name, for a tab still running the bundle
             # from before the rename.
@@ -2759,6 +2761,18 @@ class Handler(BaseHTTPRequestHandler):
             "when their last one went, so the page can split 'new since your email' "
             "from the rest.",
         },
+        "GET /api/new-parties": {
+            "answers": "companies a source named on a campus for the first time in the "
+            "window — suppliers first — one entry per company, each campus with its role, "
+            "date, sentence and source",
+            "reads": "parties.newly_named — the citations of the campuses a citation in the "
+            "window touches, and those campuses' current parties: two queries and the "
+            "one-name table, whatever the fleet's size",
+            "note": "?days=<n> (30 by default, 1 to 365), ?role=contractor,utility (any of "
+            "the party roles; all by default). Dated by first citation, publication date "
+            "first, as the project page's 'new' mark is. Every campus tracked, not only the "
+            "watchlist. Cached until the database changes or the day turns.",
+        },
         "GET /api/monitor": {
             "answers": "every followed project's open obstacles reported in the last "
             "60 days and the milestone that would clear each, most obstructed first, "
@@ -2773,7 +2787,9 @@ class Handler(BaseHTTPRequestHandler):
             "reported in the last 60 days",
             "reads": "company.profile — matched the way a watchlist entry matches, "
             "megawatts counted as on Capex (capex.credits over the cached rollup)",
-            "note": "?slug=compass-datacenters. The page is /companies/<slug>.",
+            "note": "?slug=compass-datacenters. The page is /companies/<slug>. "
+            "`new_parties` is /api/new-parties for its campuses over 30 days, the "
+            "company itself left out.",
         },
         "GET /api/company-logo": {
             "answers": "the company's own site icon, as an image; 404 when none is found",
@@ -3367,6 +3383,48 @@ class Handler(BaseHTTPRequestHandler):
         payload["days"] = days
         payload["allow_watch"] = self.console.allow_watch and account_id is not None
         self._json(payload)
+
+    def _new_parties(self, query: dict[str, list[str]]) -> None:
+        """Companies newly named on a campus, across every campus tracked.
+
+        The Updates page's "Newly mentioned suppliers", asked for with the page's own
+        window. Its own route rather than a key of `/api/updates`: that answer is per
+        reader and never cached, this one is the same for everybody, so it is cached
+        until the database changes — and the day turns, because the window moves
+        with it. A failure costs the page one section, not its updates.
+
+        Every role comes back and the page filters, because each role's chip shows
+        its count; `?role=` is for a caller that wants one kind.
+        """
+        from tracker import delays, parties
+        from tracker.vocab import PARTY_ROLES
+
+        days = parties.NEW_DAYS
+        raw_days = (query.get("days") or [""])[0]
+        if raw_days:
+            try:
+                days = int(raw_days)
+            except ValueError:
+                return self._error(400, f"days must be a whole number, not {raw_days!r}")
+            if not 1 <= days <= 365:
+                return self._error(400, "days must be from 1 to 365")
+        roles: tuple[str, ...] | None = None
+        raw_roles = (query.get("role") or [""])[0].strip()
+        if raw_roles:
+            roles = tuple(r.strip().lower() for r in raw_roles.split(",") if r.strip())
+            unknown = [r for r in roles if r not in PARTY_ROLES]
+            if unknown:
+                return self._error(
+                    400, f"role {unknown[0]!r} is not one of {', '.join(PARTY_ROLES)}"
+                )
+            roles = tuple(sorted(set(roles)))
+        today = delays.as_of()
+
+        def fresh() -> dict[str, Any]:
+            with self.console.read_session() as session:
+                return parties.newly_named(session, days=days, roles=roles, today=today)
+
+        self._json(self.console.cached(("new_parties", days, roles, today), fresh))
 
     def _email_json(
         self, session: Any, account_id: int | None, payload: dict[str, Any]

@@ -59,6 +59,19 @@ Each update is a card:
 
 At the bottom, **Show N unconfirmed — nobody could quote them** reveals updates that were reported but could not be backed by a sentence from the article. They are shown faded and are never emailed. See [Where a value came from](provenance).
 
+## Newly mentioned suppliers
+
+Below the list, **Newly mentioned suppliers** names the companies a source named on a campus for the first time in the window — on **every campus tracked**, not only those on your watchlist. It follows the **week / month / 2 months** control.
+
+- **One line per company**, however many campuses named it. Under its name, each campus: the company's role there, the campus (click to open [its page](project-page)) with its operator and place, the date the company was first named on it, and the article's publisher (↗ opens the article).
+- **Hover or tap a name**, or a campus, for the sentence that named it.
+- **Suppliers / Customers / Builders & owners / All** choose which roles to list, each with its count. *Suppliers* are contractors and utilities, and are what the section opens on: every campus new to the tracker brings its own developer, owner and operator, which is news about the campus rather than about who supplies it. A newly named *customer* is a new tenant — one tap away for that reason.
+- **campus new to the tracker** marks a campus first reported in the window: every company on it is new because the campus is. Without it, the company is a new name on a campus the tracker already followed.
+- *First named* means the first time any citation of that campus named the company, dated by the article's publication date — so an old article found this week does not make an old supplier new. It is the same rule as the **new** mark on a [project's page](project-page). A company whose role on a campus has ended, such as a former tenant, is not listed.
+- **Show N more … (待确认)** reveals companies named only in sentences that do not support the role they were given — a bank filed as a contractor, for instance. The name is in the article; the role is unconfirmed. A company confirmed on one campus is listed, its other campuses marked 待确认.
+
+The twelve most recent are shown; **Show all** lists the rest. A [company's page](companies) has the same section for its own campuses.
+
 ## The morning email
 
 At **8:00 China Standard Time** each day the tracker emails you what is new and worth emailing on your watchlist, if you have not already been sent it.

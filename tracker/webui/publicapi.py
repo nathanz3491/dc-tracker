@@ -413,6 +413,10 @@ def company(session: Session, slug: str, prefix: str, *, tally: Any = None) -> d
         ],
         "updates": profile["updates"],
         "suspected_delays": profile["suspected_delays"],
+        # Companies its campuses' sources named for the first time in the last 30
+        # days — suppliers first — as on the company page (`parties.newly_named`).
+        # Additive.
+        "new_parties": profile["new_parties"],
     }
 
 

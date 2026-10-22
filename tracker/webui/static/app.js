@@ -1790,6 +1790,7 @@ const PARTY_ROLES = [
   ["operator", "Operator"], ["developer", "Developer"], ["owner", "Owner"],
   ["customer", "Customer"], ["contractor", "Contractors & suppliers"], ["utility", "Utility"],
 ];
+/* `parties.NEW_DAYS`: a company page's *Newly mentioned suppliers* reads the same thirty days. */
 const NEW_PARTY_DAYS = 30;
 
 function partyIsNew(party, now = Date.now()) {
@@ -1799,19 +1800,25 @@ function partyIsNew(party, now = Date.now()) {
 
 const partyRoleLabel = (role) => (PARTY_ROLES.find(([r]) => r === role) || [role, role])[1];
 
-function PartyList({ p }) {
+/* A role with no sentence behind it (inferred from the operator or customer column)
+ * reads as an inference; one a sentence was offered for and would not support reads
+ * as 待确认. Shared by every list of party names, so one cannot launder the other. */
+const partyInferred = (party) => party.unconfirmed === "role_inferred";
+const partyRefused = (party) => party.unconfirmed != null && !partyInferred(party);
+
+const partyChipStyle = (party) => ({
+  display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 10px",
+  borderRadius: 999, border: `1px ${partyInferred(party) ? "dashed" : "solid"} var(--border)`,
+  background: "transparent", font: "inherit", fontSize: 13.5, lineHeight: "22px",
+  cursor: "pointer", color: partyRefused(party) ? "var(--warning)" : "var(--foreground)",
+});
+
+/* The sentence behind a party name, on hover or tap: hovered follows the pointer,
+ * tapped stays until dismissed — as `useQuote`. Returns the popover's state for
+ * `PartyPop` and the handler a name's events call (`show(null)` to leave). */
+function usePartyPop() {
   const [pop, setPop] = useState(null);
-  //: Tapped stays until dismissed; hovered follows the pointer — as `useQuote`.
   const sticky = useRef(false);
-  /* A role that has ended — a former tenant (migration 0044) — is listed apart,
-   * with when and why: still part of the campus's story, no longer its buyer. */
-  const all = p.parties || [];
-  const parties = all.filter((x) => !x.ended_reason);
-  const gone = all.filter((x) => x.ended_reason);
-  const fresh = parties.filter((x) => partyIsNew(x));
-  const roles = [...PARTY_ROLES,
-    ...[...new Set(parties.map((x) => x.role))]
-      .filter((r) => !PARTY_ROLES.some(([known]) => known === r)).map((r) => [r, r])];
 
   const show = (event, party, opts = {}) => {
     if (event === null) {
@@ -1849,25 +1856,33 @@ function PartyList({ p }) {
     };
   }, [pop?.sticky, pop?.key]);
 
-  const name = (party) => {
-    const inferred = party.unconfirmed === "role_inferred";
-    const refused = party.unconfirmed != null && !inferred;
-    return html`
-      <button key=${party.role + party.key} type="button" class="dc-party"
-              aria-label=${`${party.name}, ${partyRoleLabel(party.role)}: show the sentence`}
-              onMouseEnter=${(e) => show(e, party)} onMouseLeave=${() => show(null)}
-              onFocus=${(e) => show(e, party)} onBlur=${() => show(null)}
-              onClick=${(e) => show(e, party, { sticky: true })}
-              style=${{ display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 10px",
-                        borderRadius: 999, border: `1px ${inferred ? "dashed" : "solid"} var(--border)`,
-                        background: "transparent", font: "inherit", fontSize: 13.5, lineHeight: "22px",
-                        cursor: "pointer", color: refused ? "var(--warning)" : "var(--foreground)" }}>
-        ${party.name}
-        ${partyIsNew(party) && html`<span style=${{ ...chip("--success"), height: 18, padding: "0 6px",
-          fontSize: 10.5 }}>new</span>`}
-        ${refused && html`<span style=${{ fontFamily: "var(--font-mono)", fontSize: 11 }}>待确认</span>`}
-      </button>`;
-  };
+  return [pop, show];
+}
+
+function PartyList({ p }) {
+  const [pop, show] = usePartyPop();
+  /* A role that has ended — a former tenant (migration 0044) — is listed apart,
+   * with when and why: still part of the campus's story, no longer its buyer. */
+  const all = p.parties || [];
+  const parties = all.filter((x) => !x.ended_reason);
+  const gone = all.filter((x) => x.ended_reason);
+  const fresh = parties.filter((x) => partyIsNew(x));
+  const roles = [...PARTY_ROLES,
+    ...[...new Set(parties.map((x) => x.role))]
+      .filter((r) => !PARTY_ROLES.some(([known]) => known === r)).map((r) => [r, r])];
+
+  const name = (party) => html`
+    <button key=${party.role + party.key} type="button" class="dc-party"
+            aria-label=${`${party.name}, ${partyRoleLabel(party.role)}: show the sentence`}
+            onMouseEnter=${(e) => show(e, party)} onMouseLeave=${() => show(null)}
+            onFocus=${(e) => show(e, party)} onBlur=${() => show(null)}
+            onClick=${(e) => show(e, party, { sticky: true })}
+            style=${partyChipStyle(party)}>
+      ${party.name}
+      ${partyIsNew(party) && html`<span style=${{ ...chip("--success"), height: 18, padding: "0 6px",
+        fontSize: 10.5 }}>new</span>`}
+      ${partyRefused(party) && html`<span style=${{ fontFamily: "var(--font-mono)", fontSize: 11 }}>待确认</span>`}
+    </button>`;
 
   return html`
     <${Card}>
@@ -1915,8 +1930,8 @@ function PartyList({ p }) {
 function PartyPop({ pop }) {
   if (!pop) return null;
   const { party } = pop;
-  const inferred = party.unconfirmed === "role_inferred";
-  const refused = party.unconfirmed != null && !inferred;
+  const inferred = partyInferred(party);
+  const refused = partyRefused(party);
   return html`
     <div class="dc-pop" style=${{
       position: "fixed", zIndex: 70, left: pop.x, top: pop.y, width: "min(400px, 86vw)",
@@ -1934,9 +1949,160 @@ function PartyPop({ pop }) {
           : inferred ? "Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."
           : "No sentence was kept for this role."}
       </p>
+      ${party.where && html`
+        <p style=${{ margin: "8px 0 0", fontSize: 12.5, color: "var(--muted-foreground)" }}>
+          on ${party.where}</p>`}
       ${party.first_cited && html`
         <p style=${{ margin: "8px 0 0", fontFamily: "var(--font-mono)", fontSize: 11,
                      color: "var(--muted-foreground)" }}>first cited ${party.first_cited}</p>`}
+    </div>`;
+}
+
+/* Companies newly named on a campus, across many campuses (client review,
+ * 2026-10-22: "recently mentioned new suppliers").
+ *
+ * The portfolio form of the project page's *new* mark, computed on the server
+ * (`parties.newly_named`): one line per company however many campuses named it, each
+ * campus with its role, the date it was first cited, a link to the campus and to the
+ * article, and the sentence on hover or tap. Shown on Updates (every campus) and on a
+ * company page (its campuses).
+ *
+ * **Opens on suppliers** — contractors and utilities, `vocab.PARTY_ROLES_SUPPLYING`.
+ * They are what the client asked for, and with every role at once they are buried:
+ * each newly reported campus brings its own developer, owner and operator, which are
+ * news about the campus rather than about who supplies it. Customers are one tap away
+ * and their chip carries their count, because a newly named tenant is a demand signal
+ * an investor wants as much as a new supplier.
+ *
+ * **A 待确认 company waits behind a button**, as an unconfirmed update does on this
+ * page: its name is in the article, but no sentence there supports the role, and a
+ * bank filed as a contractor is not a supplier. A company with one confirmed campus
+ * is listed, its other campuses marked. */
+const NEW_PARTY_GROUPS = [
+  ["suppliers", "Suppliers", ["contractor", "utility"]],
+  ["customers", "Customers", ["customer"]],
+  ["builders", "Builders & owners", ["developer", "operator", "owner"]],
+  ["all", "All", null],
+];
+const NEW_PARTY_NOUN = {
+  suppliers: ["supplier", "suppliers"], customers: ["customer", "customers"],
+  builders: ["builder or owner", "builders and owners"], all: ["company", "companies"],
+};
+const NEW_PARTIES_SHOWN = 12;
+
+function narrowNewParties(list, roles) {
+  const out = [];
+  for (const party of list || []) {
+    const campuses = roles ? party.campuses.filter((c) => c.roles.some((r) => roles.includes(r))) : party.campuses;
+    if (campuses.length) out.push({ ...party, campuses });
+  }
+  return out;
+}
+
+function NewPartiesPanel({ payload, when, onOpen, scope, loading }) {
+  const [group, setGroup] = useState("suppliers");
+  const [all, setAll] = useState(false);
+  const [showHeld, setShowHeld] = useState(false);
+  const [pop, show] = usePartyPop();
+  const list = payload?.parties || [];
+  const isHeld = (p) => p.campuses.every(partyRefused);
+  // Each chip counts what it lists, as the heading does: the 待确认 ones are apart.
+  const counts = useMemo(() => Object.fromEntries(NEW_PARTY_GROUPS.map(([key, , roles]) =>
+    [key, narrowNewParties(list, roles).filter((p) => !isHeld(p)).length])), [list]);
+  const roles = (NEW_PARTY_GROUPS.find(([key]) => key === group) || NEW_PARTY_GROUPS[0])[2];
+  const narrowed = useMemo(() => narrowNewParties(list, roles), [list, roles]);
+  const held = narrowed.filter(isHeld);
+  const listed = narrowed.filter((p) => !isHeld(p));
+  const shown = all ? listed : listed.slice(0, NEW_PARTIES_SHOWN);
+  const [one, many] = NEW_PARTY_NOUN[group];
+  const host = (url) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return null; } };
+  const shownRole = (c) => (roles && c.roles.find((r) => roles.includes(r))) || c.role;
+  const popParty = (p, c) => ({ key: `${p.key}@${c.id}`, name: p.name, role: shownRole(c), quote: c.quote,
+    unconfirmed: c.unconfirmed, first_cited: c.first_cited,
+    where: [c.name, c.company, c.state].filter(Boolean).join(" · ") });
+
+  const row = (p) => {
+    // The name reads as its best evidence: a confirmed campus's sentence if it has one.
+    const lead = popParty(p, p.campuses.find((c) => !partyRefused(c)) || p.campuses[0]);
+    return html`
+      <div key=${p.key} style=${{ display: "flex", flexWrap: "wrap", gap: "6px 14px", alignItems: "baseline",
+                                   padding: "10px 20px", borderTop: "1px solid var(--border)" }}>
+        <div style=${{ flex: "0 0 210px", maxWidth: "100%", minWidth: 0 }}>
+          <button type="button" class="dc-party" style=${partyChipStyle(lead)}
+                  aria-label=${`${p.name}: show the sentence that named it`}
+                  onMouseEnter=${(e) => show(e, lead)} onMouseLeave=${() => show(null)}
+                  onFocus=${(e) => show(e, lead)} onBlur=${() => show(null)}
+                  onClick=${(e) => show(e, lead, { sticky: true })}>
+            ${p.name}
+            ${partyRefused(lead) && html`<span style=${{ fontFamily: "var(--font-mono)", fontSize: 11 }}>待确认</span>`}
+          </button>
+        </div>
+        <div style=${{ flex: "1 1 300px", minWidth: 0, display: "grid", gap: 4 }}>
+          ${p.campuses.map((c) => {
+            const party = popParty(p, c);
+            const site = c.url && host(c.url);
+            return html`
+              <div key=${c.id} style=${{ display: "flex", flexWrap: "wrap", gap: "2px 8px", alignItems: "baseline",
+                                         fontSize: 13, lineHeight: "20px" }}>
+                <span style=${{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: partyRefused(c)
+                                ? "var(--warning)" : "var(--muted-foreground)" }}>
+                  ${shownRole(c)}${partyRefused(c) ? " · 待确认" : partyInferred(c) ? " · inferred" : ""}</span>
+                <button type="button" class="dc-linkish" style=${{ fontWeight: 600 }}
+                        onMouseEnter=${(e) => show(e, party)} onMouseLeave=${() => show(null)}
+                        onClick=${() => onOpen(c.id)}>${c.name}</button>
+                <span style=${{ color: "var(--muted-foreground)" }}>
+                  ${[c.company, [c.place, c.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}
+                  ${c.new_campus ? " · campus new to the tracker" : ""}</span>
+                <span class="dc-num" style=${{ fontSize: 11.5, color: "var(--muted-foreground)" }}>${c.first_cited}</span>
+                ${site && html`<a href=${c.url} target="_blank" rel="noopener noreferrer"
+                                   style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>${site} ↗</a>`}
+              </div>`;
+          })}
+        </div>
+      </div>`;
+  };
+
+  return html`
+    <div style=${{ display: "grid", gap: 12 }}>
+      <${SectionHead} title=${`Newly mentioned ${many}`} count=${payload ? listed.length : null}>
+        Companies a source named on ${scope} for the first time ${when}, dated by the article
+        that first named them. Hover or tap a name for that sentence; the campus opens its page.
+      <//>
+      <div class="dc-seg" aria-label="which roles">
+        ${NEW_PARTY_GROUPS.map(([key, label]) => html`
+          <button key=${key} type="button" class="dc-seg-btn" aria-pressed=${group === key}
+                  onClick=${() => { setGroup(key); setAll(false); setShowHeld(false); }}>
+            ${label}${payload ? html` <span class="dc-num" style=${{ opacity: 0.7 }}>${counts[key]}</span>` : ""}
+          </button>`)}
+      </div>
+      ${loading && !payload && html`<${Skeleton} style=${{ height: 96 }} />`}
+      ${payload && html`
+        <${Card}>
+          <div style=${{ display: "grid", gap: 0 }}>
+            ${!listed.length && html`
+              <p style=${{ margin: 0, padding: "12px 20px", fontSize: 13, color: "var(--muted-foreground)" }}>
+                No ${one} was named for the first time ${when}${held.length
+                  ? " with a sentence that supports its role" : ""}.</p>`}
+            ${shown.map(row)}
+            ${listed.length > shown.length && html`
+              <div style=${{ padding: "9px 20px", borderTop: "1px solid var(--border)" }}>
+                <button type="button" class="dc-linkish" onClick=${() => setAll(true)}>
+                  Show all ${listed.length}</button>
+              </div>`}
+            ${held.length > 0 && html`
+              <div style=${{ padding: "9px 20px", borderTop: "1px solid var(--border)" }}>
+                <button type="button" class="dc-linkish" onClick=${() => setShowHeld((v) => !v)}>
+                  ${showHeld ? "Hide" : "Show"} ${held.length} more named in an article whose wording
+                  does not support the role (待确认)</button>
+              </div>`}
+            ${showHeld && html`<div style=${{ opacity: 0.8 }}>${held.map(row)}</div>`}
+            <p style=${{ margin: 0, padding: "9px 20px 11px", borderTop: "1px solid var(--border)",
+                         fontSize: 12, color: "var(--muted-foreground)" }}>
+              Suppliers are contractors and utilities. A campus new to the tracker brings all its
+              companies with it; the rest are new names on campuses already followed.</p>
+          </div>
+        <//>`}
+      <${PartyPop} pop=${pop} />
     </div>`;
 }
 
@@ -4355,6 +4521,11 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
           </div>
         </div>`}
 
+      ${c.new_parties && html`
+        <${NewPartiesPanel} payload=${c.new_parties} onOpen=${onOpen}
+                            scope=${`one of these campuses (${c.name} itself left out)`}
+                            when=${`in the last ${c.new_parties.days} days`} />`}
+
       <div style=${{ display: "grid", gap: 12 }}>
         <${SectionHead} title="Reported in the last two months" count=${c.updates.length}>
           Milestones and obstacles on these campuses, most material first.
@@ -6183,6 +6354,21 @@ function UpdatesView({ data, onOpen, onGoto }) {
     return () => { cancelled = true; };
   }, []);
 
+  /* Companies newly named on any campus, over the window the page shows. Asked for
+     per window rather than all two months at once: a week is a third of the bytes,
+     and the server caches each. A failure is only a missing section. */
+  const [newParties, setNewParties] = useState(null);
+  const [newPartiesLoading, setNewPartiesLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setNewPartiesLoading(true);
+    api(`/api/new-parties?days=${days}`)
+      .then((body) => { if (!cancelled) setNewParties(body); })
+      .catch(() => { if (!cancelled) setNewParties(null); })
+      .finally(() => { if (!cancelled) setNewPartiesLoading(false); });
+    return () => { cancelled = true; };
+  }, [days]);
+
   const stale = hoursSince(payload?.last_crawl);
   const lastEmail = payload?.last_email;
   const cutoff = useMemo(() => {
@@ -6369,6 +6555,11 @@ function UpdatesView({ data, onOpen, onGoto }) {
                 <${SignalCard} key=${s.key || `${key}-${i}`} signal=${s} onOpen=${onOpen} />`)}
             </div>`)}
         </div>`}
+
+      ${(newParties || newPartiesLoading) && html`
+        <${NewPartiesPanel} payload=${newParties} loading=${newPartiesLoading} onOpen=${onOpen}
+                            scope="any campus tracked, not only those on your list,"
+                            when=${days === 7 || days === 30 ? windowWord : `in the last ${days / 30} months`} />`}
 
       ${payload && html`<${Scoreboard} watchlist=${payload.watchlist} tally=${tally} watch=${watch}
                                          onFilter=${(entry) => { setOnly(entry); window.scrollTo({ top: 0, behavior: "smooth" }); }}

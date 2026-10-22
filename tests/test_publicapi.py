@@ -290,6 +290,9 @@ def test_companies_capex_updates_and_me(api, key):
     address, _ = api
     status, _, body = call(address, "/v1/companies/acme", key=key, host=API_HOST)
     assert status == 200 and body["data"]["totals"]["projects"] == 1
+    # Added to the shape, never renamed: companies newly named on its campuses.
+    assert set(body["data"]["new_parties"]) == {"days", "since", "parties"}
+    assert body["data"]["new_parties"]["days"] == 30
     assert call(address, "/v1/companies/Not_A_Slug", key=key, host=API_HOST)[0] == 400
     status, _, body = call(address, "/v1/capex", key=key, host=API_HOST)
     assert status == 200 and "buyers" in body and "floor" in body["note"]

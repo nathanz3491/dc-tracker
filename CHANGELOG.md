@@ -12,6 +12,26 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A reader can see which suppliers are being named on campuses for the first time,
+  across the whole portfolio or one company's campuses** (`tracker/parties.py`
+  `newly_named`, `NEW_DAYS`; `tracker/vocab.py` `PARTY_ROLES_SUPPLYING`;
+  `/api/new-parties` in `tracker/webui/server.py`; `new_parties` on `/api/company` and
+  `/v1/companies/{slug}` via `tracker/company.py` `profile`; `NewPartiesPanel` in
+  `app.js`; `tests/test_parties.py`, `tests/test_webui.py`, `tests/test_publicapi.py`).
+  The client asked for "recently mentioned new suppliers" (2026-10-22). A campus's own
+  page already marked a party first cited in the last 30 days as new; nothing answered
+  the same question across campuses. Updates now has a *Newly mentioned suppliers*
+  section over the page's own window, every campus tracked, and each company page the
+  same list for its campuses: one entry per company however many campuses named it,
+  each campus with the role, date, sentence and article, a role that has ended left
+  out. It opens on suppliers — contractors and utilities — because with every role at
+  once each newly reported campus's own developer, owner and operator bury them;
+  customers are one tap away with their count, as a new tenant is a demand signal. A
+  company named only under a role its sentence does not support (a bank filed as a
+  contractor) waits behind a 待确认 button. On the 10-22 copy of production the last
+  30 days name 174 suppliers (80 as contractors, 95 as utilities, one as both), 68 with
+  a confirmed role and 137 on campuses already tracked; it reads in five statements
+  whatever the fleet's size, about 0.3 s, and is cached until the database changes.
 - **`tracker unalias KEY --why` undoes a wrong fold for the next reading**
   (`tracker/cli/duplicates.py`; `tests/test_operator_tools.py`). A merge leaves the
   folded campus's key pointing at the survivor, so every later article about it is

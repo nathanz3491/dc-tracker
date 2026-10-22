@@ -4,6 +4,12 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## 22 October 2026
 
+### Newly mentioned suppliers
+
+- **Which suppliers are named on campuses for the first time, across every campus.** A new section on [Updates](updates) lists the contractors and utilities a source named on a campus for the first time in the week, month or two months the page shows: one line per company with every campus that named it, the date, the article, and the sentence on hover or tap. Customers, and builders and owners, are a tap away, each with its count. A campus first reported in the window is marked, so a new supplier on a campus already followed stands apart from a new campus's whole cast.
+- **The same list on a company's page**, for its own campuses over the last 30 days. See [Company pages](companies).
+- **A name filed under a role its sentence does not support waits behind a button**, marked 待确认 — a bank filed as a contractor is not a supplier.
+
 ### Old press releases no longer outrank this year's reporting
 
 - **A newer statement wins over a weightier but much older one.** Reading builders' whole newsrooms brought in press releases from 2015 to 2023, and a company's own release outranked trade press however old it was: Aligned's DFW-02 read 30 MW and a 2017 tenant instead of 46 MW and Lambda; Sabey's Round Rock read 72 MW instead of 84. A statement more than a year older than another of the same standing no longer wins on its source alone. See [Where a value came from](provenance).
