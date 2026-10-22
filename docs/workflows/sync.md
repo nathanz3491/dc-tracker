@@ -439,6 +439,14 @@ prioritising after would reorder a batch that was already chosen:
    the first site is not a reason to lose the story. `tracker queue duplicates`
    shows what would go.
 
+**Whatever the order, news of a campus past its date is read first**
+(`discover.deciding`): the news watch's finds about a campus that is late by the
+record. The console flags such a campus as a suspected delay once its go-live search
+has run, and the search only queues what it found, so until those results are read a
+campus can be flagged with its opening sitting unread in the queue. That happened to
+all 13 campuses the first searches covered on 2026-10-22: 19 results queued, a crawl
+in the backlog's order read one. They are a few dozen a night at most.
+
 `ingest crawl --from-queue --new-first` asks a different question, and is what the
 nightly loop's discovery step runs. **The news goes first:** every article the
 feeds and archives offered that was published within the email's window
@@ -763,7 +771,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
-| Queue ordering and counts | `tracker/ingest/discover.py` — `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
+| Queue ordering and counts | `tracker/ingest/discover.py` — `deciding` (a late campus's watch finds, ahead of every order), `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete`, `IngestReport.not_a_data_center` |
 | A write that breaks a held relationship | `tracker/upsert.py` — `upsert_record` (end), `recompute_from_sources` (end, logs only); `tracker/invariants.py` — `enforce`, `HeldBroken`, `campus_breaks`, `HELD`; `tracker/ingest/crawl.py` — `run` (rolls back one record); `tracker/ingest/records.py` — `IngestReport.held_refused` |

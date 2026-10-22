@@ -939,6 +939,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A late campus's search results are read before anything else in the queue**
+  (`tracker/ingest/discover.py` `deciding`, `pending`; `docs/workflows/sync.md` +
+  `sync.svg`; `tests/test_news_watch.py`). A campus past its date is flagged once its
+  go-live search has run, but the search only queues what it found. The first searches
+  after the 10-22 deploy queued 19 results for 13 campuses, a crawl in the backlog's
+  order read one of them, and all 13 were flagged with their answers unread, Savvis
+  MP2 (due in 2014) among them. The news watch's finds about a campus that is late by
+  the record now lead every queue order, so the night that searches a campus also
+  reads what the search found. They are a few dozen a night at most.
 - **A campus is called a suspected delay only after a search finds no news of it going
   live** (`tracker/delays.py` `searched_since_due`, `awaiting_search`;
   `tracker/ingest/watch.py` `golive_query`; `tracker news --golive`; migration 0047

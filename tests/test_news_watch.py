@@ -898,3 +898,28 @@ def test_a_campus_past_its_date_is_searched_for_going_live_before_it_is_flagged(
         session, provider=again, now=NOW, feeds_path=_feeds(session), followups=0, baselines=0
     )
     assert not [c for c in again.calls if "opened" in c[1]], "searched once per passed date"
+
+
+def test_what_could_settle_a_late_flag_is_read_before_anything_else(session, monkeypatch):
+    """On 2026-10-22 the first go-live searches queued 19 results for 13 campuses; a
+    crawl in the backlog's order read one, and all 13 were flagged with their answers
+    unread. Results about a campus late by the record now lead every order."""
+    monkeypatch.setattr(discover, "utcnow", lambda: NOW)
+    late = _campus(session, 1, phase="construction")
+    late.expected_online = dt.date(2014, 3, 1)
+    on_time = _campus(session, 2, phase="construction")
+    on_time.expected_online = dt.date(2030, 1, 1)
+    session.flush()
+    days = dt.timedelta(days=1)
+    _queue(session, "https://a.test/backlog", "prospect:x", NOW - 900 * days)
+    _queue(session, "https://a.test/news", "lead", NOW - 2 * days)
+    _queue(session, "https://a.test/on-time", f"watch:#{on_time.id}", NOW - 3 * days)
+    _queue(session, "https://a.test/opened", f"watch:#{late.id}", NOW - 400 * days)
+    _queue(session, "https://a.test/undated", f"watch:#{late.id}", None)
+    session.flush()
+
+    for order in ({}, {"new_first": True}, {"known_first": True}):
+        urls = [row.url for row in discover.pending(session, **order)]
+        assert urls[:2] == ["https://a.test/opened", "https://a.test/undated"], order
+        assert len(urls) == len(set(urls)) == 5, "read once, not twice"
+    assert [r.url for r in discover.pending(session, limit=1)] == ["https://a.test/opened"]

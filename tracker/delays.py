@@ -297,8 +297,9 @@ def searched_since_due(checked_at: Any, due: dt.date) -> bool:
     campus that went live years ago without an article we read is not late; it is
     missing a fact, and the search is how the fact is found (`ingest.watch`). A
     search made before the period ended does not count: it could not have seen the
-    campus miss it. Whatever the search found is queued and read that night, so a
-    campus it shows running leaves the list then, through its phase.
+    campus miss it. Whatever the search found is queued and read before anything else
+    in the queue (`ingest.discover.deciding`), so a campus it shows running leaves the
+    list that night, through its phase.
     """
     when = _as_date(checked_at)
     return when is not None and when > due

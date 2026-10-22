@@ -2026,10 +2026,16 @@ def pending(
     otherwise fill the night's reads before another source's story from yesterday was
     reached.
 
+    **Before any of it, in every order, the results that decide a flag**
+    (:func:`deciding`): the news watch's finds about a campus that is late by the
+    record, which the console flags as a suspected delay until one of them says the
+    campus is running.
+
     ``unreadable`` (:func:`unreadable_test`) flags the pages no fetch will read,
     which then go after every other row, whichever order was asked for, before the
     limit is cut.
     """
+    first = deciding(session)
     stmt = (
         select(IngestUrl)
         .where(IngestUrl.status == PENDING_URL_STATUS)
@@ -2116,11 +2122,49 @@ def pending(
             )
         ordered = risky + enriching + fresh
     elif limit and unreadable is None:
-        return list(session.scalars(stmt.limit(limit)))
+        ordered = list(session.scalars(stmt.limit(limit + len(first))))
     else:
         ordered = list(session.scalars(stmt))
+    if first:
+        ahead = {row.id for row in first}
+        ordered = first + [row for row in ordered if row.id not in ahead]
     ordered = readable_first(ordered, unreadable, url=lambda row: row.url)
     return ordered[:limit] if limit else ordered
+
+
+def deciding(session: Session) -> list[IngestUrl]:
+    """Queued news-watch results about a campus that is late by the record, newest first.
+
+    What :func:`pending` reads before anything else, in every order. A campus past
+    its online date is shown as a suspected delay once a go-live search has run since
+    (`delays.searched_since_due`), and the search only queues what it found: until
+    those results are read, the console flags a campus whose opening may be sitting in
+    the queue. On 2026-10-22 the first go-live searches queued 19 results for 13
+    campuses; a crawl in the backlog's order read one of them, and all 13 -- Savvis
+    MP2 due in 2014 among them -- were flagged with their answers unread. They are at
+    most a few dozen a night (`watch.GOLIVE_PER_RUN` campuses, three results each), so
+    putting them first costs the news nothing.
+
+    Any `watch:#<id>` result about such a campus counts, not only the go-live
+    search's: a follow-up that reports the opening settles the flag the same way.
+    """
+    from tracker import delays
+
+    late = delays.suspected(session, require_check=False)
+    if not late:
+        return []
+    rows = session.scalars(
+        select(IngestUrl)
+        .where(IngestUrl.status == PENDING_URL_STATUS)
+        .where(IngestUrl.feed.in_([f"watch:#{pid}" for pid in sorted(late)]))
+        .order_by(IngestUrl.published_at.desc().nullslast(), IngestUrl.id.desc())
+    )
+    ceiling = utcnow() + dt.timedelta(days=1)
+    rows = list(rows)
+    # A date in the future is no date, here as in the news-first order.
+    return [r for r in rows if r.published_at is None or r.published_at <= ceiling] + [
+        r for r in rows if r.published_at is not None and r.published_at > ceiling
+    ]
 
 
 def _source_of(feed: str | None) -> str:

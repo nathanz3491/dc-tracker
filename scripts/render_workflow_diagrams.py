@@ -521,7 +521,7 @@ def sync() -> Canvas:
 
     queue = c.box(
         280, 500, 190, 338, "The queue",
-        ["ingest_url rows,", "status = discovered", "", "sync: tracked rows first,", "  obstacles first; prospect", "  finds jump it", "", "the nightly loop:", "· the feeds' recent news", "· the watch's finds in turn", "  with builders' posts", "· then unheard-of campuses", "", "set aside, not read: a PDF,", "a quote page, a post abroad,", "an unreadable page, and a", "story's second copy"],
+        ["ingest_url rows,", "status = discovered", "", "every order: news of a", "campus past its date first", "", "sync: tracked rows first,", "  obstacles first; prospect", "  finds jump it", "", "the nightly loop:", "· the feeds' recent news", "· the watch's finds in turn", "  with builders' posts", "· then unheard-of campuses", "", "set aside, not read: a PDF,", "a quote page, a post abroad,", "an unreadable page, and a", "story's second copy"],
         role="panel",
     )
     for b in (feeds, watch, search, roster, archives):
