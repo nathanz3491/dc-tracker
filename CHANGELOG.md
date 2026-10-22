@@ -921,7 +921,10 @@ initial build of the v1 PRD.
   that reason and left out of Capex like a programme total. "Could reach" and "could
   top" are deliberately not enough — marking Fermi's own "costs could top $60
   billion" handed the field to a $300 billion total that includes its power plants.
-  Re-run over stored claims by the nightly `backfill scope`: 4 figures on the copy.
+  Re-run over stored claims by the nightly `backfill scope`: 6 figures on production.
+  A figure a ruling set aside no longer counts as confirming the project's money
+  either (`capex._demoted_investment`): a superseded claim still listed among a
+  citation's quoted fields kept Riot's $8.3 billion in Capex.
 - **A citation is dated by its article, not by when the news watch found it**
   (`tracker/upsert.py` `upsert_record`; `tracker/dates.py` `_propagate`;
   `tests/test_dates.py`). The watch dates a URL by its search hit; the page's own

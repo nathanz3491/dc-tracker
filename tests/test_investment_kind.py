@@ -30,6 +30,12 @@ from tracker.ingest.crawl import money_kind
             "speculative",
         ),
         (
+            "In Q1 2027, we project it to host an estimated 546k H100-equivalents of AI compute, "
+            "supported by 214 MW of IT power at a capital cost of $8.1 B.",
+            8.1e9,
+            "speculative",
+        ),
+        (
             "IREN's $9.7 billion AI cloud agreement with Microsoft faces delays",
             9.7e9,
             "contract_value",
@@ -92,3 +98,39 @@ def test_the_nightly_regate_marks_a_stored_claim_and_takes_its_own_mark_back(ses
     session.flush()
     assert regate_scope(session, apply=True).money_restored == 1
     assert source.fields == "investment_usd" and not source.unconfirmed_fields
+
+
+def test_a_ruled_out_figure_is_not_confirmation(session):
+    """Riot: two superseded $333M/$640M claims still listed in `fields` kept $8.3B in."""
+    from tracker import capex
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Corsicana",
+        company="Riot",
+        city="Corsicana",
+        state="TX",
+        dedup_key="riot|city:corsicana|TX",
+        phase="construction",
+        confidence=1,
+        investment_usd=8_300_000_000,
+    )
+    session.add(project)
+    session.flush()
+    for url, reason in (
+        ("https://e.test/old", "superseded"),
+        ("https://e.test/new", "speculative"),
+    ):
+        session.add(
+            Source(
+                project_id=project.id,
+                url=url,
+                source_type="trade_press",
+                claims=json.dumps({"investment_usd": 1}),
+                fields="investment_usd" if reason == "superseded" else None,
+                unconfirmed_fields="investment_usd",
+                unconfirmed_reasons=json.dumps({"investment_usd": reason}),
+            )
+        )
+    session.flush()
+    assert project.id in capex.unconfirmed_investment_ids(session)

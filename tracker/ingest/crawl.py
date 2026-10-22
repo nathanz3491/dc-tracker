@@ -1916,9 +1916,14 @@ _MONEY = r"\$\s?\d[\d.,]*\s*(?:billion|million|bn|mn|b|m)?\b"
 #: ordinary planned budget ("total investment could reach $900 million"), and on the
 #: 10-21 copy marking Fermi's own "costs could top $60 billion" handed the field to
 #: a $300 billion programme total that includes its power plants.
+#:
+#: The clause may run long — "we project it to host an estimated 546k H100-equivalents
+#: of AI compute, supported by 214 MW of IT power at a capital cost of $8.1 B" puts 120
+#: characters between the two — and `money_kind` checks the figure it reaches is the
+#: one claimed, so a long reach cannot attach the hedge to another number.
 _SPECULATIVE_MONEY = re.compile(
     r"\b(?:extrapolat\w*|potentially|we (?:estimate|project)|"
-    r"analysts? (?:estimate|project|expect)\w*)\b[^.;$]{0,80}?" + _MONEY
+    r"analysts? (?:estimate|project|expect)\w*)\b[^.;$]{0,160}?" + _MONEY
 )
 
 #: The value of a contract to provide a service — compute, cloud, hosting, a lease —

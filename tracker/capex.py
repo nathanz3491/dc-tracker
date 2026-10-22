@@ -848,7 +848,13 @@ def _demoted_investment(session: Session) -> tuple[set[int], set[int]]:
             Source.unconfirmed_reasons,
         )
     ):
-        if _names_field(fields, "investment_usd"):
+        # A field listed as both quoted and unconfirmed is unconfirmed: a ruling
+        # (`superseded`) marks the claim without always clearing `fields`, and Riot
+        # Corsicana's two ruled-out figures were reading as confirmation that kept its
+        # extrapolated $8.3B in Capex.
+        if _names_field(fields, "investment_usd") and not _names_field(
+            unconfirmed, "investment_usd"
+        ):
             confirmed.add(pid)
         if not _names_field(unconfirmed, "investment_usd"):
             continue
