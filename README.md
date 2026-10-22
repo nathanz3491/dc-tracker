@@ -94,7 +94,10 @@ former party is nobody's buyer on any page.
 party's role, a milestone and an obstacle each sit in `fact` with the same columns —
 the value, its unit, the sentence, the citation, how far it can be trusted and whether
 the campus shows it — rebuilt from the sources on every write
-(`tracker export facts`, API `/v1/projects/{id}/facts`). And the relationships the
+(`tracker export facts`, API `/v1/projects/{id}/facts`). The project page, the API's
+per-field evidence and the export read each figure's sentence and rival claims from
+it, so what is downloaded is what is shown; every committed write rebuilds the
+campuses it touched, whichever command made it (`facts.follow`). And the relationships the
 figures must keep are declared in `tracker/invariants.py`: the held ones are checked
 on every write, which is refused if it would break one; the rest are reported on the
 campus's page and counted in the morning report.

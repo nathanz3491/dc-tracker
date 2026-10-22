@@ -136,6 +136,8 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 
 `quote_is_exact` 为 `false` 表示这段文字是来源的摘录，而不是为该字段记录的原句。已被合并进另一个园区的园区会返回 `404`，并说明它可能已被合并。
 
+`fields` 读取自 `/v1/projects/{id}/facts` 返回的同一批陈述。当 `quote_is_exact` 为 `true` 时，`quote` 就是该 `source_url` 对该字段所作园区陈述的 `quote`，因此两个端点不会互相矛盾。
+
 ## GET /v1/projects/{id}/sources
 
 每条引用：`url`、`type`（`company_filing` 公司文件、`government_doc` 政府文件、`trade_press` 行业媒体、`general_media` 综合媒体、`iso_queue` 电网并网队列或 `manual` 人工录入）、`published_at`、`fetched_at`、`excerpt`，以及 `quotes`，即该来源所支持的每个字段记录下的原句。

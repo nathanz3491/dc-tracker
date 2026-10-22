@@ -683,7 +683,9 @@ to skip after a phase that added sources:
   them, and two spellings of one company in one role ("DPR", "DPR Construction") one
   party (`parties.parties_by_key`). Each row it re-derives also rebuilds that
   row's statements (`facts.rebuild`, migration 0045), the one table every source's
-  claims sit in, so the download never lags the page. A re-derived row that breaks a
+  claims sit in — and the one the project page, the API and the export read each
+  figure's evidence from — so neither the page nor the download lags the sources. A
+  re-derived row that breaks a
   held relationship is logged as a bug (`invariants.campus_breaks`), not refused: its
   sources have not changed, and the row is already published.
 * `recompute_confidence` runs because confidence is a cache of a function of the

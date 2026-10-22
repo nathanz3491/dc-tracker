@@ -629,7 +629,9 @@ FACT_TIERS: tuple[str, ...] = (
 class Fact(Base):
     """One statement one source makes about a campus or a part of it (migration 0045).
 
-    A cache rebuilt from the sources (`facts.rebuild`), like `CapacityBlock`.
+    A cache rebuilt from the sources (`facts.rebuild`), like `CapacityBlock`, and what
+    the export, the API and the project page read a figure's evidence from
+    (`facts.Statements`). Every session keeps it current (`facts.follow`).
     """
 
     __tablename__ = "fact"
@@ -653,11 +655,19 @@ class Fact(Base):
     quote: Mapped[str | None] = mapped_column(Text)
     axes: Mapped[str | None] = mapped_column(Text)
     held: Mapped[bool] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    #: Campus statements only (migration 0048): the value as the citation's JSON
+    #: holds it, type and all; whether the citation lists the field as quoted
+    #: (`source.fields`) and as 待确认 (`source.unconfirmed_fields`). NULL elsewhere.
+    value_json: Mapped[str | None] = mapped_column(Text)
+    quoted: Mapped[bool | None] = mapped_column(Integer)
+    doubted: Mapped[bool | None] = mapped_column(Integer)
 
     __table_args__ = (
         CheckConstraint(sql_in("entity", FACT_ENTITIES), name="ck_fact_entity"),
         CheckConstraint(sql_in("tier", FACT_TIERS), name="ck_fact_tier"),
         CheckConstraint("held IN (0, 1)", name="ck_fact_held"),
+        CheckConstraint("quoted IS NULL OR quoted IN (0, 1)", name="ck_fact_quoted"),
+        CheckConstraint("doubted IS NULL OR doubted IN (0, 1)", name="ck_fact_doubted"),
         Index("ix_fact_project_id", "project_id"),
         Index("ix_fact_field", "entity", "field"),
         Index("ix_fact_source_id", "source_id"),

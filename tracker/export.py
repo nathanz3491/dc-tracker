@@ -24,17 +24,21 @@ import json
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, object_session, selectinload
 
 from tracker import blocks as blocks_mod
 from tracker import dedup, delays
+from tracker import facts as facts_mod
 from tracker import parties as parties_mod
 from tracker.models import Project
 from tracker.upsert import NOTE_PREFIX, SOURCE_NOTE_PREFIX
 from tracker.vocab import bound_from_quote
+
+if TYPE_CHECKING:
+    from tracker.gaps import Said
 
 #: CSV columns, frozen. Appending is safe for consumers; reordering or removing
 #: is not, so a test asserts this tuple exactly.
@@ -164,7 +168,11 @@ def fetch_projects(
             return []
         stmt = stmt.where(Project.id.in_(list(only)))
     stmt = stmt.order_by(Project.state, Project.company, Project.name, Project.id)
-    return list(session.scalars(stmt))
+    projects = list(session.scalars(stmt))
+    # And what `prov` and the claim table are read from (`facts.Statements`), in one
+    # query for the lot rather than one per campus.
+    facts_mod.preload(session, projects)
+    return projects
 
 
 # --- Row shaping ------------------------------------------------------------
@@ -383,7 +391,9 @@ def _timeline_json(project: Project, stand: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
+def _provenance_json(
+    project: Project, said: Said, by_field: dict[str, list]
+) -> tuple[dict[str, str], dict[str, Any]]:
     """Per-field tier, and the evidence behind it.
 
     The PRD's central rule is that a model's answer must not be taken as fact, so a
@@ -395,21 +405,17 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
     and is kept unchanged; ``prov`` adds the sentence, whether that sentence is the
     one recorded for this field or the source's whole excerpt, and which citation
     it came from.
+
+    Read from the fact table (`said`, and `by_field` from it), not the citations'
+    JSON: the statements a reader downloads are the ones this credits.
     """
     from tracker.gaps import provenance
-    from tracker.upsert import claims_by_field
     from tracker.vocab import WRITABLE_FIELDS
-
-    # Once per project, not once per field. `provenance` needs the whole claim map
-    # to answer about one field, so computing it inside the loop re-parsed every
-    # source's JSON seventeen times over — 2.3 seconds of the console payload's
-    # 4.0, for an answer identical each time.
-    by_field = claims_by_field(list(getattr(project, "sources", ()) or ()))
 
     basis_out: dict[str, str] = {}
     prov_out: dict[str, Any] = {}
     for field in WRITABLE_FIELDS:
-        result = provenance(project, field, by_field)
+        result = provenance(project, field, by_field, said)
         if result is None:
             continue
         basis_out[field] = result.tier
@@ -442,7 +448,11 @@ def _provenance_json(project: Project) -> tuple[dict[str, str], dict[str, Any]]:
     return basis_out, prov_out
 
 
-def _claims_json(project: Project) -> dict[str, Any]:
+def _claims_json(
+    project: Project,
+    said: Said | None = None,
+    everything: dict[str, list] | None = None,
+) -> dict[str, Any]:
     """Every claim every citation made for a field, with the winner marked.
 
     `prov` answers "what does this row believe, and on what sentence". This answers
@@ -469,6 +479,11 @@ def _claims_json(project: Project) -> dict[str, Any]:
     * **`decided_by` is only filled when there is a real rival.** Hyperion's $10B,
       $27B and $50B are three *scopes*, not a disagreement, and labelling that
       "credibility won" would be a plausible sentence and the wrong one.
+
+    Every claim, its sentence and its 待确认 reason are read from the fact table
+    (`facts.Statements`), not the citations' JSON — the rows `tracker export facts`
+    downloads. `said` and `everything` are passed in by a caller that already built
+    them for `prov`.
     """
     from tracker.confidence import values_conflict
     from tracker.logic import decision
@@ -476,7 +491,6 @@ def _claims_json(project: Project) -> dict[str, Any]:
         DERIVED_FIELDS,
         FIELD_POLICY,
         Policy,
-        claims_by_field,
         resolve_field,
     )
     from tracker.vocab import WRITABLE_FIELDS
@@ -484,9 +498,10 @@ def _claims_json(project: Project) -> dict[str, Any]:
     by_url = {s.url: s for s in project.sources}
     ordered = sorted(project.sources, key=lambda s: s.url)
     index_of = {s.url: i for i, s in enumerate(ordered)}
-    # Once per project, not once per field: `gaps.provenance` already pays that
-    # cost seventeen times over and this must not add an eighteenth.
-    everything = claims_by_field(list(project.sources))
+    if said is None:
+        said = facts_mod.Statements(project)
+    if everything is None:
+        everything = said.claims_by_field()
 
     out: dict[str, Any] = {}
     for field in WRITABLE_FIELDS:
@@ -522,13 +537,13 @@ def _claims_json(project: Project) -> dict[str, Any]:
                     # One building's or phase's figure, by its own sentence: it fills
                     # the campus column only when nothing describes the whole site.
                     "part": claim.part,
-                    "unconfirmed_reason": _reason_for(source, field),
+                    "unconfirmed_reason": said.reason(source, field),
                     # The sentence recorded for THIS field only. Never the source's
                     # excerpt: that fallback belongs to `prov`, where it is labelled
                     # `quote_is_exact: false`. Showing a paragraph as one claim's
                     # sentence is the failure the label exists to prevent, so null
                     # is the honest answer.
-                    "quote": _field_quote(source, field),
+                    "quote": said.quote(source, field),
                     "fetched_at": iso(claim.fetched_at),
                     "published_at": iso(claim.published_at),
                     "is_winner": is_winner,
@@ -584,26 +599,6 @@ def _same_value(a: Any, b: Any) -> bool:
     return str(a).strip().lower() == str(b).strip().lower()
 
 
-def _field_quote(source: Any, field: str) -> str | None:
-    if source is None or not getattr(source, "quotes", None):
-        return None
-    try:
-        quotes = json.loads(source.quotes)
-    except (TypeError, ValueError):
-        return None
-    return quotes.get(field) if isinstance(quotes, dict) else None
-
-
-def _reason_for(source: Any, field: str) -> str | None:
-    if source is None or not getattr(source, "unconfirmed_reasons", None):
-        return None
-    try:
-        reasons = json.loads(source.unconfirmed_reasons)
-    except (TypeError, ValueError):
-        return None
-    return reasons.get(field) if isinstance(reasons, dict) else None
-
-
 def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
     """Nested dict per project, preserving the citation structure.
 
@@ -612,15 +607,22 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
     component, the claim table inside a project's drawer, for one project at a
     time. The file export keeps it: a downloaded JSON has no second request to
     make, and the guarantee there is that everything is in the file.
+
+    `basis`, `prov` and `claims_by_field` are read from the fact table (migration
+    0045, `facts.Statements`); `sources` is each citation as stored.
     """
-    basis_map, prov_map = _provenance_json(project)
+    said = facts_mod.Statements(project)
+    # Once per project, not once per field: `provenance` needs the whole claim map
+    # to answer about one field, and the claim table needs it again.
+    by_field = said.claims_by_field()
+    basis_map, prov_map = _provenance_json(project, said, by_field)
     first_cited = parties_mod.first_cited(
         list(project.sources), parties_mod.known_keys(object_session(project))
     )
     return {
         "basis": basis_map,
         "prov": prov_map,
-        **({"claims_by_field": _claims_json(project)} if claims else {}),
+        **({"claims_by_field": _claims_json(project, said, by_field)} if claims else {}),
         "standing": _standing_json(project),
         "id": project.id,
         "name": project.name,

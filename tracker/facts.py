@@ -9,10 +9,28 @@ Abilene's capacity, how far each can be trusted, and which the page shows" is on
 query, and a reader can download the lot (`tracker export facts`, `/v1/projects/{id}/
 facts`).
 
-**A cache, never an input.** Rebuilt wholesale from the sources whenever a row is
-written (`upsert`, `recompute_from_sources`) and by `tracker init`, like the tranches.
-Nothing reads it to decide a value; the merge engine still decides from the sources,
-and this records what it had to decide between.
+**A cache the readers read, never an input the merge reads.** Rebuilt wholesale from
+the sources by `upsert`, `recompute_from_sources` and `tracker init`, like the
+tranches. Nothing reads it to decide a value; the merge engine still decides from the
+sources, and this records what it had to decide between.
+
+**What reads it** (step 4.5's second half): every surface that shows where a figure
+came from — the export's `basis`, `prov` and `claims_by_field`, so the API's
+`fields` and the console's project page, its 待确认 reasons and the table's "quoted
+only" filter. They read it through `Statements`, which answers the questions
+`gaps.provenance` asks of a citation (`gaps.Said`) and gives the merge engine's
+claim lists in the merge engine's order (`upsert.rank_claims`). A campus statement
+therefore carries all its citation's JSON said about it (migration 0048): the value
+typed as written (`value_json`), and the two lists it was on (`quoted`, `doubted`).
+The JSON readers (`gaps.FromCitations`, `upsert.claims_by_field`) remain for
+`tracker show` and the nightly checks until the JSON paths are retired, and
+`tests/test_facts.py` holds the two to the same answers.
+
+**Freshness is the risk**, and is not left to each write path. `follow` — on every
+session `db.session_scope` opens — notes each flush's changes to a campus's inputs
+and rebuilds those campuses at commit (`settle`), and a reader in the writing
+transaction rebuilds the one it asks for. `drifted` is the check: the campuses whose
+stored statements are not what a rebuild would write now.
 
 **Tiers**, per statement, most trusted first:
 
@@ -34,6 +52,7 @@ from collections.abc import Iterable
 from typing import Any, Final
 
 from sqlalchemy import delete, func, select
+from sqlalchemy import event as orm_event
 from sqlalchemy.orm import Session
 
 from tracker.models import Fact, Project
@@ -56,6 +75,9 @@ TRANCHE_UNITS: Final[dict[str, str]] = {
     "expected_online": "date",
     "energized_on": "date",
 }
+#: Columns only a campus statement fills (migration 0048), NULL on every other.
+_CAMPUS_ONLY: Final[dict[str, None]] = {"value_json": None, "quoted": None, "doubted": None}
+
 #: Tranche fields recorded as statements. `label` and `parent` name the tranche.
 TRANCHE_FIELDS: Final[tuple[str, ...]] = (
     "mw",
@@ -94,6 +116,11 @@ def _date(value: Any) -> dt.date | None:
         return dt.date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+def _listed(raw: str | None) -> set[str]:
+    """The field names in one of a citation's comma-separated lists."""
+    return {f.strip() for f in (raw or "").split(",") if f.strip()}
 
 
 def _load(raw: str | None, default: Any) -> Any:
@@ -174,9 +201,12 @@ def statements(
         quotes = _load(source.quotes, {})
         meta = _load(source.claim_meta, {})
         reasons = _load(source.unconfirmed_reasons, {})
-        unconfirmed = {f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()}
+        listed = _listed(source.fields)
+        unconfirmed = _listed(source.unconfirmed_fields)
         placeholder = is_placeholder(source)
 
+        # `notes` is never a claim — the crawl and the manual path both drop it, and
+        # the row's notes are assembled — so there is no statement to record.
         for field in WRITABLE_FIELDS:
             if field in ("notes",) or claims.get(field) is None:
                 continue
@@ -197,8 +227,13 @@ def statements(
                     "tier": _source_tier(source, confirmed=confirmed, reason=reason),
                     "reason": reason,
                     "quote": quotes.get(field) if isinstance(quotes, dict) else None,
-                    "axes": json.dumps(axes, sort_keys=True) if axes else None,
+                    # In the order the citation recorded them, not re-sorted: the
+                    # export hands this envelope on as written (`prov[field].axes`).
+                    "axes": json.dumps(axes) if axes else None,
                     "held": _held(getattr(project, field, None), value),
+                    "value_json": json.dumps(value, ensure_ascii=False),
+                    "quoted": field in listed,
+                    "doubted": field in unconfirmed,
                 }
             )
 
@@ -323,51 +358,61 @@ def statements(
     return rows
 
 
-def rebuild(session: Session, project: Project) -> int:
-    """Replace one campus's statements with what its sources say now. Returns rows."""
-    from sqlalchemy import inspect
+def _milestones_and_obstacles(session: Session, project: Project) -> tuple[list, list]:
+    """The campus's milestones and obstacles as stored, as plain rows.
 
+    Read from the table, never from `project.events` / `project.risks`. Those are
+    written beside the relationship (`session.add(Event(project_id=...))`), so a
+    collection loaded earlier in the transaction is silently short — which left one
+    campus on the 2026-10-22 copy of production with a milestone the table did not
+    list. Plain rows, too, because lazy-loading them here, inside the write, puts
+    objects in the session that a dry run's rolled-back savepoint then re-creates
+    under the same ids (SQLAlchemy warns, and is right to).
+    """
     from tracker.models import Event, Risk
 
+    events = session.execute(
+        select(
+            Event.event_type,
+            Event.event_date,
+            Event.quote,
+            Event.unconfirmed,
+            Event.source_id,
+        )
+        .where(Event.project_id == project.id)
+        .order_by(Event.id)
+    ).all()
+    risks = session.execute(
+        select(
+            Risk.category,
+            Risk.severity,
+            Risk.status,
+            Risk.unconfirmed,
+            Risk.quote,
+            Risk.source_id,
+            Risk.first_seen,
+        )
+        .where(Risk.project_id == project.id)
+        .order_by(Risk.id)
+    ).all()
+    return events, risks
+
+
+def rebuild(session: Session, project: Project) -> int:
+    """Replace one campus's statements with what its sources say now. Returns rows."""
     session.execute(delete(Fact).where(Fact.project_id == project.id))
-    # Milestones and obstacles as plain rows unless already loaded: lazy-loading them
-    # here, inside the write, puts objects in the session that a dry run's rolled-back
-    # savepoint then re-creates under the same ids (SQLAlchemy warns, and is right to).
-    unloaded = inspect(project).unloaded
-    events = (
-        session.execute(
-            select(
-                Event.event_type,
-                Event.event_date,
-                Event.quote,
-                Event.unconfirmed,
-                Event.source_id,
-            ).where(Event.project_id == project.id)
-        ).all()
-        if "events" in unloaded
-        else None
-    )
-    risks = (
-        session.execute(
-            select(
-                Risk.category,
-                Risk.severity,
-                Risk.status,
-                Risk.unconfirmed,
-                Risk.quote,
-                Risk.source_id,
-                Risk.first_seen,
-            ).where(Risk.project_id == project.id)
-        ).all()
-        if "risks" in unloaded
-        else None
-    )
+    events, risks = _milestones_and_obstacles(session, project)
     rows = statements(project, events=events, risks=risks)
     if rows:
         session.execute(
             Fact.__table__.insert(),
-            [{"project_id": project.id, **row} for row in rows],
+            [{"project_id": project.id, **_CAMPUS_ONLY, **row} for row in rows],
         )
+    # A set `preload` read before this write is the old one. Forgotten, the next
+    # reader in this transaction — an export straight after an ingest — reads what
+    # was just written. And the campus is current, so the commit need not rebuild it.
+    session.info.get(_PRELOADED, {}).pop(project.id, None)
+    session.info.get(_STALE, set()).discard(project.id)
     return len(rows)
 
 
@@ -390,6 +435,375 @@ def recompute(session: Session, projects: Iterable[Project] | None = None) -> in
         total += rebuild(session, project)
     session.flush()
     return total
+
+
+#: Every column a statement is compared on: all but its row id and its campus.
+_STATEMENT_COLUMNS: Final = (
+    "entity",
+    "entity_key",
+    "field",
+    "value",
+    "number",
+    "unit",
+    "source_id",
+    "as_of",
+    "tier",
+    "reason",
+    "quote",
+    "axes",
+    "held",
+    "value_json",
+    "quoted",
+    "doubted",
+)
+
+
+def _comparable(row: Any) -> tuple[Any, ...]:
+    out = []
+    for name in _STATEMENT_COLUMNS:
+        value = row.get(name) if isinstance(row, dict) else getattr(row, name)
+        if name in ("held", "quoted", "doubted") and value is not None:
+            value = bool(value)
+        out.append(value)
+    return tuple(out)
+
+
+def drifted(session: Session, projects: Iterable[Project] | None = None) -> list[int]:
+    """Campuses whose stored statements are not what a rebuild would write now.
+
+    The check behind the cache's one promise: every write that changes what a
+    campus's sources say, or what the campus holds, leaves its statements current.
+    Empty when the promise holds. Writes nothing; flushes what is pending, and reads
+    each campus's citations, tranches and parties afresh from the database, so a
+    collection loaded before a write cannot vouch for the rows written after it.
+    """
+    session.flush()
+    if projects is None:
+        projects = session.scalars(select(Project).order_by(Project.id)).all()
+    columns = [getattr(Fact, name) for name in _STATEMENT_COLUMNS]
+    out = []
+    for project in projects:
+        session.expire(project, ["sources", "blocks", "parties"])
+        stored = session.execute(select(*columns).where(Fact.project_id == project.id)).all()
+        events, risks = _milestones_and_obstacles(session, project)
+        fresh = [{**_CAMPUS_ONLY, **row} for row in statements(project, events=events, risks=risks)]
+        if sorted(map(_comparable, stored), key=repr) != sorted(map(_comparable, fresh), key=repr):
+            out.append(project.id)
+    return out
+
+
+#: What `Statements` reads of a campus statement. Plain rows, not `Fact` objects:
+#: the console's list payload reads 42,000 of them, and building an ORM object for
+#: each cost it 1.7 seconds where the rows cost 0.3.
+_READ: Final = (
+    Fact.project_id,
+    Fact.source_id,
+    Fact.field,
+    Fact.value,
+    Fact.value_json,
+    Fact.quoted,
+    Fact.doubted,
+    Fact.quote,
+    Fact.reason,
+    Fact.axes,
+)
+
+#: `session.info` key: campus statements `preload` read ahead, by project id. Each
+#: campus's set is dropped when `rebuild` rewrites it, and the whole map when the
+#: transaction ends, so a rolled-back write never leaves its rows behind here.
+_PRELOADED: Final = "tracker.facts.preloaded"
+
+#: Projects per `IN (...)` when preloading, under SQLite's bound-parameter limit.
+_CHUNK: Final = 500
+
+
+def _campus_rows(session: Session, ids: list[int]) -> dict[int, list[Any]]:
+    out: dict[int, list[Any]] = {pid: [] for pid in ids}
+    for start in range(0, len(ids), _CHUNK):
+        chunk = ids[start : start + _CHUNK]
+        stmt = (
+            select(*_READ)
+            .where(Fact.entity == "campus", Fact.project_id.in_(chunk))
+            .order_by(Fact.id)
+        )
+        for row in session.execute(stmt):
+            out[row.project_id].append(row)
+    return out
+
+
+def preload(session: Session, projects: Iterable[Project]) -> None:
+    """Read many campuses' statements in one query, for `Statements` to find.
+
+    `export.fetch_projects` calls it for everything it loads, the way it eagerly
+    loads the citations, so a payload of 780 campuses asks once and not 780 times.
+    """
+    ids = [p.id for p in projects if p.id is not None]
+    if ids:
+        session.info.setdefault(_PRELOADED, {}).update(_campus_rows(session, ids))
+
+
+def campus_statements(project: Project) -> list[Any]:
+    """One campus's statements about its own fields, as stored, in the order written.
+
+    Preloaded if `preload` read them, else read now. A campus outside any session,
+    or not yet saved, has none stored.
+    """
+    from sqlalchemy.orm import object_session
+
+    session = object_session(project)
+    if session is None or project.id is None:
+        return []
+    rows = session.info.get(_PRELOADED, {}).get(project.id)
+    if rows is None:
+        rows = _campus_rows(session, [project.id])[project.id]
+    # Read inside the transaction that changed it: rebuilt first, so the export
+    # straight after an edit shows the edit (see `follow`).
+    if project.id in session.info.get(_STALE, ()):
+        rebuild(session, project)
+        rows = _campus_rows(session, [project.id])[project.id]
+    return rows
+
+
+# --- keeping the table current ------------------------------------------------
+
+#: `session.info` key: the campuses a flushed write in this transaction changed an
+#: input of, and whose statements are therefore not yet rebuilt. Emptied by
+#: `rebuild`, one campus at a time, and by `settle`, all of them, at commit.
+_STALE: Final = "tracker.facts.stale"
+
+
+def _inputs() -> tuple[type, ...]:
+    """The rows a campus's statements are read from, beside the campus itself."""
+    from tracker.models import CapacityBlock, Event, ProjectParty, Risk, Source
+
+    return (Source, CapacityBlock, ProjectParty, Event, Risk)
+
+
+def _campuses_changed(session: Session, obj: Any) -> set[int]:
+    """The campuses one flushed row is an input of: where it is, and where it was."""
+    from sqlalchemy import inspect
+
+    from tracker.vocab import WRITABLE_FIELDS
+
+    state = inspect(obj)
+    if isinstance(obj, Project):
+        # Each statement records whether the campus holds its value (`held`). Not
+        # `notes`, which no statement is about and every ruling appends to.
+        if state.deleted or obj.id is None:
+            return set()
+        if state.pending or any(
+            state.attrs[name].history.has_changes() for name in WRITABLE_FIELDS if name != "notes"
+        ):
+            return {obj.id}
+        return set()
+    if not isinstance(obj, _inputs()):
+        return set()
+    if not (state.pending or state.deleted or session.is_modified(obj)):
+        return set()
+    ids = {getattr(obj, "project_id", None)}
+    # A row moved between campuses — a citation in a merge — changes both.
+    ids.update(state.attrs.project_id.history.deleted or ())
+    project_history = state.attrs.project.history
+    ids.update(getattr(p, "id", None) for p in (project_history.deleted or ()))
+    ids.update(getattr(p, "id", None) for p in (project_history.added or ()))
+    ids.discard(None)
+    return ids
+
+
+def _note_changed(session: Session, _flush_context: Any) -> None:
+    changed: set[int] = set()
+    for obj in (*session.new, *session.dirty, *session.deleted):
+        changed |= _campuses_changed(session, obj)
+    if changed:
+        session.info.setdefault(_STALE, set()).update(changed)
+
+
+def settle(session: Session) -> int:
+    """Rebuild every campus whose statements a write in this transaction made stale.
+
+    Run at every commit by `follow`. Returns how many campuses it rebuilt.
+    """
+    session.flush()
+    stale = session.info.get(_STALE)
+    done = 0
+    while stale:
+        project = session.get(Project, stale.pop())
+        if project is not None:  # merged away or excluded: its rows went with it
+            rebuild(session, project)
+            done += 1
+    return done
+
+
+def _transaction_ended(session: Session, transaction: Any) -> None:
+    session.info.pop(_PRELOADED, None)
+    if transaction.parent is None:
+        # Committed, so settled; or rolled back, so the writes it marked are gone.
+        session.info.pop(_STALE, None)
+
+
+def follow(session: Session) -> None:
+    """Keep this session's writes and the fact table in step. `db.session_scope` calls it.
+
+    The table is a cache of the citations, tranches, parties, milestones and
+    obstacles, and of the campus's own fields; the export, the API and the project
+    page read it. A cache is wrong whenever a write forgets to rebuild it, and on
+    2026-10-22 six kinds of write did: a party's role ended or resumed, an alias
+    added or taken back, a publication date learned, a backfill rewriting a claim's
+    envelope or a gate's verdict, an obstacle confirmed or closed, a milestone
+    refiled. So it no longer depends on each remembering. Every flush notes the
+    campuses whose inputs it changed; every commit rebuilds those not rebuilt since
+    (`settle`); and a reader in the same transaction rebuilds the one it asks for
+    (`campus_statements`). The writes that already rebuild — an ingest, a recompute
+    — leave nothing for the commit to do.
+    """
+    orm_event.listen(session, "after_flush", _note_changed)
+    orm_event.listen(session, "before_commit", settle)
+    orm_event.listen(session, "after_transaction_end", _transaction_ended)
+
+
+def _axis(entry: dict[str, Any], axis: str) -> str | None:
+    """One axis of a claim's envelope, as `upsert._recorded_axis` reads it."""
+    value = entry.get(axis)
+    return str(value) if value else None
+
+
+class Statements:
+    """One campus's statements, as the surfaces that show a figure's evidence read them.
+
+    The export's `prov` and claim table, the API's `fields` and the project page's
+    evidence all read this (client plan step 4.5), not each citation's JSON. Built
+    from the campus statements `rebuild` wrote (`campus_statements`), and from the
+    campus's citations only for what is the citation's own — its URL, type, dates,
+    excerpt, extractor.
+
+    It answers `gaps.Said`, so `gaps.provenance` runs its one algorithm over these
+    rows instead of the JSON, and it gives the merge engine's claim lists in the
+    merge engine's order (`claims_by_field`, ranked by `upsert.rank_claims`), so the
+    page cannot list the claims differently from how the merge weighed them.
+
+    A statement whose citation has left the campus — moved by a merge, deleted — is
+    not one of its statements, whatever a row not yet rebuilt still says.
+    """
+
+    def __init__(self, project: Project) -> None:
+        self._sources = list(getattr(project, "sources", ()) or ())
+        ids = {s.id for s in self._sources}
+        self._rows: dict[tuple[int, str], Any] = {}
+        self._by_source: dict[int, list[Any]] = {}
+        for fact in campus_statements(project):
+            if fact.source_id not in ids:
+                continue
+            self._rows[(fact.source_id, fact.field)] = fact
+            self._by_source.setdefault(fact.source_id, []).append(fact)
+
+    def _row(self, source: Any, field: str) -> Any:
+        return self._rows.get((getattr(source, "id", None), field))
+
+    # --- `gaps.Said` -------------------------------------------------------------
+
+    def tier(self, source: Any, field: str) -> str:
+        from tracker.gaps import tier_for
+
+        row = self._row(source, field)
+        return tier_for(bool(row is not None and row.quoted), source)
+
+    def asserted(self, source: Any, field: str) -> bool:
+        row = self._row(source, field)
+        return row is not None and bool(row.quoted or row.doubted)
+
+    def states(self, source: Any, field: str, value: Any) -> bool:
+        from tracker.gaps import _same_value
+        from tracker.upsert import claim_value
+
+        row = self._row(source, field)
+        return row is not None and _same_value(_claimed(row), claim_value(value))
+
+    def quote(self, source: Any, field: str) -> Any:
+        row = self._row(source, field)
+        return row.quote if row is not None else None
+
+    def axes(self, source: Any, field: str) -> dict[str, str]:
+        entry = _envelope(self._row(source, field))
+        return {k: str(v) for k, v in entry.items() if v is not None}
+
+    # --- what the claim table adds ----------------------------------------------
+
+    def reason(self, source: Any, field: str) -> Any:
+        """Why the citation's claim is 待确认 or ruled out, as recorded; None if neither."""
+        row = self._row(source, field)
+        return row.reason if row is not None else None
+
+    def reasons(self, source: Any) -> list[tuple[str, Any]]:
+        """`(field, reason)` for each of the citation's claims that carries one.
+
+        By field name, the order every writer stores `unconfirmed_reasons` in, so a
+        reader taking the first reason per field takes the one it always took.
+        """
+        rows = self._by_source.get(getattr(source, "id", None), ())
+        return sorted((row.field, row.reason) for row in rows if row.reason is not None)
+
+    def claims_by_field(self, *, settings: Any = None) -> dict[str, list[Any]]:
+        """field -> every claim about it, strongest first: `upsert.claims_by_field`'s
+        answer, from the rows instead of the JSON."""
+        from tracker import confidence
+        from tracker.upsert import (
+            _CAPACITY_FIELDS,
+            _DATE_PRECISION_FIELDS,
+            _Claim,
+            _weight,
+            is_placeholder,
+            rank_claims,
+        )
+        from tracker.upsert import DECIDED_REASONS as decided
+        from tracker.vocab import PART_FIELDS
+
+        out: dict[str, list[_Claim]] = {}
+        # In the citations' own order, as the JSON reader walks them, so the ranking
+        # starts from the same list and its stable sort cannot tell the two apart.
+        for source in self._sources:
+            rows = self._by_source.get(source.id)
+            if not rows:
+                continue
+            placeholder = is_placeholder(source)
+            tertiary = confidence.is_tertiary(source)
+            weight = 0 if placeholder else _weight(source.source_type)
+            for row in rows:
+                entry = _envelope(row)
+                out.setdefault(row.field, []).append(
+                    _Claim(
+                        _claimed(row),
+                        weight,
+                        source.fetched_at,
+                        source.source_type,
+                        source.url,
+                        confirmed=not placeholder and not row.doubted,
+                        published_at=getattr(source, "published_at", None),
+                        decided_against=row.reason in decided,
+                        tertiary=tertiary,
+                        part=row.field in PART_FIELDS and entry.get("scope") == "building",
+                        floor=row.field in _CAPACITY_FIELDS and _axis(entry, "bound") == "at_least",
+                        precision=(
+                            _axis(entry, "date_precision")
+                            if row.field in _DATE_PRECISION_FIELDS
+                            else None
+                        ),
+                        as_of=_axis(entry, "as_of"),
+                    )
+                )
+        return rank_claims(out, settings=settings)
+
+
+def _claimed(row: Any) -> Any:
+    """A campus statement's value as its citation recorded it, type and all."""
+    return json.loads(row.value_json) if row.value_json is not None else row.value
+
+
+def _envelope(row: Any) -> dict[str, Any]:
+    """A campus statement's claim envelope (`claim_meta[field]`), or an empty one."""
+    if row is None or not row.axes:
+        return {}
+    entry = _load(row.axes, {})
+    return entry if isinstance(entry, dict) else {}
 
 
 def summary(session: Session) -> dict[str, Any]:
@@ -484,10 +898,16 @@ __all__ = [
     "CSV_COLUMNS",
     "TRANCHE_FIELDS",
     "UNITS",
+    "Statements",
+    "campus_statements",
+    "drifted",
+    "follow",
+    "preload",
     "rebuild",
     "recompute",
     "render_csv",
     "rows_for",
+    "settle",
     "statements",
     "summary",
 ]

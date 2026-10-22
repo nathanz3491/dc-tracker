@@ -623,6 +623,35 @@ load-bearing:
   these only fed a three-quote blend, not harmless once one sentence sits beneath
   one value.
 
+## The evidence is read from the master table, and every commit keeps it current
+
+Since 2026-10-22 (client plan step 4.5) the export's `basis`, `prov` and
+`claims_by_field` — and so the API's `fields`, the project page's evidence and its
+待确认 reasons — are read from the `fact` table rather than from each citation's JSON,
+so the statements a reader downloads are the ones the page credits. Two decisions
+make that safe:
+
+* **One algorithm, two records.** `gaps.provenance` asks a citation five questions
+  (is the field quoted, asserted at all, does the claim state this value, its
+  sentence, its envelope) through `gaps.Said`; `gaps.FromCitations` answers from the
+  JSON and `facts.Statements` from the table, and the claim lists come from either
+  record ranked by the one `upsert.rank_claims`. A second implementation of the
+  winner rule would drift; a second record behind one rule can be tested against
+  the first, which `tests/test_facts.py` does field by field. A campus statement
+  had to carry everything the JSON said for that to hold: the value typed as
+  written (300 and 300.0 print differently), and both lists it was on — a ruling
+  adds a quoted claim to `unconfirmed_fields` without removing it from `fields`,
+  so "quoted" and "counts as confirmed" are different facts (migration 0048).
+* **Freshness is not left to each write.** A cache read by the page is wrong
+  whenever a write forgets to rebuild it, and an audit found six kinds of write that
+  did — a party's role ended or resumed, a company alias added or removed, a
+  publication date learned, a backfill rewriting an envelope or a gate's verdict, an
+  obstacle confirmed or closed, a milestone refiled. Adding a rebuild to each would
+  fix those six and not the seventh. `facts.follow`, on every session, notes each
+  flush's changes to a campus's inputs and rebuilds those campuses at commit; the
+  writes that already rebuild leave it nothing to do, so `backfill derive` and
+  `tracker init` cost about what they did. `facts.drifted` is the check.
+
 ## `defaulted` is not 待确认
 
 A fifth tier, and the distinction is not pedantic. `phase` is NOT NULL, ingest

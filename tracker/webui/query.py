@@ -408,9 +408,15 @@ def _fingerprint(session: Session) -> tuple[int, str | None]:
 
 
 def _quoted_ids(session: Session) -> frozenset[int]:
-    """Projects where every populated tracked field rests on a quote or a lookup."""
+    """Projects where every populated tracked field rests on a quote or a lookup.
+
+    Each field's tier as the project page and the API's `fields` label it: read off
+    the fact table (`facts.Statements`), so the filter cannot keep a campus whose
+    page shows a value as 待确认.
+    """
     from tracker.export import fetch_projects
-    from tracker.gaps import basis as tier_of
+    from tracker.facts import Statements
+    from tracker.gaps import provenance
 
     stamp = _fingerprint(session)
     if _memo.fingerprint == stamp:
@@ -418,11 +424,14 @@ def _quoted_ids(session: Session) -> frozenset[int]:
 
     allowed = set()
     for project in fetch_projects(session):
+        said = Statements(project)
+        by_field = said.claims_by_field()
         for name in TRACKED_FIELDS:
             value = getattr(project, name, None)
             if value is None or value == "":
                 continue
-            if (tier_of(project, name) or "reported") in UNQUOTED_TIERS:
+            prov = provenance(project, name, by_field, said)
+            if (prov.tier if prov is not None else "reported") in UNQUOTED_TIERS:
                 break
         else:
             allowed.add(project.id)

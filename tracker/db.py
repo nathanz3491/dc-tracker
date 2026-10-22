@@ -259,9 +259,17 @@ def _read_company_aliases(dbapi_conn, _record) -> None:
 
 @contextmanager
 def session_scope(engine: Engine, *, commit: bool = True) -> Iterator[Session]:
-    """Transactional session: commit on clean exit, roll back on any exception."""
+    """Transactional session: commit on clean exit, roll back on any exception.
+
+    Every session keeps the fact table in step with what it writes (`facts.follow`):
+    the export, the API and the project page read that table, so a write that forgot
+    to rebuild it would otherwise show readers the campus as it was.
+    """
+    from tracker import facts
+
     factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     session = factory()
+    facts.follow(session)
     try:
         yield session
         if commit:

@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import Final
+from typing import Any, Final, Protocol
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
@@ -193,7 +193,16 @@ def _asserted(source, field: str) -> bool:
 def _tier_of(source, field: str) -> str:
     """The tier one source's assertion about one field sits at."""
     confirmed = {f.strip() for f in (source.fields or "").split(",") if f.strip()}
-    if field not in confirmed:
+    return tier_for(field in confirmed, source)
+
+
+def tier_for(quoted: bool, source) -> str:
+    """The tier of a statement the citation does or does not list as quoted.
+
+    The one rule, whichever record the "listed as quoted" was read from — the
+    citation's `fields` (`_tier_of`) or the fact table's `quoted`.
+    """
+    if not quoted:
         # Either explicitly 待确认, or listed nowhere — both mean nothing quotable
         # backs it, which is what the tier says.
         return UNCONFIRMED
@@ -203,6 +212,71 @@ def _tier_of(source, field: str) -> str:
     if extractor.startswith("inferred:"):
         return INFERRED
     return REPORTED
+
+
+class Said(Protocol):
+    """What `provenance` asks of one citation about one field. See `FromCitations`."""
+
+    def tier(self, source: Any, field: str) -> str: ...
+
+    def asserted(self, source: Any, field: str) -> bool: ...
+
+    def states(self, source: Any, field: str, value: Any) -> bool: ...
+
+    def quote(self, source: Any, field: str) -> Any: ...
+
+    def axes(self, source: Any, field: str) -> dict[str, str]: ...
+
+    def reason(self, source: Any, field: str) -> Any: ...
+
+
+class FromCitations:
+    """What one citation says about one field, read off the citation's own JSON.
+
+    `provenance` asks five questions of a citation, and the export's claim table a
+    sixth (`reason`); this answers them from `source.fields`, `unconfirmed_fields`,
+    `claims`, `quotes`, `claim_meta` and `unconfirmed_reasons`. `facts.Statements`
+    answers the same six from the fact table, which is what the export, the API and
+    the project page read (client plan step 4.5). One algorithm, two records: the
+    readers still on the JSON — `tracker show`, the nightly checks — and the ones on
+    the table cannot pick a different winner, and the tests hold the two records to
+    the same answers.
+    """
+
+    def tier(self, source, field: str) -> str:
+        return _tier_of(source, field)
+
+    def asserted(self, source, field: str) -> bool:
+        return _asserted(source, field)
+
+    def states(self, source, field: str, value) -> bool:
+        return _states(source, field, value)
+
+    def quote(self, source, field: str):
+        """The sentence recorded for this field, as stored (not stripped), or None."""
+        if not source.quotes:
+            return None
+        try:
+            recorded = json.loads(source.quotes)
+        except (TypeError, ValueError):
+            return None
+        return recorded.get(field) if isinstance(recorded, dict) else None
+
+    def axes(self, source, field: str) -> dict[str, str]:
+        return _axes_of(source, field)
+
+    def reason(self, source, field: str):
+        """Why the claim is 待确认 or ruled out, as recorded, or None."""
+        if not source.unconfirmed_reasons:
+            return None
+        try:
+            reasons = json.loads(source.unconfirmed_reasons)
+        except (TypeError, ValueError):
+            return None
+        return reasons.get(field) if isinstance(reasons, dict) else None
+
+
+_FROM_CITATIONS: Final = FromCitations()
 
 
 @dataclass(frozen=True)
@@ -251,7 +325,7 @@ class FieldProvenance:
         return self.axes.get("date_precision")
 
 
-def _winning_source(project, field: str, value, by_field=None):
+def _winning_source(project, field: str, value, by_field=None, said: Said = _FROM_CITATIONS):
     """The source whose claim actually became the stored value.
 
     Not simply the strongest source that mentions the field. For a field two
@@ -288,11 +362,11 @@ def _winning_source(project, field: str, value, by_field=None):
     # for a row edited by hand. Fall back to the strongest source that at least
     # says it supports the field — the citation is still the right one to show,
     # only its exact wording is not pinned down.
-    supporting = [s for s in sources if _asserted(s, field)]
+    supporting = [s for s in sources if said.asserted(s, field)]
     if not supporting:
         return None
     order = {tier: i for i, tier in enumerate((REPORTED, DERIVED, INFERRED, UNCONFIRMED))}
-    supporting.sort(key=lambda s: (order[_tier_of(s, field)], -_source_weight(s), s.url))
+    supporting.sort(key=lambda s: (order[said.tier(s, field)], -_source_weight(s), s.url))
     return supporting[0]
 
 
@@ -404,19 +478,25 @@ def _states(source, field: str, value) -> bool:
     return _same_value(claims[field], claim_value(value))
 
 
-def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
+def provenance(
+    project, field: str, by_field=None, said: Said = _FROM_CITATIONS
+) -> FieldProvenance | None:
     """Which tier the value rests on, the sentence behind it, and whose it is.
 
     ``None`` when the field is NULL — there is nothing to justify.
 
     Derived rather than stored, for the same reason `confidence` is recomputed: a
     column recording provenance would drift the moment a source changed.
+
+    `said` is where each citation's statements are read from: its own JSON by
+    default, or the fact table (`facts.Statements`), with `by_field` read from the
+    same place. See `FromCitations`.
     """
     value = getattr(project, field, None)
     if value is None:
         return None
 
-    source = _winning_source(project, field, value, by_field)
+    source = _winning_source(project, field, value, by_field, said)
     if source is None:
         # Nothing claims this value and nothing says it supports the field. Either
         # the NOT NULL column fell back to its schema default, or the row was
@@ -440,7 +520,7 @@ def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
 
     from tracker.upsert import DERIVED_FIELDS
 
-    if field == "phase" and _tier_of(source, field) != REPORTED:
+    if field == "phase" and said.tier(source, field) != REPORTED:
         # A phase no quoted claim holds, credited to an unquoted one that happens to
         # agree. The merge discarded that claim; what actually set the value is the
         # campus's named buildings, when they did.
@@ -448,7 +528,7 @@ def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
         if derived is not None:
             return derived
 
-    if field not in DERIVED_FIELDS and not _states(source, field, value):
+    if field not in DERIVED_FIELDS and not said.states(source, field, value):
         # The fallback: no claim holds the stored value, so this is the strongest
         # source that merely mentions the field. Its tier and its sentence are about
         # the value IT claimed, not this one — so neither may be shown as this
@@ -461,26 +541,20 @@ def provenance(project, field: str, by_field=None) -> FieldProvenance | None:
 
     quote: str | None = None
     exact = False
-    if source.quotes:
-        try:
-            recorded = json.loads(source.quotes)
-        except (TypeError, ValueError):
-            recorded = {}
-        if isinstance(recorded, dict):
-            candidate = recorded.get(field)
-            if isinstance(candidate, str) and candidate.strip():
-                quote, exact = candidate.strip(), True
+    candidate = said.quote(source, field)
+    if isinstance(candidate, str) and candidate.strip():
+        quote, exact = candidate.strip(), True
     if quote is None:
         quote = source.excerpt
 
     return FieldProvenance(
         field,
-        _tier_of(source, field),
+        said.tier(source, field),
         quote,
         exact,
         source.url,
         index,
-        axes=_axes_of(source, field),
+        axes=said.axes(source, field),
     )
 
 
@@ -608,11 +682,14 @@ __all__ = [
     "FieldGap",
     "FieldProvenance",
     "FieldState",
+    "FromCitations",
+    "Said",
     "basis",
     "for_project",
     "measure",
     "provenance",
     "t2_gaps",
+    "tier_for",
     "unpublished",
     "worst",
 ]

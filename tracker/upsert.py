@@ -492,6 +492,17 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     as_of=_recorded_axis(s, name, "as_of"),
                 )
             )
+    return rank_claims(out, settings=settings)
+
+
+def rank_claims(out: dict[str, list[_Claim]], *, settings: Any = None) -> dict[str, list[_Claim]]:
+    """Sort each field's claims into the merge engine's order, strongest first. In place.
+
+    Shared by the two places claims are read from — each citation's JSON
+    (`claims_by_field`) and the fact table (`facts.Statements.claims_by_field`) — so
+    the page that lists them and the merge that decides between them cannot rank
+    them differently.
+    """
     # Confirmed first, then first-hand, then strongest source, then most recent.
     # `url` is the final tiebreaker so the ordering is total and therefore
     # reproducible — without it, two equally-weighted same-timestamp sources could
@@ -2878,6 +2889,7 @@ __all__ = [
     "fold_reading",
     "fold_source",
     "is_placeholder",
+    "rank_claims",
     "recompute_blocks",
     "recompute_confidence",
     "recompute_from_sources",

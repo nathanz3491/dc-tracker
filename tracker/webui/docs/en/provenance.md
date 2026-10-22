@@ -59,7 +59,9 @@ The project page's **N other claims** shows every competing value and which was 
 
 ## Every statement, in one table
 
-Behind the page, every statement each source makes — a campus figure, a tranche's capacity or date, a company's role, a milestone, an obstacle — is kept as one row with the same columns, whatever it is about: what it is about, the value, how far it can be trusted, the sentence, the citation, and whether it is the value the campus shows. Since 22 October 2026 this table is rebuilt from the sources every time a campus is written, so it always matches the page.
+Behind the page, every statement each source makes — a campus figure, a tranche's capacity or date, a company's role, a milestone, an obstacle — is kept as one row with the same columns, whatever it is about: what it is about, the value, how far it can be trusted, the sentence, the citation, and whether it is the value the campus shows.
+
+**The page reads this table.** Each field's label and sentence, the **N other claims** list, the API's `fields` and the export's evidence are all read from it, so a statement you download is exactly the one the page shows. It is rebuilt from the sources whenever anything about a campus changes — a new article, a ruling, a merge, a role that ended, a company's name folded into another — so it always matches them.
 
 How far a statement can be trusted, most first:
 

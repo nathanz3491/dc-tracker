@@ -515,6 +515,27 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Where a figure came from is now read from the master data table, so the download
+  and the page cannot disagree** (`tracker/facts.py` `Statements`, `follow`,
+  `drifted`; migration 0048 `fact_claim`; `tracker/export.py` `to_json_object`,
+  `fetch_projects`; `tracker/gaps.py` `Said`, `FromCitations`; `tracker/webui/
+  dataset.py`, `query.py`; `tests/test_facts.py`). Step 4.5 of the client plan, its
+  second half. Each field's label and sentence, the list of every other claim and why
+  one was kept, the 待确认 reasons, the API's `fields`, the export's evidence and the
+  table's "quoted only" filter all read the statements `tracker export facts` and
+  `/v1/projects/{id}/facts` download, instead of re-reading each citation's notes.
+  Nothing a reader sees changed: on the 10-22 copy of production, all 780 campuses'
+  API answers and project pages are identical before and after. To make that possible
+  a campus statement now keeps its value exactly as written (300 stays 300, 300.0
+  stays 300.0) and whether its citation listed it as quoted, as 待确认, or both (a
+  ruling takes a quoted claim out without unquoting it). And because a page reading a
+  copy is wrong whenever a write forgets to refresh it — six kinds of write did: a
+  role ended or resumed, a company spelling folded or unfolded, a publication date
+  learned, a backfill rewriting a claim's scope or a gate's verdict, an obstacle or a
+  milestone refiled by hand — the copy no longer depends on each write remembering:
+  every campus a transaction touched is rebuilt when it commits. The citations' own
+  notes stay, and `tracker show` and the nightly checks still read them, until the
+  last step of the plan retires them.
 - **The tranche rules, the drift check and Capex read the campus's tranche tree**
   (`tracker/logic.py`, `tracker/capex.py`, `tracker/invariants.py`, workflow page
   *logic*). `blocks_may_double_count` no longer reports a pair the structure relates,
@@ -974,6 +995,11 @@ initial build of the v1 PRD.
   (32 folded or split away, 11 parts added); one campus key moves, Yondr's Manassas
   row, which already answered to it; the Capex total (275,509 MW) and the 19 suspected
   duplicate pairs are unchanged.
+- **The master data table no longer misses a milestone or obstacle written in the same
+  run as the campus** (`tracker/facts.py` `rebuild`). It listed them from the campus's
+  copy loaded earlier in the run, which a milestone added afterwards is not in; one
+  campus on the 10-22 copy of production had a milestone the table did not. They are
+  read from the database now.
 - **A tenant of one part of a campus is no longer credited with all of it**
   (`tracker/capex.py` `tenant_of_part`, `attribute`; `tests/test_capex.py`). The Capex
   page credited a campus with one named customer wholly to that customer, so

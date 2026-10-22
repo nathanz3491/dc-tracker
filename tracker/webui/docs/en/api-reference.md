@@ -136,6 +136,8 @@ One campus: everything a summary has, plus:
 
 A `quote_is_exact` of `false` means the text is the source's excerpt rather than a sentence recorded for this field. A campus merged into another answers `404`, saying it may have been merged.
 
+`fields` is read from the same statements `/v1/projects/{id}/facts` returns. Where `quote_is_exact` is `true`, `quote` is the `quote` of the campus statement for that field from that `source_url`, so the two endpoints cannot disagree.
+
 ## GET /v1/projects/{id}/sources
 
 Every citation: `url`, `type` (`company_filing`, `government_doc`, `trade_press`, `general_media`, `iso_queue` or `manual`), `published_at`, `fetched_at`, `excerpt`, and `quotes` — the sentence recorded for each field the source supports.

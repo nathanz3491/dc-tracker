@@ -12,7 +12,6 @@ The shape is the mockup's, so the ported view code needs no translation layer.
 
 from __future__ import annotations
 
-import json
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -117,26 +116,22 @@ def _unconfirmed_because(project) -> dict[str, dict[str, str]]:
     to correct it. Showing both as the same amber chip tells a reader to go
     looking for a citation that already exists.
 
-    Read from `source.unconfirmed_reasons` (migration 0013), never recomputed:
-    recomputing the ratio from the merged values would sometimes accuse a figure
-    no gate ever demoted. This used to reconstruct the one reason it could by
-    string-matching a marker in the project's notes, which could only ever see
-    the scale demotion; the column is that seam made explicit.
+    Read as the gate recorded it (`source.unconfirmed_reasons`, migration 0013),
+    never recomputed: recomputing the ratio from the merged values would sometimes
+    accuse a figure no gate ever demoted. This used to reconstruct the one reason it
+    could by string-matching a marker in the project's notes, which could only ever
+    see the scale demotion; the column is that seam made explicit. Read off the
+    fact table's `reason` (`facts.Statements`), like the rest of the page's evidence.
 
     A source older than 0013 has no reason recorded, and gets no chip rather than
     a guessed one.
     """
+    from tracker.facts import Statements
+
+    said = Statements(project)
     out: dict[str, dict[str, str]] = {}
     for source in project.sources:
-        if not source.unconfirmed_reasons:
-            continue
-        try:
-            reasons = json.loads(source.unconfirmed_reasons)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(reasons, dict):
-            continue
-        for field_name, code in reasons.items():
+        for field_name, code in said.reasons(source):
             note = _REASON_NOTES.get(code)
             # An unrecognised code is a newer writer than this reader. Say
             # nothing rather than invent a gloss for it.
