@@ -173,3 +173,29 @@ def test_a_rename_needs_a_name_and_writes_nothing_on_a_dry_run(engine, db_path):
     assert done.exit_code == 0, done.output
     with session_scope(engine, commit=False) as session:
         assert session.get(Project, pid).name == "Hillsboro"
+
+
+def test_unalias_lets_a_wrongly_folded_key_make_its_own_row(engine, db_path):
+    """Related Digital's South Works data center was folded into the quantum park on
+    the same land, and its key kept routing every later reading there."""
+    from tracker.models import ProjectAlias
+
+    pid = _seed(engine)
+    key = "related digital|city:hillsboro|OR"
+    with session_scope(engine) as session:
+        session.add(ProjectAlias(from_dedup_key=key, to_project_id=pid, decided_by="agent"))
+
+    assert _invoke(db_path, "unalias", key, "--why", "x", "--dry-run").exit_code == 0
+    with session_scope(engine, commit=False) as session:
+        assert session.scalar(select(ProjectAlias).where(ProjectAlias.from_dedup_key == key))
+
+    done = _invoke(db_path, "unalias", key, "--why", "a different campus on the same land")
+    assert done.exit_code == 0, done.output
+    with session_scope(engine, commit=False) as session:
+        assert (
+            session.scalar(select(ProjectAlias).where(ProjectAlias.from_dedup_key == key)) is None
+        )
+        notes = session.get(Project, pid).notes
+        assert "no longer routes to this row" in notes
+        assert "a different campus on the same land" in notes
+    assert _invoke(db_path, "unalias", key, "--why", "x").exit_code != 0

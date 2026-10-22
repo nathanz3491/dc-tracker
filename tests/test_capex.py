@@ -1757,3 +1757,62 @@ def test_the_spellings_that_split_one_company_now_fold():
     assert company_key("Compass Mining") != company_key("Compass Datacenters")
     for hedge in ("hyperscale cloud providers", "a leading frontier AI lab"):
         assert customer_key(hedge) == "", hedge
+
+
+def _named_by(session, project, name, source):
+    """`source` names `name` as a customer, as the extractor stores it on the citation."""
+    import json
+
+    held = json.loads(source.parties or "[]")
+    source.parties = json.dumps([*held, {"name": name, "role": "customer"}])
+    session.flush()
+    session.refresh(project)
+
+
+def test_a_tenant_every_source_ties_to_a_small_part_is_not_the_campus_buyer(session):
+    """NTT Ashburn (#16): DreamHost, "the first tenant" of a 3.6 MW first phase in
+    2012, held the whole 224 MW campus on the Capex page."""
+    project = _project(
+        session, name="NTT Ashburn", company="NTT", customer="DreamHost", mw_planned=224.0
+    )
+    article = _source(session, project, fields="customer")
+    _named_by(session, project, "DreamHost", article)
+    block = _block(session, project, label="Phase 1", mw=3.6, status="energized")
+    block.customer, block.source_id = "DreamHost", article.id
+    session.flush()
+    session.refresh(project)
+
+    assert capex.tenant_of_part(project, "dreamhost")
+    assert capex.attribute(project) == (capex.UNATTRIBUTED, "", False)
+    assert capex.credits(project)[""][0] >= 220.0
+
+
+def test_a_buyer_some_source_names_for_the_campus_keeps_it(session):
+    """One source ties the tenant to a phase, another names it for the campus."""
+    project = _project(session, name="Denton", company="Core Scientific", mw_planned=260.0)
+    phase = _source(session, project, fields="customer")
+    campus = _source(session, project, fields="mw_planned")
+    _buyer(session, project, "CoreWeave")
+    _named_by(session, project, "CoreWeave", phase)
+    _named_by(session, project, "CoreWeave", campus)
+    block = _block(session, project, label="Expansion", mw=70.0)
+    block.customer, block.source_id = "CoreWeave", phase.id
+    session.flush()
+    session.refresh(project)
+
+    assert not capex.tenant_of_part(project, "coreweave")
+    assert capex.attribute(project)[1] == "coreweave"
+
+
+def test_a_tenant_whose_tranches_are_most_of_the_campus_keeps_it(session):
+    project = _project(session, name="Rockdale", company="Riot", mw_planned=240.0)
+    lease = _source(session, project, fields="customer")
+    _buyer(session, project, "AMD")
+    _named_by(session, project, "AMD", lease)
+    block = _block(session, project, label="AMD lease", mw=200.0)
+    block.customer, block.source_id = "AMD", lease.id
+    session.flush()
+    session.refresh(project)
+
+    assert not capex.tenant_of_part(project, "amd")
+    assert capex.attribute(project)[1] == "amd"

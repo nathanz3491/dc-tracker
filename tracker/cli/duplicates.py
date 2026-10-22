@@ -861,6 +861,60 @@ def rename(
         console.print("[yellow]dry run[/yellow] — nothing written")
 
 
+@app.command()
+def unalias(
+    key: Annotated[str, typer.Argument(help="The merged-away key, e.g. 'acme|city:austin|TX'.")],
+    why: Annotated[str, typer.Option("--why", help="Why, kept in the row's notes.")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Show it; write nothing.")] = False,
+) -> None:
+    """Stop routing a merged-away key to the row it was folded into.
+
+    A merge leaves the folded row's key pointing at the survivor, so an article
+    written from the folded company's side lands on the survivor instead of making
+    the row again. When the fold was wrong, that pointer keeps it wrong: on
+    2026-10-17 the duplicate pass folded Related Digital's 1 GW data center at South
+    Works into the Illinois Quantum and Microelectronics Park on the same land, and
+    every later reading of it was routed there. This removes the pointer, so the
+    next reading creates the campus as its own row; the folded citations stay where
+    they are. The removal and `--why` go into the survivor's notes. Park the new row
+    against the old one afterwards (`tracker duplicates park`), or the duplicate
+    pass may fold it again.
+    """
+    from tracker import logic as logic_mod
+    from tracker.models import ProjectAlias, utcnow
+
+    if not why.strip():
+        _fail("--why is required: it is what the row's notes will say")
+    engine, _ = init_db(_db_path())
+    if not dry_run:
+        try:
+            release_lock = acquire_write_lock(_db_path(), command="unalias")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release_lock)
+    with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
+        alias = session.scalar(select(ProjectAlias).where(ProjectAlias.from_dedup_key == key))
+        if alias is None:
+            _fail(f"no row is reached by {key!r} through an alias", 1)
+        project = session.get(Project, alias.to_project_id)
+        label = f"#{project.id} {project.name}" if project is not None else "a deleted row"
+        session.delete(alias)
+        if project is not None:
+            project.updated_at = utcnow()
+            logic_mod.record_decision(
+                project,
+                "operator_unaliased",
+                f"key {key!r} no longer routes to this row",
+                by="operator",
+                detail=why,
+            )
+        session.flush()
+    console.print(f"{escape(key)} no longer reaches {escape(label)}")
+    if dry_run:
+        console.print("[yellow]dry run[/yellow] — nothing written")
+
+
 def _print_excluded(rows) -> None:
     if json_mode():
         emit(

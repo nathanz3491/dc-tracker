@@ -117,6 +117,7 @@ COMMANDS = {
     "tranches show",
     "tranches undo",
     "tui",
+    "unalias",
     "users",
     "users add",
     "users admin",

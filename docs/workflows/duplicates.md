@@ -294,6 +294,13 @@ nothing answered to. Two things close that before any pair is raised:
   spelled that way goes straight to the row instead of paying for another check.
   On the 10-19 copy 134 rows gained such a key. A key another row holds outright is
   never taken from it: two rows sharing a natural key is a pair for the passes above.
+* **A wrong fold can be undone for the next reading.** A merge's key keeps routing
+  every later article about the folded campus to the survivor, so a fold that was
+  wrong stays wrong. `tracker unalias KEY --why` removes that one routing and notes
+  it on the survivor; the next reading creates the campus as its own row, and
+  `duplicates park` keeps the passes from folding it again. The folded citations
+  stay where they are. First used on 2026-10-22 for Related Digital's 1 GW South
+  Works data center, folded into the Illinois quantum park on the same land.
 
 ## Prevention beats all of it
 
@@ -334,4 +341,4 @@ Touching any of these means the poster is in scope. Re-render with
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
 | The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
-| CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |
+| CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `unalias`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |

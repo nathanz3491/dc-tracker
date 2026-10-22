@@ -13,6 +13,7 @@
 - **园区阶段不低于已获批的许可或已动工。** Google 的 Clydesdale 曾在其 2025 年 10 月动工的记录旁退回到“已宣布”。参见[字段说明](fields)。
 - **又有三个列表网站按目录处理。** 一个州级列表复述 CoreWeave 2025 年的宣布，曾让其 Lancaster 园区停在 *announced*（已宣布）；现在重新显示为在建。
 - **人工更正的数据行。** 当晚被存了两次的八个园区重新合并为各一行；QTS Richmond 5 不再带着另一个园区 238 MW 的六份副本；Plano 和 Ashburn 园区按园区命名，数字也归属正确；CoreSite DE3 为 18 MW，Meta Stanton Springs 为 15 亿美元，Meta Jeffersonville 显示为运营中。
+- **只租用一部分的租户，不再算作整个园区的买方。** DreamHost 是 NTT Ashburn 园区 3.6 MW 一期在 2012 年的租户，过去在 Capex 页面上占了全部 224 MW；这类园区的其余部分现在归入 *(no named customer)*。Related Digital 在芝加哥 South Works 的 1 GW 数据中心重新有了自己的一行。参见 [Capex](capex)。
 
 ### 分期的层级
 

@@ -286,6 +286,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "merge",
             "exclude",
             "rename",
+            "unalias",
             "logic resolve",
             # The same ruling `logic resolve` offers from its menu, by hand, for one
             # claim a person has already read and found wrong.

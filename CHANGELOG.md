@@ -12,6 +12,11 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker unalias KEY --why` undoes a wrong fold for the next reading**
+  (`tracker/cli/duplicates.py`; `tests/test_operator_tools.py`). A merge leaves the
+  folded campus's key pointing at the survivor, so every later article about it is
+  filed there. Related Digital's 1 GW data center at South Works was folded into the
+  Illinois quantum park on the same land on 10-17 and could not get its own row back.
 - **A figure that breaks a relationship the tracker guarantees is never published**
   (`tracker/invariants.py` `enforce`, `HeldBroken`, `campus_breaks`; `tracker/upsert.py`
   `upsert_record`; `tracker/ingest/crawl.py` `run`; `tests/test_write_checks.py`). Step
@@ -893,6 +898,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A tenant of one part of a campus is no longer credited with all of it**
+  (`tracker/capex.py` `tenant_of_part`, `attribute`; `tests/test_capex.py`). The Capex
+  page credited a campus with one named customer wholly to that customer, so
+  DreamHost — "the first tenant" of a 3.6 MW first phase at NTT's Ashburn campus in
+  2012 — held all 224 MW of it. When every source naming a buyer also says which
+  tranches it takes, and they add up to under half the campus, the buyer holds those
+  tranches and the rest has no named customer; one source naming it for the campus
+  keeps the campus with it. Read off each citation, since the party table keeps one
+  source per buyer. On the 10-22 copy five campuses move, 10,535 MW, the total
+  unchanged: BluSky AI's 50 MW at the 10 GW Delta Gigasite, DreamHost, Galaxy at
+  Project Kati 2, an unnamed financial firm at North Ashburn, Cyxtera at Elk Grove.
 - **A ruling that changed nothing is no longer asked again every round**
   (`tracker/cli/quality.py` `_held_back_as`; `tracker/cli/logic.py` resolve;
   `tests/test_audit_resolve.py`). When the model struck a citation and the value

@@ -41,7 +41,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -251,12 +251,17 @@ def attribute(project: Project) -> tuple[str, str, bool]:
     if len(named) > 1:
         return UNATTRIBUTED, "", False
     if named:
-        return named[0].name, customer_key(named[0].name), False
+        key = customer_key(named[0].name)
+        if tenant_of_part(project, key):
+            return UNATTRIBUTED, "", False
+        return named[0].name, key, False
 
     # A tenant the row still names whose role here has ended (migration 0044):
     # Cyxtera's rejected lease at Comstock is history, not a buyer's position.
     tenant = parties_mod.current_customer(project)
     key = customer_key(tenant)
+    if key and tenant_of_part(project, key):
+        return UNATTRIBUTED, "", False
     if key:
         return tenant or key, key, False
 
@@ -274,6 +279,76 @@ def attribute(project: Project) -> tuple[str, str, bool]:
         return end_users[operator], operator, True
 
     return UNATTRIBUTED, "", False
+
+
+#: Below this share of the campus, a buyer every source ties to particular tranches
+#: is a tenant of those tranches, not the buyer of the campus.
+TENANT_OF_PART_SHARE: Final = 0.5
+
+
+def tenant_of_part(project: Project, key: str) -> bool:
+    """Whether every source naming this buyer ties it to tranches well short of the campus.
+
+    A buyer is credited with the whole campus because a source says it occupies the
+    site; nothing else divides a campus between names. But a source can say less:
+    "DreamHost ... the first tenant in RagingWire's new data center campus in
+    Ashburn", read in 2012 as a 3.6 MW first phase. Credited whole, that tenant held
+    the 224 MW NTT Ashburn campus on the Capex page fourteen years on.
+
+    So a buyer holds the campus only when some source names it without sizing what
+    it takes — a campus-level statement. When every source naming it also gives the
+    tranches it takes, and those add up to under half the campus's planned capacity,
+    it is a tenant of a part: its tranches still credit it where their capacity is
+    confirmed (`block_shares`), and the rest of the campus has no named customer. A
+    tranche with no stated capacity sizes nothing, so a buyer named only on one
+    keeps the campus, as before.
+    """
+    planned = float(project.mw_planned or 0.0)
+    if not key or planned <= 0:
+        return False
+    # Read off each citation, not off `project_party`: that table keeps one row per
+    # buyer and role, citing one source, so it cannot say whether another article
+    # names the same buyer for the whole campus.
+    naming = {
+        source.id
+        for source in getattr(project, "sources", ()) or ()
+        if key in _customers_named(source)
+    }
+    if not naming:
+        return False
+    sized: dict[str, float] = {}
+    for source_id in naming:
+        theirs = [
+            block
+            for block in getattr(project, "blocks", ()) or ()
+            if block.source_id == source_id
+            and customer_key(block.customer) == key
+            and block.mw is not None
+        ]
+        if not theirs:
+            return False
+        for block in theirs:
+            sized[block.block_key] = max(sized.get(block.block_key, 0.0), float(block.mw))
+    return sum(sized.values()) < TENANT_OF_PART_SHARE * planned
+
+
+def _customers_named(source: Any) -> set[str]:
+    """Customer keys one citation names: in its parties, or as the `customer` it claims."""
+    import json
+
+    keys: set[str] = set()
+    try:
+        parties = json.loads(source.parties or "[]")
+        claims = json.loads(source.claims or "{}")
+    except (TypeError, ValueError):
+        return keys
+    for party in parties if isinstance(parties, list) else ():
+        if isinstance(party, dict) and party.get("role") == "customer":
+            keys.add(customer_key(party.get("name")))
+    if isinstance(claims, dict) and claims.get("customer"):
+        keys.add(customer_key(str(claims["customer"])))
+    keys.discard("")
+    return keys
 
 
 def shared_buyers(project: Project) -> list[tuple[str, str]]:
