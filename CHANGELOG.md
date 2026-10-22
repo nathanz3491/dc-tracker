@@ -893,6 +893,24 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A ruling that changed nothing is no longer asked again every round**
+  (`tracker/cli/quality.py` `_held_back_as`; `tracker/cli/logic.py` resolve;
+  `tests/test_audit_resolve.py`). When the model struck a citation and the value
+  stayed where it was — another citation states it, or the figure comes from tranches
+  no citation ruling reaches — the finding stayed open and the next round paid for the
+  same answer: QTS Richmond 5 was ruled six times on 10-21, "1434 -> 1434" each time.
+  Such a ruling is now remembered like a decline, against the evidence it was shown,
+  so it is asked again only once that evidence changes.
+- **Three more listing sites count as directories** (`tracker/confidence.py`
+  `TERTIARY_DOMAINS`: dcatlas.io, electricchoice.com, metrocoloadvisory.com;
+  `tests/test_directory_sources.py`). A state listing's "CoreWeave announced more than
+  $6 billion for a data center in Lancaster County" was the one first-hand phase claim
+  on CoreWeave Lancaster, which therefore read *announced* beside a directory and a
+  tracker that both said under construction. It now reads under construction.
+- **`overnight.sh --status` lists the latest run only.** It printed the last twenty
+  timestamped lines of a log appended night after night, so a run with fewer lines
+  than that opened with the night before's "overnight complete" and read as if the
+  previous night had been the last.
 - **An old press release no longer outranks this year's reporting** (`tracker/upsert.py`
   `stale_claims`, `STALE_AFTER`, `_Claim.as_of`; `tests/test_merge_recency.py`). The
   merge ranks quoted, whole-site, first-hand claims by source weight before date, so

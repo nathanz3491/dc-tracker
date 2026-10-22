@@ -11,6 +11,8 @@
 - **"December of 2021" 是一个月份。** 模型写成 1 月 1 日的月份，会根据旁边的原句更正。
 - **文章按发布方的日期标注，而不是我们发现它的日期。** 一篇本月才被搜索找到的 2017 年文章曾被当作本月新闻，并因“较新”而胜出；Digital Realty 的 Santa Clara 园区因此显示 6 MW 而不是 48 MW。
 - **园区阶段不低于已获批的许可或已动工。** Google 的 Clydesdale 曾在其 2025 年 10 月动工的记录旁退回到“已宣布”。参见[字段说明](fields)。
+- **又有三个列表网站按目录处理。** 一个州级列表复述 CoreWeave 2025 年的宣布，曾让其 Lancaster 园区停在 *announced*（已宣布）；现在重新显示为在建。
+- **人工更正的数据行。** 当晚被存了两次的八个园区重新合并为各一行；QTS Richmond 5 不再带着另一个园区 238 MW 的六份副本；Plano 和 Ashburn 园区按园区命名，数字也归属正确；CoreSite DE3 为 18 MW，Meta Stanton Springs 为 15 亿美元，Meta Jeffersonville 显示为运营中。
 
 ### 分期的层级
 

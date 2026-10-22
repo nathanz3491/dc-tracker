@@ -1188,14 +1188,15 @@ def audit_resolve(
                 allow_search=search,
                 settings=settings,
             )
-            if got.declined:
+            held = _held_back_as(got)
+            if held:
                 declines.record(
                     session,
                     "audit",
                     audit_mod.decline_subject(finding),
                     shown,
-                    outcome="declined after search" if got.searched else "declined",
-                    reason=got.note,
+                    outcome=held,
+                    reason=got.note if got.declined else got.changed,
                     by="model",
                 )
             resolutions.append(got)
@@ -1268,6 +1269,24 @@ def _stood(got) -> bool:
     from tracker.audit import DISMISS, left_as_it_was
 
     return got.acted and got.key != DISMISS.key and left_as_it_was(got.changed)
+
+
+def _held_back_as(got) -> str | None:
+    """The outcome a resolution is remembered under in `model_decline`, if any.
+
+    A decline, and a ruling that left the value where it was. The second leaves the
+    finding open (`_stood`), and on the same evidence the next round asked the same
+    question and got the same answer: QTS Richmond 5 (#1193) was ruled six times on
+    2026-10-21, "mw_planned 1434 -> 1434 (nothing left to rule against)" each time,
+    because the figure came from tranches, which no citation ruling reaches. It is
+    held against the evidence it was shown, so a ruling that did strike a claim has
+    changed that evidence and the question opens again on the next night.
+    """
+    if got.declined:
+        return "declined after search" if got.searched else "declined"
+    if _stood(got):
+        return "ruling changed nothing"
+    return None
 
 
 def _print_resolution(got) -> None:

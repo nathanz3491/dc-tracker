@@ -355,6 +355,16 @@ the system prompt says a claim marked ruled out cannot be named again. And a fin
 whose fields have no live claim left at all is withheld before the call
 (`triage.has_live_claim`), since its only possible answer is known in advance.
 
+**A ruling that changed nothing is remembered like a decline** (2026-10-22). Striking
+a citation while another states the same value — `construction -> construction` —
+leaves the finding open, which is right; but on unchanged evidence the next round
+asked the same question and got the same answer. QTS Richmond 5 was ruled six times on
+one night, "mw_planned 1434 -> 1434 (nothing left to rule against)", because its figure
+came from tranches no citation ruling reaches. Both `logic resolve` and `audit
+resolve` now record such a ruling in `model_decline` against the evidence it was shown
+(`cli.quality._held_back_as`): held for the rest of the night like any look, and after
+that only while the evidence is the same — a ruling that did strike a claim changed it.
+
 ### A ruling has to be readable back as an answer
 
 Decisions are recorded as prose in the row's notes and parsed back by

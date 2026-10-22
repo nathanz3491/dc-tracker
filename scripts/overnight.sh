@@ -332,8 +332,14 @@ if [ "$STATUS_ONLY" -eq 1 ]; then
   else
     echo "not running"
   fi
+  # The latest run only. The log is appended night after night, and a run that
+  # logs fewer than twenty such lines let the night before's "overnight complete"
+  # open the listing — on 10-22 it read as if 10-20 were the last run.
   # `|| true`: under pipefail a log with no round lines yet is not an error.
-  [ -f "$LOG" ] && grep -E '^\[|^  round ' "$LOG" | tail -20 || true
+  if [ -f "$LOG" ]; then
+    start="$(grep -n '\] overnight starting' "$LOG" | tail -1 | cut -d: -f1 || true)"
+    tail -n +"${start:-1}" "$LOG" | grep -E '^\[|^  round ' | tail -20 || true
+  fi
   exit 0
 fi
 

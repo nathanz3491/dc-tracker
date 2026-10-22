@@ -187,6 +187,14 @@ TERTIARY_DOMAINS = frozenset(
         "trackpolicy.org",
         "unlimitedconstructionshuttles.com",
         "usdatamap.com",
+        # Added 2026-10-22. metrocoloadvisory's state page recounts a campus's
+        # announcement ("CoreWeave announced more than $6 billion for a data center
+        # in Lancaster County"), and counted first-hand it was the one standing phase
+        # claim on CoreWeave Lancaster, which went back to announced beside a
+        # directory and a tracker that both said under construction.
+        "dcatlas.io",
+        "electricchoice.com",
+        "metrocoloadvisory.com",
         # lists, digests and reposts
         "blackridgeresearch.com",
         "brightlio.com",

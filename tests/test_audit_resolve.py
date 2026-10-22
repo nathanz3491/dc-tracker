@@ -655,3 +655,24 @@ def test_the_summary_counts_a_settlement_by_what_it_did(monkeypatch):
     assert "1 changed the row, 1 judged the figure right as it stands" in text
     assert "struck a citation and left the value as it was" in text
     assert "nobody could decide" in text
+
+
+def test_a_ruling_that_changed_nothing_is_held_back_like_a_decline():
+    """QTS Richmond 5 (#1193) was ruled six times on 2026-10-21, "mw_planned 1434 ->
+    1434 (nothing left to rule against)" every round: the figure came from tranches,
+    which no citation ruling reaches, so each ruling left the finding open and the
+    next round paid for the same answer. It is remembered now, on the evidence shown."""
+    from tracker.cli.quality import _held_back_as
+
+    finding = audit.UnitFinding(1193, "Richmond 5", "giant_capacity_unconfirmed", "x", "y")
+    stood = audit.Resolution(
+        finding, "model", "r", "mw_planned 1434 -> 1434 (no claim; nothing left to rule against)"
+    )
+    assert _held_back_as(stood) == "ruling changed nothing"
+    assert _held_back_as(audit.Resolution(finding, "model", declined=True)) == "declined"
+    moved = audit.Resolution(finding, "model", "r", "mw_planned 1434 -> empty (…)")
+    assert _held_back_as(moved) is None
+    judged = audit.Resolution(
+        finding, "model", "d", "left as it stands — the figure was judged correct"
+    )
+    assert _held_back_as(judged) is None

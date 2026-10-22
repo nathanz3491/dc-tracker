@@ -11,6 +11,8 @@ Changes a reader of the console will notice, newest first. The console's version
 - **"December of 2021" is a month.** A month the model wrote as 1 January is corrected from the sentence beside it.
 - **An article is dated by its publisher, not by when we found it.** A 2017 article found by a search this month had been read as this month's news, and won on recency; Digital Realty's Santa Clara campus read 6 MW instead of 48.
 - **A campus's phase is never below a permit approved or ground broken.** Google's Clydesdale had fallen back to *announced* beside its October 2025 groundbreaking. See [Field dictionary](fields).
+- **Three more listing sites count as directories.** A state listing recounting CoreWeave's 2025 announcement had held its Lancaster campus at *announced*; it reads under construction again.
+- **Rows corrected by hand.** Eight campuses the night had stored twice are one row each again; QTS Richmond 5 no longer carries six copies of another campus's 238 MW; the Plano and Ashburn campuses are named as campuses, with figures that belong to them; CoreSite DE3 is 18 MW, Meta Stanton Springs $1.5 billion, and Meta Jeffersonville operating.
 
 ### Tranches that nest
 

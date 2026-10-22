@@ -875,6 +875,17 @@ def _triage_by_agent(
             )
             session.commit()
             if all(left_as_it_was(change) for change in outcome.changes):
+                # Held back on this evidence, as the audit holds back its own: a
+                # ruling that changed nothing is asked again every round otherwise.
+                declines.record(
+                    session,
+                    "logic",
+                    _logic_subject(finding),
+                    shown,
+                    outcome="ruling changed nothing",
+                    reason="; ".join(outcome.changes),
+                )
+                session.commit()
                 stood += 1
                 console.print(
                     f"{head}  [yellow]{escape(outcome.changes[0])}[/yellow]"

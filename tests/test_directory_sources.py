@@ -182,3 +182,23 @@ def test_a_directory_never_corroborates_the_report_it_copied():
         fields="mw_planned",
     )
     assert confidence.compute([report]).value == confidence.compute([report, listing]).value
+
+
+def test_a_listing_recounting_an_announcement_does_not_hold_a_campus_back(session):
+    """CoreWeave Lancaster (#1305), 2026-10-22: a state listing page's "CoreWeave
+    announced more than $6 billion for a data center in Lancaster County" was the one
+    first-hand phase claim, so a directory and a tracker that both said under
+    construction lost to it. Filed as a directory, it is one directory among three."""
+    listing = "https://metrocoloadvisory.com/pennsylvania-data-centers/"
+    assert confidence.is_tertiary(confidence.SourceView(url=listing, source_type="general_media"))
+    for url in (
+        "https://www.electricchoice.com/datacenters/moratoriums/",
+        "https://dcatlas.io/en/explore/facilities/market/kansas-city",
+    ):
+        assert confidence.is_tertiary(confidence.SourceView(url=url, source_type="general_media"))
+    project = _campus(
+        session,
+        _cite(DIRECTORY, when=OLD, phase="construction"),
+        _cite(listing, when=NEW, phase="announced"),
+    )
+    assert project.phase == "construction"
