@@ -586,6 +586,13 @@ def project_payload(project: Any, *, claims: bool = False, names: Any = None) ->
     payload["company_name"] = names.company(project.company)
     payload["customer_name"] = names.customer(project.customer)
     payload["customer_former"] = _former_customer(project, names)
+    # Every party under its company's one name too: "DPR" and "DPR Construction" on
+    # one campus are one party (`parties._folded`), and it reads as the company the
+    # rest of the console names. The source's spelling rides along for the popover.
+    for party in payload.get("parties") or ():
+        shown = names.of_key(party.get("key"), party.get("name"))
+        if shown and shown != party.get("name"):
+            party["spelling"], party["name"] = party.get("name"), shown
     # The page's summary (client review, 2026-10-21): how likely the campus is to
     # miss its date, and every buyer the site names. Both are the readings the
     # company page and Capex already make — `supply.delay_risk` and

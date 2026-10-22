@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from tracker import blocks as blocks_mod
 from tracker import dedup, delays
@@ -614,7 +614,9 @@ def to_json_object(project: Project, *, claims: bool = True) -> dict[str, Any]:
     make, and the guarantee there is that everything is in the file.
     """
     basis_map, prov_map = _provenance_json(project)
-    first_cited = parties_mod.first_cited(list(project.sources))
+    first_cited = parties_mod.first_cited(
+        list(project.sources), parties_mod.known_keys(object_session(project))
+    )
     return {
         "basis": basis_map,
         "prov": prov_map,

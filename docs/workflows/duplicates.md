@@ -284,7 +284,13 @@ nothing answered to. Two things close that before any pair is raised:
   spelling the rules miss can be folded by a person (`tracker company alias`): the
   key function reads a person's aliases last, on every connection, and the alias
   re-keys the rows it touches at once, the way a deploy that learned the spelling
-  would.
+  would. The parties the party signal compares are one per company too: a party
+  named as a list of companies the registry knows is each of them, and two spellings
+  of one company in one role on one campus are one party (`parties.split_names`,
+  `same_company_names`). A joint venture's name is **not** filed under its first
+  partner by rule: measured on the 10-22 copy, that would have given "EdgeConneX and
+  TA Realty" the key of EdgeConneX's own Atlanta row, a pair already ruled two
+  campuses, and sent the venture's articles there.
 * **Every row reachable by the key it would be filed under today.** `dedup_key` is
   written once and never rewritten, so `tracker.keys` records a row's *current*
   natural key in `project_alias` when it differs — a town learned since, a spelling
@@ -326,7 +332,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The four detection passes | `tracker/capex.py` — `suspected_duplicates`, `_pair_evidence`, `_locality_buckets`, `_locality_word`, `_one_edit_apart` |
 | A new row against its likeliest twin | `tracker/capex.py` — `twin_pairs`, `_place_words`; `tracker/triage.py` — `resolve_pairs(pairs=)`; `tracker/cli/duplicates.py` — `duplicates_resolve(--created-since, --limit)`; `scripts/overnight.sh` — `TWIN_SINCE`, `TWIN_DAYS`, `TWINS`, `ingest geo` before the pass |
 | The party signal, and the guard on it | `tracker/parties.py` — `shared_across_companies`, `_identifying_keys`, `_NOT_IDENTIFYING_ROLES`, `keys_for` |
-| One company, one key | `tracker/dedup.py` — `company_key`, `_company_slug`, `_reduce`, `_alias_table`, `_COMPANY_SUFFIXES`, `_COMPANY_ALIASES`, `same_operator`, `use_person_aliases`, `alias_listeners`; `tracker/seed/operators.toml` — `aliases`; `tracker/companies.py` — `add_alias`, `load_aliases`, `sync`; `tracker/db.py` — `_read_company_aliases`; migration `0043_company` |
+| One company, one key | `tracker/dedup.py` — `company_key`, `_company_slug`, `_reduce`, `_alias_table`, `_COMPANY_SUFFIXES`, `_COMPANY_ALIASES`, `same_operator`, `use_person_aliases`, `alias_listeners`; `tracker/seed/operators.toml` — `aliases`; `tracker/companies.py` — `add_alias`, `load_aliases`, `sync`; `tracker/db.py` — `_read_company_aliases`; migration `0043_company`; `tracker/parties.py` — `split_names`, `same_company_names`, `_folded`, `known_keys` |
 | Every key a row answers to | `tracker/keys.py` — `sync`, `remember`, `natural_key`, `renormalise`; `tracker/upsert.py` — `upsert_record` (end); `tracker/merge.py` — `merge_projects`; `tracker/derive.py` — `run`; `tracker/cli/quality.py` — `init` |
 | Evidence classes, labels, ranking | `tracker/capex.py` — `EVIDENCE_ORDER`, `EVIDENCE_LABELS`, `strongest_evidence`, `DuplicatePair.rank` |
 | Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw` |

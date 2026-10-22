@@ -48,11 +48,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Collection, Iterable, Iterator
+from dataclasses import dataclass, replace
+from typing import Any, Final
 
-from tracker.dedup import company_key
+from tracker.dedup import _COMPANY_SUFFIXES, _PARENTHETICAL, _PARTY_SPLIT, company_key, spelling_of
 from tracker.vocab import COMPANY_ROLE_ORDER, PARTY_ROLES, PARTY_ROLES_BUYING
 
 #: The `unconfirmed` reason on a party derived from a citation's own claims
@@ -131,10 +131,261 @@ def parse(raw: str | None) -> list[dict[str, Any]]:
     return [entry for entry in loaded if isinstance(entry, dict)]
 
 
-def parties_by_key(sources: list[Any]) -> dict[tuple[str, str], Party]:
+# --- one company per party ------------------------------------------------------
+#
+# Measured on the production copy of 2026-10-22: Stargate Abilene (#3) listed "DPR"
+# and "DPR Construction" as two contractors, "Blue Owl" and "Blue Owl Capital" as two
+# owners, and one customer chip named "Oracle, OpenAI" — a list read as one name. Each
+# spelling kept its own key, so one company read as two on the campus page and a list
+# of companies read as a company of its own. Two rules below close that, and both are
+# narrow on purpose: a party key is what the duplicate passes compare, so a fold that
+# is wrong joins two companies everywhere at once.
+
+#: Words that say what *form* a company takes, not which company it is. A name that
+#: is another name on the same campus, in the same role, plus only these words is that
+#: company: "DPR Construction" is DPR, "Blue Owl Capital" is Blue Owl. The legal and
+#: industry suffixes `company_key` strips everywhere ("Inc", "Group", "Holdings",
+#: "Data Centers"…), plus five it keeps. Those five stay out of `company_key` because
+#: stripping them there would re-key every campus filed under such a name, on no
+#: evidence; here the evidence is both spellings naming one role on one campus.
+#:
+#: **Never a word that can be the name.** "Energy" is not here: Siemens Energy is not
+#: Siemens. Nor "digital": Applied Digital is not Applied Partners. Matched on whole
+#: trailing words only, so "Prime Group" and "Prime Data Centers" — each "Prime" plus
+#: a corporate tail, but neither the other plus one — stay two companies.
+_FORM_WORDS: Final[tuple[str, ...]] = tuple(
+    sorted(
+        {"capital management", "construction", "contracting", "capital", "associates"}
+        | set(_COMPANY_SUFFIXES),
+        key=lambda w: (-len(w), w),
+    )
+)
+
+
+def _strip_form_words(slug: str) -> Iterator[str]:
+    """Every shorter form of a slugged name, dropping one trailing form word at a time."""
+    while True:
+        for word in _FORM_WORDS:
+            if slug.endswith(" " + word):
+                slug = slug[: -(len(word) + 1)].strip()
+                break
+        else:
+            return
+        yield slug
+
+
+def same_company_names(a: str | None, b: str | None) -> bool:
+    """True when one name is the other plus trailing corporate words.
+
+    ``"DPR Construction"`` and ``"DPR"``, ``"Blue Owl Capital"`` and ``"Blue Owl"``,
+    ``"Turner Construction Company"`` and ``"Turner"``. Not ``"Prime Data Centers"``
+    and ``"Prime Group"``: each is "Prime" plus a corporate tail, but neither is the
+    other plus one. Not ``"Applied Digital"`` and ``"Applied Partners LLC"``.
+
+    Compares the names as written (after `dedup.spelling_of`), never their keys:
+    `company_key` has already stripped "Data Centers" from Prime Data Centers, so a
+    key-level test would read any "Prime <corporate word>" as the same company.
+    """
+    sa, sb = spelling_of(a or ""), spelling_of(b or "")
+    if not sa or not sb:
+        return False
+    if sa == sb:
+        return True
+    short, long_ = sorted((sa, sb), key=len)
+    return len(short) >= 2 and short in _strip_form_words(long_)
+
+
+#: Where `known_keys` keeps its answer for the rest of a session.
+_KNOWN_INFO: Final = "party_known_keys"
+
+
+def known_keys(session: Any) -> frozenset[str]:
+    """Every company key a party name may be split into: the ones the database knows.
+
+    The company registry — every operator, tenant and party any row names, kept by
+    `companies.sync` and `companies.attach` — plus what the code knows without a
+    database: the roster, the EDGAR list and the alias table. Read once per session
+    and kept in `session.info`; `upsert.recompute_parties` reads it afresh.
+    """
+    if session is None:
+        return frozenset()
+    cached = session.info.get(_KNOWN_INFO)
+    if cached is None:
+        cached = session.info[_KNOWN_INFO] = _read_known_keys(session)
+    return cached
+
+
+def forget_known_keys(session: Any) -> None:
+    """Drop the session's `known_keys`, so the next read sees the database as it is."""
+    if session is not None:
+        session.info.pop(_KNOWN_INFO, None)
+
+
+def _read_known_keys(session: Any) -> frozenset[str]:
+    from sqlalchemy import select
+
+    from tracker import companies
+    from tracker.dedup import code_aliases, customer_key
+    from tracker.models import Company, Project
+
+    keys = set(session.scalars(select(Company.key)))
+    keys.update(companies.seeds_cached())
+    keys.update(code_aliases().values())
+    for company, customer in session.execute(select(Project.company, Project.customer)):
+        keys.add(company_key(company))
+        keys.add(customer_key(customer))
+    keys.discard("")
+    return frozenset(keys)
+
+
+def split_names(name: str, known: Collection[str]) -> list[str]:
+    """The companies one party name lists, or ``[name]`` when it names one company.
+
+    ``"Oracle, OpenAI"`` -> ``["Oracle", "OpenAI"]``, and so do "A and B", "A & B" and
+    "A / B". **Split only when every part is a company in its own right**: its key is
+    in `known` (`known_keys`, or a party the same campus names on its own), each part
+    is a different company, and none is a single letter. That is what keeps one
+    company whose name holds a separator whole — "Johnson & Johnson" (one key twice),
+    "Black & Veatch", "Burns & McDonnell", "Procter & Gamble" (no part is a company
+    anybody names), "AT&T" (a single letter).
+
+    A trailing legal form is part of the name before it, not a party: "Soluna
+    Holdings, Inc." is one company, as `dedup.company_parts` reads it. A parenthetical
+    is set aside first, so "Cursor (Anysphere, Inc.)" is Cursor.
+    """
+    text = _PARENTHETICAL.sub(" ", name).strip() or name
+    parts = [
+        part
+        for part in (p.strip(" .;:-") for p in _PARTY_SPLIT.split(text))
+        if part and company_key(part) not in ("", *_COMPANY_SUFFIXES)
+    ]
+    if len(parts) < 2:
+        return [name]
+    keys = [company_key(part) for part in parts]
+    if len(set(keys)) < len(keys):
+        return [name]
+    if not all(len(key) >= 2 and key in known for key in keys):
+        return [name]
+    return parts
+
+
+def _entries(sources: list[Any], known: Collection[str]) -> list[tuple[Any, Party]]:
+    """Every party the sources assert, with lists split, before folding and ranking.
+
+    A citation's declared parties, or — for a citation that lists none — the parties
+    its own claims imply (`_inferred_parties`). A name that lists several companies
+    becomes one party per company (`split_names`), each keeping the role, the quote,
+    the source and the doubt of the entry it came from.
+    """
+    raw: list[tuple[Any, Party]] = []
+    for source in sources:
+        declared: list[Party] = []
+        for entry in parse(getattr(source, "parties", None)):
+            name = str(entry.get("name") or "").strip()
+            role = str(entry.get("role") or "").strip().lower()
+            key = party_key(name)
+            if not name or not key or role not in PARTY_ROLES:
+                continue
+            declared.append(
+                Party(
+                    name=name,
+                    key=key,
+                    role=role,
+                    quote=str(entry.get("quote") or "").strip() or None,
+                    unconfirmed=str(entry.get("unconfirmed") or "").strip() or None,
+                    source_id=getattr(source, "id", None),
+                )
+            )
+        # Only when the citation declared none. A source that listed its parties
+        # has already said what it knows, and deriving more from its claims would
+        # re-add the company it deliberately left out of its own list.
+        raw.extend((source, party) for party in (declared or _inferred_parties(source)))
+
+    # A campus that names a company on its own has shown it is a company, whatever
+    # the registry has caught up with yet.
+    alone = {party.key for _, party in raw if not _PARTY_SPLIT.search(party.name)}
+    known = alone | set(known)
+    out: list[tuple[Any, Party]] = []
+    for source, party in raw:
+        parts = split_names(party.name, known)
+        if len(parts) == 1:
+            out.append((source, party))
+            continue
+        out.extend((source, replace(party, name=part, key=party_key(part))) for part in parts)
+    return out
+
+
+def _aliased(name: str, key: str) -> bool:
+    """Whether `key` is what an alias says `name` is, rather than `name` trimmed.
+
+    Trimming only ever drops trailing words, so a key that is not the start of the
+    name came from the alias table: "DuPont Fabros Technology" is Digital Realty
+    because the roster says so, not because of how it is spelled.
+    """
+    spelling = spelling_of(name)
+    return not (spelling == key or spelling.startswith(key + " "))
+
+
+def _folded(entries: list[tuple[Any, Party]]) -> dict[tuple[str, str], str]:
+    """(role, key) -> the key that party is filed under on this campus.
+
+    Within one role, two keys are one company when a name under one is a name under
+    the other plus corporate words (`same_company_names`). The group is filed under
+    the key an alias gave one of its names, when one did — an alias is the code's,
+    the roster's or a person's statement of which company a spelling is, so "DuPont
+    Fabros" beside "DuPont Fabros Technology" is Digital Realty, not a company of
+    its own — and otherwise under the shortest key, the name without its corporate
+    words. Two keys that aliases gave to *different* companies are never joined:
+    that is the alias table saying they are two.
+
+    Scoped to one campus and one role because that is where the evidence is: two
+    contractors on one site called "DPR" and "DPR Construction" are one firm, and
+    the same two spellings on different campuses are a question for the registry
+    (`tracker company alias`).
+    """
+    names: dict[tuple[str, str], set[str]] = {}
+    for _, party in entries:
+        names.setdefault((party.role, party.key), set()).add(party.name)
+
+    parent: dict[tuple[str, str], tuple[str, str]] = {slot: slot for slot in names}
+    # slot -> its key, when an alias gave that key to one of its names. Read at a
+    # group's root, which `rank` makes the aliased slot whenever the group has one.
+    by_alias: dict[tuple[str, str], str | None] = {
+        slot: slot[1] if any(_aliased(n, slot[1]) for n in names[slot]) else None for slot in names
+    }
+
+    def root(slot: tuple[str, str]) -> tuple[str, str]:
+        while parent[slot] != slot:
+            slot = parent[slot]
+        return slot
+
+    def rank(slot: tuple[str, str]) -> tuple[bool, int, str]:
+        return (by_alias[slot] is None, len(slot[1]), slot[1])
+
+    slots = sorted(names)
+    for i, a in enumerate(slots):
+        for b in slots[i + 1 :]:
+            ra, rb = root(a), root(b)
+            if a[0] != b[0] or ra == rb:
+                continue
+            if by_alias[ra] and by_alias[rb] and by_alias[ra] != by_alias[rb]:
+                continue
+            if any(same_company_names(x, y) for x in names[a] for y in names[b]):
+                keep, drop = sorted((ra, rb), key=rank)
+                parent[drop] = keep
+    return {slot: root(slot)[1] for slot in slots}
+
+
+def parties_by_key(sources: list[Any], known: Collection[str] = ()) -> dict[tuple[str, str], Party]:
     """Collapse every source's parties onto one row per `(key, role)`.
 
-    Three rules, in order, and each one is a decision a reader can check:
+    **One company, one party.** A name that lists several companies — "Oracle,
+    OpenAI" — is first split into one party per company (`split_names`; `known` is
+    `known_keys`, and a company this campus names on its own counts too). Then two
+    parties in one role that are one company — "DPR" and "DPR Construction" — are
+    filed under one key (`_folded`). The page prints each under the registry's name.
+
+    Then three rules, in order, and each one is a decision a reader can check:
 
     1. **A confirmed party beats an unconfirmed one.** Same discipline as
        `upsert._resolve`: a value the gate could not tie to a sentence is a last
@@ -164,42 +415,16 @@ def parties_by_key(sources: list[Any]) -> dict[tuple[str, str], Party]:
     out: dict[tuple[str, str], Party] = {}
     ranks: dict[tuple[str, str], tuple[int, int, int]] = {}
 
-    def offer(source: Any, party: Party, weight: int) -> None:
-        rank = (0 if party.unconfirmed is None else 1, -weight, -len(party.quote or ""))
+    entries = _entries(sources, known)
+    filed = _folded(entries)
+    for source, party in entries:
+        party = replace(party, key=filed[(party.role, party.key)])
+        rank = (0 if party.unconfirmed is None else 1, -_weight(source), -len(party.quote or ""))
         slot = (party.key, party.role)
         if slot in ranks and ranks[slot] <= rank:
-            return
+            continue
         ranks[slot] = rank
         out[slot] = party
-
-    for source in sources:
-        weight = _weight(source)
-        declared = 0
-        for entry in parse(getattr(source, "parties", None)):
-            name = str(entry.get("name") or "").strip()
-            role = str(entry.get("role") or "").strip().lower()
-            key = party_key(name)
-            if not name or not key or role not in PARTY_ROLES:
-                continue
-            declared += 1
-            offer(
-                source,
-                Party(
-                    name=name,
-                    key=key,
-                    role=role,
-                    quote=str(entry.get("quote") or "").strip() or None,
-                    unconfirmed=str(entry.get("unconfirmed") or "").strip() or None,
-                    source_id=getattr(source, "id", None),
-                ),
-                weight,
-            )
-        # Only when the citation declared none. A source that listed its parties
-        # has already said what it knows, and deriving more from its claims would
-        # re-add the company it deliberately left out of its own list.
-        if not declared:
-            for party in _inferred_parties(source):
-                offer(source, party, weight)
     return out
 
 
@@ -257,29 +482,27 @@ def _inferred_parties(source: Any) -> list[Party]:
     return out
 
 
-def first_cited(sources: list[Any]) -> dict[str, dt.date]:
+def first_cited(sources: list[Any], known: Collection[str] = ()) -> dict[str, dt.date]:
     """Party key -> the earliest date one of this row's citations named it.
 
     The article's publication date where one is recorded, else the day it was read.
     The project page marks a party first cited in the last thirty days as *new*,
     because a new contractor or tenant on a known campus is news the client asked to
-    see apart (2026-10-21). Read over the same entries `parties_by_key` reads, the
-    inferred ones included, so a party is never dated later than the citation that
-    put it on the row.
+    see apart (2026-10-21). Read over the same entries `parties_by_key` reads — the
+    inferred ones included, lists split and one company's spellings folded the same
+    way, with the same `known` — so a party is never dated later than the citation
+    that put it on the row, and is dated under the key it is stored under.
     """
+    entries = _entries(sources, known)
+    filed = _folded(entries)
     out: dict[str, dt.date] = {}
-    for source in sources:
+    for source, party in entries:
         day = _cited_on(source)
         if day is None:
             continue
-        declared = [
-            party_key(str(entry.get("name") or "").strip())
-            for entry in parse(getattr(source, "parties", None))
-        ]
-        keys = [key for key in declared if key] or [p.key for p in _inferred_parties(source)]
-        for key in keys:
-            if key not in out or day < out[key]:
-                out[key] = day
+        key = filed[(party.role, party.key)]
+        if key not in out or day < out[key]:
+            out[key] = day
     return out
 
 
@@ -385,8 +608,11 @@ def newly_named(
         cited.setdefault(row.project_id, []).append(row)
     fresh: dict[tuple[int, str], dt.date] = {}
     new_campus: set[int] = set()
+    # Split and folded as the stored parties are (`first_cited`), so a list such as
+    # "Oracle, OpenAI" is dated under the keys the campus's parties carry.
+    known = known_keys(session)
     for pid, rows in cited.items():
-        for key, day in first_cited(rows).items():
+        for key, day in first_cited(rows, known).items():
             if day >= since:
                 fresh[(pid, key)] = day
         days_cited = [d for d in map(_cited_on, rows) if d is not None]
@@ -505,7 +731,7 @@ def rebuild(session: Any, project: Any) -> int:
 
     from tracker.models import PartyTenure, ProjectParty
 
-    wanted = parties_by_key(list(project.sources))
+    wanted = parties_by_key(list(project.sources), known_keys(session))
     existing = {(p.party_key, p.role): p for p in list(project.parties)}
     # Whose role here has ended (migration 0044): a decision, so it lives in its own
     # table and is copied onto the rebuilt rows rather than lost with them.
@@ -878,9 +1104,12 @@ __all__ = [
     "customer_party",
     "end_role",
     "find_party",
+    "first_cited",
+    "forget_known_keys",
     "former",
     "former_customer",
     "keys_for",
+    "known_keys",
     "named_buyers",
     "newly_named",
     "of_role",
@@ -891,5 +1120,7 @@ __all__ = [
     "rebuild",
     "reconcile",
     "resume_role",
+    "same_company_names",
     "shared_across_companies",
+    "split_names",
 ]

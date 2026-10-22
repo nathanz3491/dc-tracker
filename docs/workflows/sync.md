@@ -678,7 +678,10 @@ to skip after a phase that added sources:
   whose identity has moved since its birth, or a spelling the company rules have
   learned since, still reaches it — and brings the company registry up to date
   (`companies.sync`, migration 0043): one record per company, its chosen name, and
-  every campus and party pointed at it. Each row it re-derives also rebuilds that
+  every campus and party pointed at it. A row's parties are rebuilt one per company:
+  a name listing companies the registry knows ("Oracle, OpenAI") becomes each of
+  them, and two spellings of one company in one role ("DPR", "DPR Construction") one
+  party (`parties.parties_by_key`). Each row it re-derives also rebuilds that
   row's statements (`facts.rebuild`, migration 0045), the one table every source's
   claims sit in, so the download never lags the page. A re-derived row that breaks a
   held relationship is logged as a bug (`invariants.campus_breaks`), not refused: its
@@ -767,7 +770,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Identity arbiter | `tracker/upsert.py` — `upsert_record` (a route is remembered through `tracker/keys.py` — `remember`); `tracker/cli/ingest.py` — `_identity_arbiter`, `_report_arbiter`; `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `_suspicion`, `_verdict_tools`, `RULES`, `MIN_CONFIDENCE`; `tracker/triage.py` — `CONTRADICTIONS`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | Enrich phase | `tracker/ingest/enrich.py` — `select_projects`, `run_many`; `tracker/cli/enrich.py` — `_gapfill_batch`; and [enrich](enrich.md) |
 | Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
-| Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties` |
+| Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties`, `split_names`, `same_company_names`, `known_keys` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
 | Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |

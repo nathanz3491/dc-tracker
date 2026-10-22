@@ -1944,6 +1944,9 @@ function PartyPop({ pop }) {
         ${refused && html`<span style=${chip("--warning")}>待确认 · ${party.unconfirmed}</span>`}
         ${partyIsNew(party) && html`<span style=${chip("--success")}>new</span>`}
       </div>
+      ${party.spelling && html`
+        <p style=${{ margin: "0 0 6px", fontSize: 11.5, color: "var(--muted-foreground)" }}>
+          written “${party.spelling}” by the source</p>`}
       <p style=${{ margin: 0, fontSize: 14, lineHeight: "21px" }}>
         ${party.quote ? `“${party.quote}”`
           : inferred ? "Nobody stated this role — it is what the operator or customer column means. Shown as an inference, and never used to attribute capacity to a buyer."

@@ -105,6 +105,22 @@ _COMPANY_ALIASES: dict[str, str] = {
     "riot blockchain": "riot",
     "soluna computing": "soluna",
     "softbank sb energy": "softbank",
+    # A joint venture filed under its lead partner, by hand, measured 2026-10-22.
+    # Yondr builds and runs the Manassas campus and Cerberus funds it, and the row
+    # already answered to `yondr|city:manassas|VA`, so the new key reaches no other
+    # campus. **Not a rule**, because the rule — "file 'A and B' under A when A has
+    # campuses of its own" — was measured on the four venture strings the database
+    # held and was right for this one only: "EdgeConneX and TA Realty" in Atlanta
+    # would take the key of EdgeConneX's own Atlanta row, a campus a reviewer has
+    # ruled is a different one, and route the venture's articles to it; "TA Realty
+    # / EdgeConneX" names the landowner first; and "Prime Group" is not Prime Data
+    # Centers (below). Each partner is still a party on the campus, because a party
+    # name that lists known companies is split into one party each (`parties`).
+    "yondr group and cerberus": "yondr",
+    # Not Prime Data Centers. "Group" is a legal suffix, so without this "Prime
+    # Group" — the Chicago developer, in a venture with Capri Investment Group —
+    # reduces to "prime", which is Prime Data Centers' key.
+    "prime group": "prime group",
 }
 
 #: County-equivalent suffixes to strip, so "Racine County" and "Racine" agree.

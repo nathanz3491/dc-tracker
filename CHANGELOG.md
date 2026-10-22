@@ -954,6 +954,26 @@ initial build of the v1 PRD.
   header and fields). Stargate Abilene's header and Buyer field said "Oracle" while its
   summary named Microsoft, OpenAI and Oracle and said Capex credits none. With several
   buyers named, the header, the field, the table row and the summary all name them all.
+- **A company is listed once on a campus, and a list of companies is no longer one
+  company** (`tracker/parties.py` `split_names`, `same_company_names`, `known_keys`,
+  `parties_by_key`, `first_cited`; `tracker/dedup.py` `_COMPANY_ALIASES`;
+  `tracker/webui/dataset.py` `project_payload`; `tests/test_party_identity.py`). The
+  client found one company shown as several: on Stargate Abilene "DPR" and "DPR
+  Construction" were two contractors, "Blue Owl" and "Blue Owl Capital" two owners, and
+  "Oracle, OpenAI" one customer. A party named as a list — "A, B", "A and B", "A & B",
+  "A / B" — is now one party per company when every part is a company the tracker
+  already knows, so "Johnson & Johnson" and "Black & Veatch" stay whole; and two names
+  in one role on one campus that differ only by corporate words (Construction, Capital,
+  Inc, Group…) are one party, printed under the company's one name with the source's
+  spelling in its popover. Applied Digital and Applied Partners, or Prime Data Centers
+  and Prime Group, stay apart — and "Prime Group" no longer reads as Prime Data Centers
+  anywhere. The venture "Yondr Group and Cerberus" is filed under Yondr; the other
+  venture names stay as written, because filing them under their first partner would
+  give "EdgeConneX and TA Realty" the key of EdgeConneX's own Atlanta row, a different
+  campus. On the 10-22 copy of production 23 campuses change, with 21 party rows fewer
+  (32 folded or split away, 11 parts added); one campus key moves, Yondr's Manassas
+  row, which already answered to it; the Capex total (275,509 MW) and the 19 suspected
+  duplicate pairs are unchanged.
 - **A tenant of one part of a campus is no longer credited with all of it**
   (`tracker/capex.py` `tenant_of_part`, `attribute`; `tests/test_capex.py`). The Capex
   page credited a campus with one named customer wholly to that customer, so

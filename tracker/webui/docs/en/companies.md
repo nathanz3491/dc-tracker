@@ -83,4 +83,4 @@ Since 22 October 2026 each company is one record in the tracker: its name, what 
 
 A campus whose tenant has left — a lease ended, a site sold — is no longer listed on that tenant's page or counted in its figures. The campus's own page keeps it under *Former*, with when and why.
 
-If a campus you expect is missing, its source may have named a subsidiary or a joint venture instead.
+If a campus you expect is missing, its source may have named a subsidiary or a joint venture instead. A campus filed under a venture's name — *EdgeConneX and TA Realty* — stays under that name, because the partner named first is not always the one that runs the campus, and filing it under that partner could merge it with that partner's own campus nearby. Each partner is still listed on the campus's own page under *Who is involved*. A venture checked to be one partner's campus is filed under that partner: *Yondr Group and Cerberus* under Yondr.

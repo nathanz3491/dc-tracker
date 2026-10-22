@@ -2813,6 +2813,9 @@ def recompute_parties(session: Session) -> int:
     from tracker import companies as companies_mod
     from tracker import parties as parties_mod
 
+    # The companies a listed party name may be split into, read once for the pass and
+    # afresh rather than from a session that has written since it last looked.
+    parties_mod.forget_known_keys(session)
     changed = 0
     for project in session.scalars(select(Project)).all():
         before = _reconciled(project)
