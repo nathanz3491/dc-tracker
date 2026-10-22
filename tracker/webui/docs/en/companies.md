@@ -29,6 +29,8 @@ The line under the cards says how the capacity figures are counted. They follow 
 
 So **planned** is the company's own row on the Capex page, plus the campuses it builds that name no buyer — Capex lists those under *(no named customer)*. The line gives both parts. A campus it builds for a named tenant counts for that tenant, as on Capex. Every megawatt is therefore on exactly one company's page, and the company pages add up to the Capex total. That total can be slightly higher than the [Map](map)'s, for the reason given there.
 
+**As buyer or as builder.** Counted that way, a company that builds campuses and leases them out is credited with almost nothing: xAI builds Colossus and MACROHARDRR, 2 GW each, and both count for their tenant. When a company builds noticeably more than it is credited with, a switch above the cards reads its figures **as builder** instead: every campus it builds, whole, whoever buys it — the cards, the stage split and the supply chart all follow it. The page opens on the builder reading when the buyer one is under half of it, and the line under the cards says which it shows. Builder figures are not added to the Capex total; that one still counts each campus once, for its buyer.
+
 ## Campuses
 
 A table of every campus, with the company's role on each — **builds**, **tenant**, or **tenant (tranche)** when it uses only some buildings — and who builds it when that is someone else. Then the phase, planned capacity with a bar, capacity running, and open obstacles. Click a row or press Enter to open the campus.
@@ -43,14 +45,14 @@ When a campus does not count in full towards the figures above, a short note bes
 | *not counted: one of several buyers named …* | The campus's sources name several buyers and say nothing about how it divides between them, so none is credited with it. See [Capex](capex). |
 | *200 MW counted here, the rest for …* | The company is credited with part of the campus — its own buildings, or what is left after other tenants' buildings. |
 
-Beside the table, **Where** shows the states the campuses are in, and **Stage, in megawatts** splits the planned figure by how far along it is: running; under construction; planned or permitting; and still to come at campuses already operating — an expansion, or capacity nothing yet dates. The four parts add up to **planned**.
+Beside the table, **Where** shows the states the campuses are in, and **Stage, in megawatts** splits the planned figure by how far along it is: running; under construction; planned or permitting; still to come at campuses already operating — an expansion, or capacity nothing yet dates; and *running, how much not stated* — an operating campus no source gives a running figure for, whose planned capacity is neither all running nor all to come. The parts add up to **planned**.
 
 ## Supply, the next three years
 
 Capacity the company is credited with that is not yet running, by the year each campus is due — this year and the next two — as a bar per year, then a table of the campuses with their share of it and their **delay risk**.
 
 - A campus whose stated online period has passed with nothing running is **overdue**: still expected, and nobody has said when. Its capacity is shown under this year, in amber. Overdue means exactly a suspected delay (below).
-- Capacity due later, and capacity with no date, are given in one line under the bars and are not in the figures.
+- Capacity due later, capacity with no date, and the planned capacity of operating campuses no source gives a running figure for, are given in one line under the bars and are not in the figures: what is left to deliver at such a campus is unknown, not all of it.
 - **Delay risk** is *high*, *elevated* or *low*, with the evidence it rests on, each something you can check on the campus's page:
   - *high* — a suspected delay; the online date has slipped twice or more; or an open obstacle a source says has stopped work;
   - *elevated* — one slip; an open obstacle a source says moved the schedule or scope; or due within a year with no construction reported.

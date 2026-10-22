@@ -104,7 +104,7 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Supply** — on a company page, the capacity it is credited with that is not yet running, by the year each campus is due, over this year and the next two.
 
-**Suspected delay** — a campus whose expected online date has passed, for the whole month, quarter or year it names, with nothing reported since saying it runs. See [Numbers and dates](numbers-and-dates).
+**Suspected delay** — a campus whose expected online date has passed, for the whole month, quarter or year it names, with nothing reported since saying it runs — and a search for news of it going live, made after the date passed, found none. See [Numbers and dates](numbers-and-dates).
 
 **Tertiary source** — a directory, wiki or digest. Fills gaps only.
 

@@ -35,6 +35,8 @@ def _project(session, **kwargs) -> Project:
         "dedup_key": f"k{kwargs.get('name', 'x')}{kwargs.get('company', 'y')}",
         "phase": "construction",
         "confidence": 2,
+        # Searched for going live, so a passed date reads late (`delays`).
+        "golive_checked_at": dt.datetime.combine(TODAY, dt.time.min),
     }
     defaults.update(kwargs)
     project = Project(**defaults)
@@ -1744,6 +1746,7 @@ def test_a_multi_line_detail_does_not_grow_the_notes(session):
         state="TX",
         dedup_key="someone|city:abilene|TX",
         phase="construction",
+        golive_checked_at=dt.datetime.combine(TODAY, dt.time.min),
     )
     session.add(project)
     session.flush()

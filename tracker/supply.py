@@ -121,10 +121,26 @@ def _categories(risks: list[Any]) -> str:
     return ", ".join(names)
 
 
+def running_unknown(project: Any) -> bool:
+    """An operating campus no source gives a running figure for.
+
+    Its planned capacity less "nothing" is not what is still to come: something runs,
+    and nobody has said how much. Englewood (#72) read "18 MW still to come" beside
+    "in service since 2022", and 34 such campuses put 3,647 MW into their companies'
+    future supply on the 10-22 copy of production. What is left there is unknown, and
+    every reading below says so rather than counting the whole plan as future.
+    """
+    return (getattr(project, "phase", None) or "").lower() == "operational" and getattr(
+        project, "mw_built", None
+    ) is None
+
+
 def _capacity_to_come(project: Any) -> bool:
     """Whether a campus still has planned capacity it does not yet run."""
     planned = getattr(project, "mw_planned", None)
-    return planned is not None and (getattr(project, "mw_built", None) or 0.0) < planned
+    if planned is None or running_unknown(project):
+        return False
+    return (getattr(project, "mw_built", None) or 0.0) < planned
 
 
 def delay_risk(
@@ -226,11 +242,22 @@ def still_to_come(
     campus's own date while the period it names is still open, *overdue* when the
     campus is a suspected delay, otherwise the next tranche still to come, and no
     year at all when nothing says. `when` is that date as the source stated it
-    ("Q3 2026"), or the tranche's year. None when no planned figure is cited.
+    ("Q3 2026"), or the tranche's year. None when no planned figure is cited, and
+    `mw` None with `unknown` set for an operating campus with no running figure
+    (`running_unknown`).
     """
     planned = getattr(project, "mw_planned", None)
     if planned is None:
         return None
+    if running_unknown(project):
+        return {
+            "mw": None,
+            "year": None,
+            "overdue": False,
+            "when": None,
+            "from": None,
+            "unknown": True,
+        }
     remaining = max(float(planned) - float(getattr(project, "mw_built", None) or 0.0), 0.0)
     if suspected is None:
         suspected = delays.suspected_delay(project, today=today)
@@ -306,10 +333,15 @@ def supply(
     overdue_mw = 0.0
     later_mw = 0.0
     undated_mw = 0.0
+    running_unknown_mw = 0.0
     rows: list[dict[str, Any]] = []
 
     for credited in campuses:
         project = credited.project
+        if running_unknown(project):
+            # Running, and nobody says how much: not future supply.
+            running_unknown_mw += credited.mw_planned
+            continue
         remaining = max(credited.mw_planned - credited.mw_built, 0.0)
         if remaining <= 0:
             continue
@@ -358,6 +390,7 @@ def supply(
         "overdue_mw": overdue_mw,
         "later_mw": later_mw,
         "undated_mw": undated_mw,
+        "running_unknown_mw": running_unknown_mw,
         "high_risk_mw": at_risk,
         "campuses": rows,
         "concentrated": [r["id"] for r in flagged],
@@ -373,6 +406,7 @@ __all__ = [
     "Credited",
     "DelayRisk",
     "delay_risk",
+    "running_unknown",
     "slips",
     "still_to_come",
     "supply",

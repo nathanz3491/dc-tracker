@@ -1664,7 +1664,11 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
                            onClick=${() => onOpenCompany(p.company_slug)}>${companyName(p)}</button>`
             : html`<span style=${{ fontSize: 14, fontWeight: 500 }}>${companyName(p)}</span>`}
           ${filedAs(p.company, companyName(p))}
-          ${customerName(p) && p.customer_slug && p.customer_slug !== p.company_slug && onOpenCompany && html`
+          ${p.customer_shared && html`
+            <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}
+                  title="Several buyers are named and nothing divides the campus between them, so Capex credits none of them.">
+              for ${customerName(p)}</span>`}
+          ${!p.customer_shared && customerName(p) && p.customer_slug && p.customer_slug !== p.company_slug && onOpenCompany && html`
             <span style=${{ fontSize: 13, color: "var(--muted-foreground)" }}>for</span>
             <button type="button" class="dc-linkish" style=${{ fontSize: 14 }}
                     title=${`Every campus of ${customerName(p)}`}
@@ -3115,6 +3119,7 @@ function fmtDay(iso) {
 //: sentence that would call a cancelled campus "on schedule".
 function noRiskText(p) {
   if (p.phase === "operational") {
+    if (p.still_to_come?.unknown) return "Running; no source says how much, so what is left is unknown.";
     return p.still_to_come?.mw > 0
       ? "Running, and nothing recorded says the rest is slipping."
       : "Operating — no date left to miss.";
@@ -3142,7 +3147,8 @@ function ProjectSummary({ p, onQuote, onOpenCompany, onJump, populated, open }) 
   // Planned less running, and when the rest is due — the server's reading, the one
   // the company page's supply table makes (`supply.still_to_come`).
   const rest = p.still_to_come;
-  const restWhen = !rest || rest.mw === 0 ? (rest ? "all of it running" : "no planned figure")
+  const restWhen = rest?.unknown ? "running; how much is not cited"
+    : !rest || rest.mw === 0 ? (rest ? "all of it running" : "no planned figure")
     : rest.overdue ? `its date (${rest.when}) has passed`
     : rest.from === "tranche" ? `next tranche due ${rest.when}`
     : rest.when ? `expected ${rest.when}` : "no date stated";
@@ -3178,7 +3184,7 @@ function ProjectSummary({ p, onQuote, onOpenCompany, onJump, populated, open }) 
             : p.phase === "operational" ? "operating; no running figure cited" : "nothing reported running"} />
         <${KeyFigure} label="Still to come" zh="待交付"
           title="Planned minus running: arithmetic on the two figures beside it, not a cited value."
-          value=${rest ? `${fmt("mw_planned", rest.mw)} MW` : "—"}
+          value=${rest && rest.mw != null ? `${fmt("mw_planned", rest.mw)} MW` : "—"}
           tone=${rest?.overdue ? "--warning" : null}
           hint=${restWhen} />
         <${KeyFigure} label="Expected online" zh="预计上线"
@@ -3307,6 +3313,9 @@ function TrackedFields({ p, onQuote, claims, onJump }) {
                 <span class="dc-fact-tier" style=${chip(tier === "reported" ? "--foreground" : tier === "unconfirmed" ? "--warning"
                   : tier === "inferred" ? "--chart-5" : "--muted-foreground")}>${TIER[tier][0]}</span>
                 ${whyUnconfirmed(p, key) && html`<span class="dc-fact-tier" style=${chip("--danger")}>not this site's figure</span>`}
+                ${key === "customer" && p.customer_shared && html`
+                  <span class="dc-fact-tier" style=${chip("--muted-foreground")}
+                        title="The stored field holds the first one a source gave; the summary and Capex read all of them.">several named · Capex credits none</span>`}
                 ${(env?.stored_unsupported || env?.stored_differs) && html`
                   <span class="dc-fact-tier" style=${chip(env.stored_unsupported ? "--danger" : "--warning")}>disputed</span>`}
                 ${rivals > 0 && html`
@@ -3718,12 +3727,27 @@ function BlocksTab({ p, admin = false, onRuled }) {
   const extras = ((acct && acct.residuals) || [])
     .filter((r) => RESIDUAL_LABEL[r.reason] && r.mw > 0.5)
     .map((r) => [`_${r.reason}`, r.mw]);
-  const bars = [...confirmed, ...extras];
-  const shown = bars.reduce((sum, [, mw]) => sum + mw, 0);
-  const denom = Math.max(campusTotal, shown, 1);
+  const described = [...confirmed, ...extras];
+  const shown = described.reduce((sum, [, mw]) => sum + mw, 0);
   const describedOver = shown > campusTotal + 0.5;
-  const barTone = (key) => (key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone);
-  const barLabel = (key) => (key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label);
+  /* **When the tranches describe more than the campus, the bar draws the campus.**
+   * Drawn as described, Abilene's bar read 2,006 MW serving or energised and
+   * 13,329 MW in all under a headline of 421 of 1,200 — the very disagreement the
+   * client's review began with ("1,600 MW delivering"), moved one line down. Until
+   * the tranche review has nested them, the bar is the campus's own reading — what
+   * runs, and the rest of its plan — and the sources' breakdown sits in the fold
+   * below it, with why it does not add up. */
+  const reconciled = (describedOver || overDescribed) && campusTotal > 0;
+  const bars = reconciled
+    ? [["@running", Math.min(headline, campusTotal)], ["@rest", Math.max(campusTotal - headline, 0)]]
+      .filter(([, mw]) => mw > 0.5)
+    : described;
+  const denom = reconciled ? Math.max(campusTotal, 1) : Math.max(campusTotal, shown, 1);
+  const CAMPUS_BAR = { "@running": ["Running", blockState("serving").tone], "@rest": ["Not yet running", blockState("planned").tone] };
+  const barTone = (key) => (key.startsWith("@") ? CAMPUS_BAR[key][1]
+    : key.startsWith("_") ? RESIDUAL_TONE[key.slice(1)] : blockState(key).tone);
+  const barLabel = (key) => (key.startsWith("@") ? CAMPUS_BAR[key][0]
+    : key.startsWith("_") ? RESIDUAL_LABEL[key.slice(1)] : blockState(key).label);
   // The reconciliation's lines inside the total, and the two named beside it.
   const OUTSIDE = ["generation", "out_of_scale", "same_as", "superseded", "elsewhere"];
   const inside = ((acct && acct.residuals) || []).filter((r) => !OUTSIDE.includes(r.reason));
@@ -3754,14 +3778,23 @@ function BlocksTab({ p, admin = false, onRuled }) {
             <span key=${i}><i style=${{ background: `var(${barTone(key)})` }} />${barLabel(key)}
               <span class="dc-num"> ${fmtMw(mw)} MW</span></span>`)}
         </div>
-        ${(describedOver || overDescribed) && html`
-          <p class="dc-tr-note">
-            ${describedOver
-              ? `The tranches add up to ${fmtMw(shown)} MW against this ${fmtMw(campusTotal)} MW campus${
-                  overDescribed ? `, ${fmtMw(acct.live_mw)} MW of it marked live` : ""}`
-              : `The tranches marked live add up to ${fmtMw(acct.live_mw)} MW`}: sources describe some
-            buildings more than once, or the campus and its buildings separately. The bar shows them as
-            described; the headline is the campus's own running figure, the summary's Running.</p>`}
+        ${reconciled && html`
+          <details class="dc-tr-note">
+            <summary>
+              ${describedOver
+                ? `The tranches add up to ${fmtMw(shown)} MW against this ${fmtMw(campusTotal)} MW campus${
+                    overDescribed ? `, ${fmtMw(acct.live_mw)} MW of it marked live` : ""}`
+                : `The tranches marked live add up to ${fmtMw(acct.live_mw)} MW`}: sources describe some
+              buildings more than once, or the campus and its buildings separately, so the bar shows the
+              campus's own figures. As the sources describe them:</summary>
+            <div class="dc-tr-legend" style=${{ marginTop: 6 }}>
+              ${described.map(([key, mw], i) => html`
+                <span key=${i}><i style=${{ background: `var(${barTone(key)})` }} />${barLabel(key)}
+                  <span class="dc-num"> ${fmtMw(mw)} MW</span></span>`)}
+            </div>
+            <p style=${{ margin: "6px 0 0" }}>The nightly tranche review nests them — a building inside the
+              campus, one tranche under two names, another campus's — and the figures below follow its rulings.</p>
+          </details>`}
       </div>
 
       ${rows.length > 0 && html`
@@ -4030,6 +4063,9 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
   const [state, setState] = useState({ loading: true, company: null, error: null });
   const [busy, setBusy] = useState(false);
   const [nonce, setNonce] = useState(0);
+  // Whose megawatts the page reads: as buyer (the Capex page's figures) or as builder.
+  const [basis, setBasis] = useState(null);
+  useEffect(() => { setBasis(null); }, [slug]);
   useEffect(() => {
     let cancelled = false;
     setState((s) => ({ ...s, loading: true }));
@@ -4083,24 +4119,41 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
     states.length && `in ${states.length} state${states.length === 1 ? "" : "s"}`,
     t.open_obstacles && `${t.open_obstacles} open obstacle${t.open_obstacles === 1 ? "" : "s"}`,
   ].filter(Boolean).join(" · ");
+  /* Two readings of the same campuses (`company.profile`): as buyer, each campus
+   * credited to whoever buys it, as the Capex page counts — and as builder, every
+   * campus it builds, whole. They differ for a builder that leases out what it
+   * builds: xAI read "0 MW" beside Colossus at 2 GW. The page opens on the larger
+   * reading when the buyer one is under half of it, and says which it shows. */
+  const b = c.builds || null;
+  const builderDiffers = !!b && b.campuses > 0 && Math.abs((b.mw_planned || 0) - (t.mw_planned || 0)) > 0.5;
+  const view = !builderDiffers ? "buyer"
+    : basis || ((t.mw_planned || 0) < 0.5 * (b.mw_planned || 0) ? "builder" : "buyer");
+  const asBuilder = view === "builder";
+  const figures = asBuilder
+    ? { planned: b.mw_planned, built: b.mw_built, stages: b.stages, supply: b.supply }
+    : { planned: t.mw_planned, built: t.mw_built, stages: c.stages, supply: c.supply };
   /* Megawatts by how far along they are (`company._by_stage`), drawn as one bar:
-   * the four parts add up to the planned figure in the header. The client reads a
+   * the parts add up to the planned figure in the header. The client reads a
    * company by its megawatts, and a count of campuses says nothing about size. */
-  const stageMw = (c.stages || {}).mw || {};
-  const stageN = (c.stages || {}).campuses || {};
+  const stageMw = (figures.stages || {}).mw || {};
+  const stageN = (figures.stages || {}).campuses || {};
   const STAGES = [
     ["running", "running", PHASE_TOKEN.operational],
+    ["unstated", "running, how much not stated", "--muted-foreground"],
     ["construction", "under construction", PHASE_TOKEN.construction],
     ["planned", "planned or permitting", PHASE_TOKEN.permitting],
     ["expansion", "still to come at operating campuses", PHASE_TOKEN.announced],
   ].filter(([k]) => (stageMw[k] || 0) > 0.5);
-  const supply = c.supply || null;
+  const supply = figures.supply || null;
   /* Which rule the two capacity figures follow, and the parts a reader can find
    * on the Capex page (`tracker/company.py`): its row there, and the campuses it
    * builds that name no buyer, which Capex files under "(no named customer)". */
   const parts = t.counting || {};
   const inRow = parts.capex_row?.mw_planned || 0;
   const unnamed = parts.no_named_buyer?.mw_planned || 0;
+  const builderNote = "Counted as the builder: every campus it builds, whole, whoever buys it — each campus once, "
+    + "paused and cancelled campuses left out. These are not the Capex page's figures, which credit each campus to its buyer"
+    + (t.mw_planned > 0.5 ? ` (${gw(t.mw_planned)} planned as buyer).` : "; as a buyer it is credited with none.");
   const countedNote = "Planned and running are counted as on the Capex page: each campus once, "
     + "paused and cancelled campuses left out, and a tenant credited only with its own buildings"
     + ([inRow && `${gw(inRow)} is its Capex row`,
@@ -4160,9 +4213,15 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
               <span>${c.watching ? "Watching" : "Watch company"}</span>
             </button>`}
         </div>
+        ${builderDiffers && html`
+          <div class="dc-seg" role="group" aria-label="Count megawatts as" style=${{ justifySelf: "start" }}>
+            ${[["buyer", "as buyer (Capex)"], ["builder", "as builder"]].map(([k, label]) => html`
+              <button key=${k} type="button" class="dc-seg-btn"
+                      aria-pressed=${view === k} onClick=${() => setBasis(k)}>${label}</button>`)}
+          </div>`}
         <div class="dc-co-stats">
-          ${stat(gw(t.mw_planned), "planned", "each campus once, as on Capex")}
-          ${stat(gw(t.mw_built), "running", "energised and serving today")}
+          ${stat(gw(figures.planned || 0), "planned", asBuilder ? "every campus it builds, whole" : "each campus once, as on Capex")}
+          ${stat(gw(figures.built || 0), "running", "energised and serving today")}
           ${stat(gw(stageMw.construction || 0), "under construction", "not yet running, on campuses being built")}
           ${stat(gw(supply ? supply.total_mw : 0), "due in the next three years",
                  supply && supply.high_risk_mw > 0
@@ -4170,7 +4229,8 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
                    : "not yet running, by expected online date")}
         </div>
         <p style=${{ margin: 0, fontSize: 12.5, lineHeight: "18px", color: "var(--muted-foreground)" }}>
-          ${countedNote}</p>
+          ${asBuilder ? builderNote : countedNote}
+          ${!asBuilder && builderDiffers && ` As the builder of ${b.campuses} campus${b.campuses === 1 ? "" : "es"}, whoever buys them: ${gw(b.mw_planned)} planned.`}</p>
       </section>
 
       <div class="dc-co-body">
@@ -4250,12 +4310,12 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
                   </div>`)}
               </div>`
             : html`<span style=${{ fontSize: 12.5, color: "var(--muted-foreground)" }}>
-                No capacity is credited to this company.</span>`}
+                ${asBuilder ? "No capacity is stated for the campuses it builds." : "No capacity is credited to this company."}</span>`}
           </div>
         </aside>
       </div>
 
-      <${CompanySupply} s=${supply} name=${c.name} onOpen=${onOpen} />
+      <${CompanySupply} s=${supply} name=${c.name} onOpen=${onOpen} asBuilder=${asBuilder} />
 
       ${lateRows.length > 0 && html`
         <div class="dc-co-card" style=${{ minWidth: 0 }}>
@@ -4318,7 +4378,7 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
  * every level is also written as a word, never carried by hue alone. */
 const RISK_TONE = { high: "--danger", elevated: "--warning", low: "--muted-foreground" };
 
-function CompanySupply({ s, name, onOpen }) {
+function CompanySupply({ s, name, onOpen, asBuilder = false }) {
   if (!s || !(s.total_mw > 0 || s.later_mw > 0 || s.undated_mw > 0)) return null;
   const gw = (mw) => (mw >= 1000 ? `${(mw / 1000).toFixed(1).replace(/\.0$/, "")} GW` : `${fmtMw(mw)} MW`);
   const top = Math.max(1, ...s.years.map((y) => y.mw));
@@ -4332,8 +4392,8 @@ function CompanySupply({ s, name, onOpen }) {
     <div class="dc-co-card" style=${{ minWidth: 0 }}>
       <div style=${{ padding: "16px 18px 6px" }}>
         <${SectionHead} title=${`Supply, ${firstYear}–${lastYear}`} count=${gw(s.total_mw)}>
-          Capacity ${name} is credited with that is not yet running, by the year each
-          campus is due. A campus whose stated period has passed with nothing running is
+          ${asBuilder ? `Capacity on the campuses ${name} builds` : `Capacity ${name} is credited with`}
+          ${" "}that is not yet running, by the year each campus is due. A campus whose stated period has passed with nothing running is
           overdue: still expected, and nobody has said when.
         <//>
       </div>
@@ -4372,10 +4432,12 @@ function CompanySupply({ s, name, onOpen }) {
                   ${" "}· ${fmtMw(overdue)} overdue</span>` : ""}</span>
             </div>`;
         })}
-        ${(s.later_mw > 0 || s.undated_mw > 0) && html`
+        ${(s.later_mw > 0 || s.undated_mw > 0 || s.running_unknown_mw > 0) && html`
           <span style=${{ fontSize: 12, color: "var(--muted-foreground)" }}>
             ${[s.later_mw > 0 && `${gw(s.later_mw)} due after ${lastYear}`,
-               s.undated_mw > 0 && `${gw(s.undated_mw)} with no date`].filter(Boolean).join(" · ")}
+               s.undated_mw > 0 && `${gw(s.undated_mw)} with no date`,
+               s.running_unknown_mw > 0 && `${gw(s.running_unknown_mw)} on running campuses no source gives a running figure for`,
+            ].filter(Boolean).join(" · ")}
             ${" "}— not in the figures above.</span>`}
       </div>
 

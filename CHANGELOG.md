@@ -898,6 +898,42 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus is called a suspected delay only after a search finds no news of it going
+  live** (`tracker/delays.py` `searched_since_due`, `awaiting_search`;
+  `tracker/ingest/watch.py` `golive_query`; `tracker news --golive`; migration 0047
+  `project.golive_checked_at`; `tests/test_delays.py`, `tests/test_news_watch.py`). The
+  client's rule is "past its date, and a search still finds no news of it going live";
+  the flag skipped the search and read only what we held, and the news watch's first
+  look reaches back a year. Of the 14 flagged on 10-22 about half had simply opened years
+  earlier without an article we read — Savvis MP2 (2014), CH3 (2018), NTT Mesa (2022) —
+  and Tesla's Dojo had been shut down. Each night the watch now searches every campus
+  past its date, from 120 days before it to today, for the words of opening, slipping or
+  stopping, and reads what it finds that night; a campus is flagged only once such a
+  search, made after its date passed, has run.
+- **A builder's company page shows what it builds** (`tracker/company.py` `_built`,
+  `_builds`; the console's company page; `tests/test_surfaces_agree.py`). Company figures
+  credit each campus to its buyer, as Capex does, so a builder that leases out what it
+  builds read as nothing: xAI "0 MW" beside Colossus and MACROHARDRR at 2 GW each,
+  SoftBank 0 of 10.7 GW, IREN 0 of 2.75 GW — 9 of the 40 largest builders showed under
+  half of what they build. The page can now read every campus it builds, whole, beside
+  the Capex reading, and opens on it when the buyer reading is under half of it. Capex
+  and its totals are unchanged.
+- **An operating campus with no running figure has nothing known "still to come"**
+  (`tracker/supply.py` `running_unknown`; `tracker/company.py` `_by_stage`). Planned less
+  "nothing" read as the whole plan: Englewood showed "18 MW still to come" beside "in
+  service since 2022", and 34 such campuses put 3,647 MW into their companies' future
+  supply. What is left there is unknown; the summary says so, the company page counts
+  it apart, and delay risk does not read it as capacity to come.
+- **The tranche bar no longer contradicts the headline** (the console's *Capacity by
+  tranche*). Drawn as the sources describe them, Abilene's bar showed 2,006 MW serving
+  or energised and 13,329 MW in all under a headline of 421 of 1,200 MW — the client's
+  first example, moved one line down. When the tranches describe more than the campus,
+  the bar draws the campus's own figures and a fold gives the sources' breakdown with
+  why it does not add up, until the nightly tranche review has nested them.
+- **One buyer story per page** (`tracker/webui/dataset.py` `_name_buyers`; the console's
+  header and fields). Stargate Abilene's header and Buyer field said "Oracle" while its
+  summary named Microsoft, OpenAI and Oracle and said Capex credits none. With several
+  buyers named, the header, the field, the table row and the summary all name them all.
 - **A tenant of one part of a campus is no longer credited with all of it**
   (`tracker/capex.py` `tenant_of_part`, `attribute`; `tests/test_capex.py`). The Capex
   page credited a campus with one named customer wholly to that customer, so

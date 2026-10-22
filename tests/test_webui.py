@@ -4813,6 +4813,7 @@ def test_a_suspected_delay_reaches_the_table_the_index_and_the_page(server, seed
         project = session.scalars(select(Project)).one()
         project.expected_online = dt.date(2020, 1, 1)
         project.expected_online_precision = "year"
+        project.golive_checked_at = dt.datetime(2021, 1, 5)
 
     address, _ = server
     _status, page = request(address, "/api/projects?delayed=1")

@@ -77,13 +77,14 @@ Two dates have their own rules:
 
 ## Suspected delays
 
-A campus is flagged **Suspected delay** when all four of these hold:
+A campus is flagged **Suspected delay** when all five of these hold:
 
 - it has an expected online date, and the whole period that date names is over — "Q3 2025" became late on 1 October 2025, "2025" on 1 January 2026. A date stored on the first of a month with no precision recorded is read as that month, or as the whole year when it is 1 January, so a vague date is never called late early;
 - its phase is not operational, and it has not been paused or cancelled — a stopped campus has a status of its own, which says more than "late";
 - nothing says it has gone live: no capacity is recorded as running, no building or phase is running, and no energisation was reported on or after the expected date (one that was only *expected* does not count);
-- no building or phase is still due later. When the campus date was the first phase's and the next phase has its own later date, the campus is not late.
+- no building or phase is still due later. When the campus date was the first phase's and the next phase has its own later date, the campus is not late;
+- **a search still finds no news of it going live.** Once the date's period is over, the nightly news watch searches for the campus from a little before its stated date to that day, for the words of opening, energising, slipping or stopping, and reads what it finds that night. Until that search has run, the campus is not flagged: what we happened to hold is not enough, and a campus that opened years ago without an article we read is missing a fact, not late.
 
-It is a suspicion, not a finding. The usual causes are a slip nobody reported and a campus that opened without news we read, and either is worth a search. The flag gives the date as the source stated it and how many days ago its period ended, and it is worked out again every day. One rule is behind the chip on a [project's page](project-page), the **Late** column and the **Suspected delays only** filter in [Projects](projects), the list on a [company page](companies), the [API](api-reference) and the contradiction check the maintainers run, so they always agree.
+It is a suspicion, not a finding: the search found nothing that puts the campus running, which usually means a slip nobody has reported. The flag gives the date as the source stated it and how many days ago its period ended, and it is worked out again every day. One rule is behind the chip on a [project's page](project-page), the **Late** column and the **Suspected delays only** filter in [Projects](projects), the list on a [company page](companies), the [API](api-reference) and the contradiction check the maintainers run, so they always agree.
 
 A building or phase is marked **was due** on the same terms: its date's period is over, it is not running, no energisation date is recorded for it, and it is not paused or cancelled. A building or phase records no precision of its own, so its date is read the way an unrecorded one is above.

@@ -1664,6 +1664,14 @@ def news(
             help="Give every campus never looked at its first look now, however many.",
         ),
     ] = False,
+    golive: Annotated[
+        int,
+        typer.Option(
+            "--golive",
+            help="Campuses past their online date to search for news of going live, most "
+            "overdue first. None is shown as a suspected delay until searched.",
+        ),
+    ] = 40,
     max_queries: Annotated[
         int | None,
         typer.Option(
@@ -1703,6 +1711,13 @@ def news(
     construction). Up to `--baselines` campuses get theirs each run, so switching the
     watch on catches the whole database up over a night or two; `--all` does it now.
 
+    **Before any of that, each campus past its online date is searched for going live**
+    (`--golive`, most overdue first): one web search from a little before its stated
+    date to today, for the words of going live, slipping or stopping. A campus is
+    shown as a suspected delay only once that search, made after the date passed,
+    found nothing that puts it running — the client's rule, which the flag used to
+    skip.
+
     A result is queued (`watch:#<id>`) when its headline and snippet pass the
     discovery filter or name the campus, and its date is in the window. The crawl
     reads them ahead of the backlog. No model is called; a search is about ¥0.007.
@@ -1722,6 +1737,7 @@ def news(
             session,
             followups=followups,
             baselines=None if every else baselines,
+            golive=golive,
             max_queries=max_queries,
             project_ids=project or None,
         )

@@ -115,6 +115,11 @@ class Project(Base):
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
     last_verified_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    #: When the news watch last searched for word of this campus going live, from
+    #: before its stated online date to the day of the search (migration 0047). A
+    #: campus is a suspected delay only once such a search, made after the date
+    #: passed, found nothing that put it running (`delays.assess`).
+    golive_checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
     #: The company `company` is filed under (`companies.attach`): derived from the
     #: string by `dedup.company_key`, recomputed whenever the row is written, so an
     #: alias a person adds moves it. NULL only before `tracker init` has run.

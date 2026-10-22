@@ -132,6 +132,9 @@ def fleet(session):
         session.add(
             ProjectParty(project_id=pid, name=name, party_key=name.lower(), role="customer")
         )
+    # Every campus has had its go-live search, so a passed date reads late (`delays`).
+    for project in session.query(Project):
+        project.golive_checked_at = dt.datetime(2026, 10, 22)
     session.flush()
     session.expire_all()
     return session
@@ -164,7 +167,15 @@ def test_the_table_row_and_the_project_page_agree(fleet):
     for project in _projects(fleet):
         page = dataset.project_payload(project)
         row = rows[project.id]
-        for field in ("mw_planned", "mw_built", "phase", "company_name", "suspected_delay"):
+        for field in (
+            "mw_planned",
+            "mw_built",
+            "phase",
+            "company_name",
+            "customer_name",
+            "customer_shared",
+            "suspected_delay",
+        ):
             assert row[field] == page[field], (project.name, field)
 
 
@@ -225,3 +236,25 @@ def test_a_campus_naming_several_buyers_lists_every_one_on_its_page(fleet):
     page = dataset.project_payload(frontier)
     assert sorted(b["name"] for b in page["buyers"]) == ["OpenAI", "Oracle"]
     assert all(b["slug"] for b in page["buyers"])
+
+
+def test_a_campus_naming_several_buyers_names_them_all_wherever_a_buyer_is_printed(fleet):
+    """Stargate Abilene, 10-22: header and Buyer field said "Oracle" while the summary
+    named three buyers and said Capex credits none of them."""
+    frontier = next(p for p in _projects(fleet) if p.name == "Frontier")
+    page = dataset.project_payload(frontier)
+    row = next(r for r in dataset.index_rows(fleet) if r["id"] == frontier.id)
+    assert page["customer_shared"] is row["customer_shared"] is True
+    assert page["customer_name"] == row["customer_name"] == "OpenAI, Oracle"
+    assert page["customer_slug"] is row["customer_slug"] is None
+
+
+def test_a_builder_that_leases_out_what_it_builds_still_reads_in_megawatts(fleet):
+    """xAI, 10-22: "0 MW" beside Colossus at 2 GW, every campus credited to its
+    buyer. The page reads the campuses it builds as well, whole, beside Capex."""
+    crusoe = company.profile(fleet, "crusoe")
+    assert crusoe["totals"]["mw_planned"] < crusoe["builds"]["mw_planned"]
+    assert crusoe["builds"]["mw_planned"] == 1200.0
+    assert crusoe["builds"]["campuses"] == 1
+    # The Capex figures are untouched: the builder reading is beside them, not in them.
+    test_one_company_is_one_name_and_its_pages_add_up_to_capex(fleet)

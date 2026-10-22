@@ -514,7 +514,7 @@ def sync() -> Canvas:
     c.section(48, 454, "where the rows come from", "three phases end in one queue, and one gate stands between the queue and a new row")
 
     feeds = c.box(48, 500, 176, 58, "Feeds", ["whole-word keywords; every", "entry and verdict remembered"], role="cool", title_size=11.5)
-    watch = c.box(48, 570, 176, 58, "News watch", ["each campus since its last", "look; each builder weekly"], role="orange", title_size=11.5)
+    watch = c.box(48, 570, 176, 58, "News watch", ["each campus since last look;", "overdue ones: a go-live search"], role="orange", title_size=11.5)
     search = c.box(48, 640, 176, 58, "Search", ["a place and an event, or", "a headline, via a news API"], role="orange", title_size=11.5)
     roster = c.box(48, 710, 176, 58, "Roster", ["who we hold no rows for"], role="cool", title_size=11.5)
     archives = c.box(48, 780, 176, 58, "Archives, every night", ["a builder's own newsroom", "read whole; only what is new"], role="cool", title_size=11.5)

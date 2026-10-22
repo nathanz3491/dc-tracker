@@ -14,6 +14,10 @@ Changes a reader of the console will notice, newest first. The console's version
 - **Three more listing sites count as directories.** A state listing recounting CoreWeave's 2025 announcement had held its Lancaster campus at *announced*; it reads under construction again.
 - **Rows corrected by hand.** Eight campuses the night had stored twice are one row each again; QTS Richmond 5 no longer carries six copies of another campus's 238 MW; the Plano and Ashburn campuses are named as campuses, with figures that belong to them; CoreSite DE3 is 18 MW, Meta Stanton Springs $1.5 billion, and Meta Jeffersonville operating.
 - **A tenant of one part is no longer the campus's buyer.** DreamHost, a 2012 tenant of NTT Ashburn's 3.6 MW first phase, held all 224 MW on the Capex page; the rest of such a campus now sits under *(no named customer)*. Related Digital's 1 GW data center at Chicago's South Works has its own row again. See [Capex](capex).
+- **A campus is called a suspected delay only after a search.** Each night, a campus past its online date is searched for news of opening, slipping or stopping, from a little before the date to today; it is flagged only if that search finds nothing that puts it running. Several old campuses that had simply opened without an article we read leave the list. See [Numbers and dates](numbers-and-dates).
+- **A builder's company page shows what it builds.** xAI read 0 MW because its campuses count for their tenant; a switch on the company page now reads every campus a company builds, whole, beside the Capex figures. See [Company pages](companies).
+- **"Still to come" is unknown, not the whole plan, for a running campus with no running figure** — Englewood read 18 MW still to come beside "in service since 2022".
+- **The tranche bar matches the headline.** When a campus's tranches describe more than the campus, the bar shows its own running and not-yet-running figures, and the sources' breakdown sits in a fold beneath with why. A campus naming several buyers names them all in its header and fields too.
 
 ### Tranches that nest
 

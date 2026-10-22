@@ -36,6 +36,8 @@ def _campus(
         events=list(events),
         risks=list(risks),
         blocks=list(blocks),
+        # Searched for going live today (`delays.searched_since_due`).
+        golive_checked_at=dt.datetime.combine(TODAY, dt.time.min),
     )
 
 
@@ -164,7 +166,7 @@ def test_supply_is_what_is_not_yet_running_in_the_year_it_is_due():
 
 def test_overdue_capacity_stays_in_the_window_marked_as_overdue():
     late = _campus(1, expected=dt.date(2025, 7, 1), precision="quarter")
-    running_late = _campus(2, phase="operational", expected=dt.date(2025, 1, 1))
+    running_late = _campus(2, phase="operational", expected=dt.date(2025, 1, 1), built=100.0)
     got = supply.supply(
         [supply.Credited(late, 600.0, 0.0), supply.Credited(running_late, 200.0, 100.0)],
         today=TODAY,
@@ -230,3 +232,18 @@ def test_a_passed_date_with_a_tranche_still_to_come_is_that_tranches_year_not_ov
     (row,) = got["campuses"]
     assert (row["year"], row["overdue"]) == (2027, False)
     assert got["overdue_mw"] == 0.0
+
+
+def test_a_running_campus_with_no_running_figure_has_nothing_known_still_to_come():
+    """Englewood (#72), 10-22: "18 MW still to come" beside "in service since 2022".
+    Something runs and nobody said how much, so the rest is unknown, not future supply."""
+    englewood = _campus(72, phase="operational", expected=dt.date(2022, 12, 31))
+    englewood.mw_planned = 18.0
+    assert supply.running_unknown(englewood)
+    rest = supply.still_to_come(englewood, today=TODAY)
+    assert rest["mw"] is None and rest["unknown"]
+    assert supply.delay_risk(englewood, today=TODAY).level == supply.LOW
+    got = supply.supply([supply.Credited(englewood, 18.0, 0.0)], today=TODAY)
+    assert got["total_mw"] == 0.0 and got["undated_mw"] == 0.0
+    assert got["running_unknown_mw"] == 18.0
+    assert got["campuses"] == []

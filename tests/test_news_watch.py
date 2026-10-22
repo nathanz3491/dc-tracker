@@ -857,3 +857,44 @@ def test_a_campus_towns_football_recap_is_not_news_of_the_campus(session):
     )
     watch.run(session, provider=provider, now=NOW, feeds_path=_feeds(session))
     assert set(session.scalars(select(IngestUrl.url))) == {"https://news.test/beech"}
+
+
+def test_a_campus_past_its_date_is_searched_for_going_live_before_it_is_flagged(session):
+    """The client's rule: past its date *and a search still finds no news of it going
+    live*. The search reaches back to before the stated date, so a campus that opened
+    years ago is found; until it has run, the campus is not shown as late."""
+    from tracker import delays
+
+    late = _campus(session, 1, phase="construction")
+    late.expected_online = dt.date(2022, 1, 1)
+    late.expected_online_precision = "year"
+    session.commit()
+    today = NOW.date()
+    assert delays.suspected_delay(late, today=today) is None  # not searched yet
+
+    provider = FakeNews(
+        web=[
+            _hit(
+                "https://news.test/kuna-open",
+                "Meta's Kuna data center is now online",
+                date="Mar 3, 2023",
+            )
+        ],
+    )
+    report = watch.run(
+        session, provider=provider, now=NOW, feeds_path=_feeds(session), followups=0, baselines=0
+    )
+    golive = [c for c in provider.calls if "opened" in c[1]]
+    assert len(golive) == 1 and golive[0][0] == "web"
+    assert "cd_min:09/03/2021" in golive[0][2], "from 120 days before the stated date"
+    assert report.golive_checked == 1 and report.golive_queued == 1
+    assert session.get(Project, late.id).golive_checked_at == NOW
+    assert "https://news.test/kuna-open" in set(session.scalars(select(IngestUrl.url)))
+    # Searched after the date passed: the record now decides, and nothing yet says
+    # it runs — until the queued article is read.
+    assert delays.suspected_delay(session.get(Project, late.id), today=today) is not None
+    again = FakeNews()
+    watch.run(
+        session, provider=again, now=NOW, feeds_path=_feeds(session), followups=0, baselines=0
+    )
+    assert not [c for c in again.calls if "opened" in c[1]], "searched once per passed date"

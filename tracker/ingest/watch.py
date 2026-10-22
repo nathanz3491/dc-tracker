@@ -235,6 +235,10 @@ class WatchReport:
     stopped: str | None = None
     due_followups: int = 0
     due_baselines: int = 0
+    #: Campuses past their online date with no go-live search since (`delays`).
+    due_golive: int = 0
+    golive_checked: int = 0
+    golive_queued: int = 0
 
     @property
     def queued(self) -> int:
@@ -242,6 +246,9 @@ class WatchReport:
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
+            ("past their date, never searched for going live", self.due_golive),
+            ("of them searched now", self.golive_checked),
+            ("go-live results queued", self.golive_queued),
             ("campuses due again", self.due_followups),
             ("campuses never looked at", self.due_baselines),
             ("campuses looked at", len(self.looks)),
@@ -387,6 +394,49 @@ def anchor(project: Project) -> str | None:
     place = where[0] if len(where) == 1 else f"({' OR '.join(where)})"
     company = _company_term(project)
     return f"{company} {place}" if company else place
+
+
+#: Go-live searches per run: campuses past their online date with no search since.
+#: About one search each; the list is short once caught up (14 on 2026-10-22).
+GOLIVE_PER_RUN: Final = 40
+
+#: How far before its stated online date a go-live search reaches: an opening is
+#: often announced a little early, and a slip is usually reported before the date.
+GOLIVE_LEAD: Final = dt.timedelta(days=120)
+
+#: The words of a campus going live, or of its date being missed or abandoned.
+GOLIVE_WORDS: Final = (
+    "opened",
+    "opens",
+    "operational",
+    "online",
+    "energized",
+    "completed",
+    "delayed",
+    "postponed",
+    "cancelled",
+    "scrapped",
+    "shut down",
+)
+
+
+def golive_query(project: Project, late: Any, *, now: dt.datetime) -> Query | None:
+    """The search that decides whether a campus past its date is a suspected delay.
+
+    The client's rule (2026-10-21): past its expected online date, *and a search
+    still finds no news of it going live*. The watch's first look reaches back a
+    year, so a campus that opened in 2014 without an article we read stayed "late"
+    for ever; this one reaches back to a little before the stated date, in the web
+    index, for the words of going live — and of slipping or stopping, which settle
+    the question as well. None when there is nothing to search by.
+    """
+    subject = anchor(project)
+    if subject is None:
+        return None
+    start = dt.datetime.combine(late.expected_online, dt.time.min) - GOLIVE_LEAD
+    words = " OR ".join(f'"{w}"' for w in GOLIVE_WORDS)
+    window = f"cdr:1,cd_min:{start:%m/%d/%Y},cd_max:{now:%m/%d/%Y}"
+    return Query(project.id, f"{subject} data center ({words})", "web", window, start, False)
 
 
 def window_for(since: dt.datetime, now: dt.datetime) -> str:
@@ -766,18 +816,22 @@ def run(
     provider: Any = None,
     followups: int | None = None,
     baselines: int | None = BASELINE_PER_RUN,
+    golive: int | None = GOLIVE_PER_RUN,
     max_queries: int | None = None,
     project_ids: list[int] | None = None,
     now: dt.datetime | None = None,
     run_id: str | None = None,
     feeds_path: Any = None,
 ) -> WatchReport:
-    """Look at every campus that is due, follow-ups first, then first looks.
+    """Look at every campus that is due: go-live searches, follow-ups, first looks.
 
-    `followups` and `baselines` cap how many campuses of each kind (None: all of
-    them); `max_queries` caps the searches. Commits after every campus, so a run cut
-    short keeps what it did and the next run carries on where it stopped.
+    The go-live searches come first (`golive_query`): a campus past its online date
+    is not shown as a suspected delay until one has run, so they are the searches a
+    reader is waiting on. `golive`, `followups` and `baselines` cap how many campuses
+    of each kind (None: all of them); `max_queries` caps the searches. Commits after
+    every campus, so a run cut short keeps what it did and the next run carries on.
     """
+    from tracker import delays as delays_mod
     from tracker.ingest.discover import (
         DiscoverReport,
         load_config,
@@ -794,7 +848,12 @@ def run(
     report.due_followups, report.due_baselines = len(later), len(fresh)
     plan = later[:followups] if followups is not None else later
     plan += fresh[:baselines] if baselines is not None else fresh
-    if not plan:
+    checks = [] if golive == 0 else delays_mod.awaiting_search(session, today=now.date())
+    if project_ids:
+        checks = [item for item in checks if item[0] in project_ids]
+    report.due_golive = len(checks)
+    checks = checks[:golive] if golive is not None else checks
+    if not plan and not checks:
         return report
 
     if provider is None:
@@ -809,6 +868,55 @@ def run(
     identities = {i.project_id: i for i in project_identities(session)}
     queue_report = DiscoverReport()
     failures_running = 0
+
+    for pid, late in checks:
+        project = session.get(Project, pid)
+        if project is None:
+            continue
+        query = golive_query(project, late, now=now)
+        if query is not None:
+            if max_queries is not None and report.queries + 1 > max_queries:
+                report.stopped = f"the run's search allowance is spent ({report.queries} sent)"
+                return report
+            try:
+                hits = provider.recent(query.text, window=query.window)
+            except QuotaExhausted as exc:
+                report.stopped = str(exc)
+                return report
+            except SearchError as exc:
+                report.failures += 1
+                failures_running += 1
+                log.warning("go-live search failed for #%s: %s", project.id, exc)
+                if failures_running >= 5:
+                    report.stopped = f"five searches failed in a row; the last: {exc}"
+                    return report
+                continue
+            failures_running = 0
+            report.queries += 1
+            identity = identities.get(project.id)
+            candidates = (
+                judge(
+                    hits,
+                    query,
+                    project,
+                    spec=spec,
+                    identity=identity,
+                    implied=implied,
+                    now=now,
+                )
+                if identity is not None
+                else []
+            )
+            queued = queue_candidates(session, candidates, run_id=run_id, report=queue_report)
+            report.golive_queued += len(queued)
+        else:
+            # Nothing to search by — no place and no distinctive name. Stamped all
+            # the same: what the database holds is all there is to go on, and a
+            # campus nobody can search for must not be hidden from the list for it.
+            log.info("go-live check for #%s: nothing to search by", project.id)
+        project.golive_checked_at = now
+        report.golive_checked += 1
+        session.commit()
 
     for project, look in plan:
         queries = plan_queries(project, look, now=now)

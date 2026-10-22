@@ -531,6 +531,21 @@ def _former_customer(project: Any, names: Any) -> dict[str, Any] | None:
     }
 
 
+def _name_buyers(payload: dict[str, Any], named: list[Any], names: Any) -> None:
+    """Say who buys the campus the way the summary and Capex do, wherever it is printed.
+
+    `customer` is one stored string, the first tenant a source gave; the summary and
+    Capex read every named buyer (`parties.named_buyers`). Stargate Abilene's header
+    and Buyer field said "Oracle" while its summary named Microsoft, OpenAI and Oracle
+    and said Capex credits none of them. With several named, the name every surface
+    prints is all of them, `customer_shared` says so, and no single company is linked.
+    """
+    payload["customer_shared"] = len(named) > 1
+    if len(named) > 1:
+        payload["customer_name"] = ", ".join(names.customer(p.name) or p.name for p in named)
+        payload["customer_slug"] = None
+
+
 def project_payload(project: Any, *, claims: bool = False, names: Any = None) -> dict[str, Any]:
     """One project as the console reads it: the export shape, plus what the page adds.
 
@@ -588,10 +603,12 @@ def project_payload(project: Any, *, claims: bool = False, names: Any = None) ->
         if project.expected_online is not None
         else None
     )
+    named = parties_mod.named_buyers(project.parties)
     payload["buyers"] = [
         {"name": names.customer(party.name), "slug": company_slug(customer_key(party.name))}
-        for party in parties_mod.named_buyers(project.parties)
+        for party in named
     ]
+    _name_buyers(payload, named, names)
     # The relationships this campus does not yet close (勾稽关系, `tracker/invariants.py`),
     # read from the campus alone: tranches that describe it twice, a phase naming no
     # facility, dates out of order. Held ones are refused on write and never appear.
@@ -831,12 +848,11 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
     # Tenants whose role has ended (migration 0044), in one query rather than the
     # party list of every row: `_former_customer` reads them off this stand-in.
     gone: dict[int, list[Any]] = {}
-    for party in session.scalars(
-        select(ProjectParty).where(
-            ProjectParty.role == "customer", ProjectParty.ended_reason.is_not(None)
-        )
-    ):
-        gone.setdefault(party.project_id, []).append(party)
+    customers: dict[int, list[Any]] = {}
+    for party in session.scalars(select(ProjectParty).where(ProjectParty.role == "customer")):
+        customers.setdefault(party.project_id, []).append(party)
+        if party.ended_reason is not None:
+            gone.setdefault(party.project_id, []).append(party)
     rows = []
     for project in projects:
         row: dict[str, Any] = {field: getattr(project, field) for field in INDEX_FIELDS}
@@ -863,6 +879,7 @@ def index_rows(session: Session) -> list[dict[str, Any]]:
             if project.id in gone
             else None
         )
+        _name_buyers(row, parties_mod.named_buyers(customers.get(project.id, [])), names)
         rows.append(row)
     return rows
 

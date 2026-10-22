@@ -240,12 +240,18 @@ def assess(
     blocks: Iterable[Any],
     events: Iterable[Any],
     today: dt.date,
+    checked_at: Any = None,
+    require_check: bool = False,
 ) -> SuspectedDelay | None:
     """The one definition of a suspected delay. See the module docstring for the rule.
 
     Structural on purpose: `blocks` and `events` are anything carrying the attributes
     the ORM rows have, so the batch reader below can hand in rows it loaded in three
     queries and get exactly the answer `suspected_delay` gives for one project.
+
+    `require_check` adds the rule's fifth condition (:func:`searched_since_due`): the
+    project readers pass it, with the campus's `golive_checked_at`; the news watch
+    leaves it off to find the campuses that still need their search.
     """
     expected = _as_date(expected_online)
     if expected is None:
@@ -264,6 +270,8 @@ def assess(
         return None
     if any(_went_live_since(e, expected, today) for e in events):
         return None
+    if require_check and not searched_since_due(checked_at, due):
+        return None
 
     read = read_as(expected, precision)
     shown = stated(expected, precision)
@@ -281,7 +289,24 @@ def assess(
     )
 
 
-def suspected_delay(project: Any, *, today: dt.date | None = None) -> SuspectedDelay | None:
+def searched_since_due(checked_at: Any, due: dt.date) -> bool:
+    """Whether a go-live search ran after the stated period ended (rule 5).
+
+    The client's rule is "past its date, and a search still finds no news of it
+    going live" — not "past its date, and nothing we happen to hold says so". A
+    campus that went live years ago without an article we read is not late; it is
+    missing a fact, and the search is how the fact is found (`ingest.watch`). A
+    search made before the period ended does not count: it could not have seen the
+    campus miss it. Whatever the search found is queued and read that night, so a
+    campus it shows running leaves the list then, through its phase.
+    """
+    when = _as_date(checked_at)
+    return when is not None and when > due
+
+
+def suspected_delay(
+    project: Any, *, today: dt.date | None = None, require_check: bool = True
+) -> SuspectedDelay | None:
     """Whether one project is a suspected delay, and why. Reads its tranches and milestones."""
     return assess(
         expected_online=getattr(project, "expected_online", None),
@@ -291,10 +316,14 @@ def suspected_delay(project: Any, *, today: dt.date | None = None) -> SuspectedD
         blocks=getattr(project, "blocks", ()) or (),
         events=getattr(project, "events", ()) or (),
         today=today if today is not None else as_of(),
+        checked_at=getattr(project, "golive_checked_at", None),
+        require_check=require_check,
     )
 
 
-def suspected(session: Session, *, today: dt.date | None = None) -> dict[int, SuspectedDelay]:
+def suspected(
+    session: Session, *, today: dt.date | None = None, require_check: bool = True
+) -> dict[int, SuspectedDelay]:
     """Every suspected delay in the database, by project id.
 
     For the readers that ask about the whole fleet at once — the console's light
@@ -321,6 +350,7 @@ def suspected(session: Session, *, today: dt.date | None = None) -> dict[int, Su
             Project.expected_online_precision,
             Project.phase,
             Project.mw_built,
+            Project.golive_checked_at,
         ).where(Project.id.in_(candidates))
     ).all()
     if not rows:
@@ -338,7 +368,7 @@ def suspected(session: Session, *, today: dt.date | None = None) -> dict[int, Su
         events.setdefault(event.project_id, []).append(event)
 
     out: dict[int, SuspectedDelay] = {}
-    for pid, expected, precision, phase, built in rows:
+    for pid, expected, precision, phase, built, checked in rows:
         found = assess(
             expected_online=expected,
             precision=precision,
@@ -347,10 +377,40 @@ def suspected(session: Session, *, today: dt.date | None = None) -> dict[int, Su
             blocks=blocks.get(pid, ()),
             events=events.get(pid, ()),
             today=when,
+            checked_at=checked,
+            require_check=require_check,
         )
         if found is not None:
             out[pid] = found
     return out
+
+
+def awaiting_search(
+    session: Session, *, today: dt.date | None = None
+) -> list[tuple[int, SuspectedDelay]]:
+    """Campuses that meet every condition but the search, most overdue first.
+
+    What the news watch's go-live check works through (`ingest.watch.run`): each is
+    late by the record and has not been searched since its period ended.
+    """
+    from tracker.models import Project
+
+    when = today if today is not None else as_of()
+    unchecked = suspected(session, today=when, require_check=False)
+    if not unchecked:
+        return []
+    checked = dict(
+        session.execute(
+            select(Project.id, Project.golive_checked_at).where(Project.id.in_(list(unchecked)))
+        ).all()
+    )
+    waiting = [
+        (pid, late)
+        for pid, late in unchecked.items()
+        if not searched_since_due(checked.get(pid), late.due)
+    ]
+    waiting.sort(key=lambda item: (-item[1].days_late, item[0]))
+    return waiting
 
 
 __all__ = [
@@ -364,8 +424,10 @@ __all__ = [
     "SuspectedDelay",
     "as_of",
     "assess",
+    "awaiting_search",
     "period_end",
     "read_as",
+    "searched_since_due",
     "stated",
     "suspected",
     "suspected_delay",

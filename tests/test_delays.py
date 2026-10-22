@@ -253,7 +253,11 @@ def _row(session, name, **kwargs) -> Project:
         city=name,
         dedup_key=f"someone|{name.lower()}|tx",
         confidence=2,
-        **{"phase": "construction", **kwargs},
+        **{
+            "phase": "construction",
+            "golive_checked_at": dt.datetime.combine(TODAY, dt.time.min),
+            **kwargs,
+        },
     )
     session.add(project)
     session.flush()
@@ -427,4 +431,53 @@ def test_a_section_is_overdue_only_when_its_period_is_over(session, monkeypatch)
         "Building 3": False,
         "Building 4": False,
         "Building 5": False,
+    }
+
+
+# --- a search, not only what we hold (client rule, 2026-10-21) --------------------
+
+
+def test_a_late_campus_is_not_flagged_until_a_search_after_its_date_found_nothing():
+    """Savvis MP2 (2014), CH3 (2018) and NTT Mesa (2022) read "suspected delay" on
+    10-22 because nothing we held said they ran — and nothing had searched."""
+    stub = SimpleNamespace(
+        expected_online=dt.date(2022, 1, 1),
+        expected_online_precision="year",
+        phase="construction",
+        mw_built=None,
+        blocks=[],
+        events=[],
+        golive_checked_at=None,
+    )
+    assert delays.suspected_delay(stub, today=TODAY) is None
+    assert delays.suspected_delay(stub, today=TODAY, require_check=False) is not None
+    stub.golive_checked_at = dt.datetime(2022, 12, 31, 23, 0)  # before the year ended
+    assert delays.suspected_delay(stub, today=TODAY) is None
+    stub.golive_checked_at = dt.datetime(2026, 10, 19)
+    assert delays.suspected_delay(stub, today=TODAY) is not None
+
+
+def test_the_watch_lists_the_late_campuses_still_waiting_for_their_search(session):
+    waiting = _row(
+        session,
+        "Waiting",
+        expected_online=dt.date(2024, 4, 1),
+        expected_online_precision="month",
+        golive_checked_at=None,
+    )
+    _row(
+        session, "Searched", expected_online=dt.date(2024, 4, 1), expected_online_precision="month"
+    )
+    stale = _row(
+        session,
+        "Stale",
+        expected_online=dt.date(2025, 1, 1),
+        expected_online_precision="year",
+        golive_checked_at=dt.datetime(2025, 6, 1),
+    )
+    session.commit()
+    got = [pid for pid, _late in delays.awaiting_search(session, today=TODAY)]
+    assert got == [waiting.id, stale.id]
+    assert set(delays.suspected(session, today=TODAY)) == {
+        p.id for p in session.query(Project) if p.name == "Searched"
     }

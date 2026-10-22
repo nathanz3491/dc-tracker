@@ -248,12 +248,20 @@ def _by_stage(credited: list[supply_mod.Credited]) -> dict[str, Any]:
 
     `running` is what its campuses run; the rest of each campus's credited capacity
     is under construction, planned (announced or permitting), or still to come at a
-    campus already operating — an expansion, or a figure nothing yet dates. The four
-    add up to the planned total, so the page can draw them as one bar.
+    campus already operating — an expansion, or a figure nothing yet dates. A fifth,
+    `unstated`, holds operating campuses no source gives a running figure for: their
+    capacity runs in some part nobody has measured, and calling all of it an
+    expansion still to come is what put 3,647 MW of running campuses into future
+    supply (`supply.running_unknown`). The five add up to the planned total, so the
+    page can draw them as one bar.
     """
-    mw = {"running": 0.0, "construction": 0.0, "planned": 0.0, "expansion": 0.0}
-    campuses = {"running": 0, "construction": 0, "planned": 0, "expansion": 0}
+    mw = {"running": 0.0, "construction": 0.0, "planned": 0.0, "expansion": 0.0, "unstated": 0.0}
+    campuses = {"running": 0, "construction": 0, "planned": 0, "expansion": 0, "unstated": 0}
     for c in credited:
+        if supply_mod.running_unknown(c.project):
+            mw["unstated"] += c.mw_planned
+            campuses["unstated"] += 1
+            continue
         if c.mw_built > 0:
             mw["running"] += c.mw_built
             campuses["running"] += 1
@@ -263,6 +271,39 @@ def _by_stage(credited: list[supply_mod.Credited]) -> dict[str, Any]:
             mw[stage] += rest
             campuses[stage] += 1
     return {"mw": mw, "campuses": campuses}
+
+
+def _built(project: Project, key: str, tally: capex.Tally) -> supply_mod.Credited | None:
+    """One campus as its builder's figures count it: the whole campus, or None.
+
+    A campus the company builds (`capex.company_key(project.company)`), not paused or
+    cancelled, and not the second row of a suspected duplicate — the same campuses
+    the Capex page counts, read by who builds them rather than who buys them.
+    """
+    if not key or capex.company_key(project.company) != key:
+        return None
+    if project.phase in PHASE_TERMINAL or project.id in tally.set_aside:
+        return None
+    planned = float(project.mw_planned or 0.0)
+    if planned <= 0:
+        return None
+    return supply_mod.Credited(project, planned, float(project.mw_built or 0.0))
+
+
+def _builds(
+    built: list[supply_mod.Credited],
+    *,
+    today: dt.date,
+    suspected: dict[int, delays.SuspectedDelay],
+) -> dict[str, Any]:
+    """A company's figures as the builder of its campuses, beside its Capex figures."""
+    return {
+        "campuses": len(built),
+        "mw_planned": sum(c.mw_planned for c in built),
+        "mw_built": sum(c.mw_built for c in built),
+        "stages": _by_stage(built),
+        "supply": supply_mod.supply(built, today=today, suspected=suspected),
+    }
 
 
 def profile(
@@ -355,6 +396,8 @@ def profile(
     no_buyer = [0.0, 0.0]
     today = delays.as_of()
     credited: list[supply_mod.Credited] = []
+    # The campuses it builds, whole, whoever buys them (`_built`).
+    built: list[supply_mod.Credited] = []
     late_by_id: dict[int, delays.SuspectedDelay] = {}
     for pid in ids:
         project, via = matched[pid]
@@ -371,6 +414,9 @@ def profile(
             credited.append(
                 supply_mod.Credited(project, counted["mw_planned"], counted["mw_built"])
             )
+        whole = _built(project, key, tally)
+        if whole is not None:
+            built.append(whole)
         rows.append(
             {
                 "id": project.id,
@@ -457,6 +503,13 @@ def profile(
         # slipping campus that most of its near-term supply rests on.
         "stages": _by_stage(credited),
         "supply": supply_mod.supply(credited, today=today, suspected=late_by_id),
+        # The same three readings for the campuses it builds, whole, whoever buys
+        # them. Capex credits a campus to its buyer, so a builder that leases out
+        # what it builds read as nothing: xAI "0 MW" beside Colossus and
+        # MACROHARDRR at 2 GW each, SoftBank 0 of 10.7 GW, IREN 0 of 2.75 GW — 9 of
+        # the 40 largest builders under half of what they build (10-22 copy). Not
+        # added to the totals above, which must keep adding up to Capex.
+        "builds": _builds(built, today=today, suspected=late_by_id),
         "updates": [s.as_json() for s in feed.rank(feed.fold(signals))][:20],
         # The campuses whose own online date has passed with nothing saying they
         # run, most overdue first, and the capacity they hold — counted as the

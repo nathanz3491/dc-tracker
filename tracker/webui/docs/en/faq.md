@@ -30,7 +30,7 @@ Because nothing says how it divides between them. Sources often name more than o
 
 ## What does "suspected delay" mean?
 
-The campus's expected online date has passed — the whole month, quarter or year the source named — and nothing reported since says it is running. It is a prompt to look, not a finding: the usual causes are a slip nobody reported and a campus that went live without an article the tracker read. See [Numbers and dates](numbers-and-dates).
+The campus's expected online date has passed — the whole month, quarter or year the source named — nothing reported since says it is running, and a search for news of it going live, made after the date passed, found none. It is a suspicion, not a finding — usually a slip nobody has reported. See [Numbers and dates](numbers-and-dates).
 
 ## Why are two rows the same campus?
 
