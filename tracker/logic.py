@@ -1020,11 +1020,9 @@ def check_collisions(project: Project) -> list[Collision]:
         if name in settled:
             expected = settled[name]
         if name == "phase":
-            from tracker.blocks import phase_after_blocks, structure
+            from tracker.blocks import settled_phase
 
-            expected = phase_after_blocks(
-                chosen, list(getattr(project, "blocks", ()) or ()), structure(project)
-            )
+            expected = settled_phase(chosen, project)
 
         out.append(
             Collision(

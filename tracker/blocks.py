@@ -1841,6 +1841,73 @@ def raise_phase(phase: str | None, from_blocks: str | None) -> str | None:
     return phase
 
 
+#: The phase a milestone the campus has reached means it has at least got to.
+#: Quoted, dated, not a forecast: an approved permit is permitting, a groundbreaking
+#: or equipment going in is construction.
+#:
+#: `energized` and `first_customer` are deliberately absent. Power on is as often a
+#: construction feed or the campus's own power plant as a hall in service, and a
+#: first customer is as often a lease signed as a tenant running: mapped to
+#: `operational` on the 10-21 copy they lifted 45 campuses, Fermi's Matador among
+#: them. Running is what the tranches' `serving` status and the cited running
+#: capacity say, and `phase_after_blocks` already reads the first.
+MILESTONE_PHASE: Final[dict[str, str]] = {
+    "permit_approved": "permitting",
+    "groundbreaking": "construction",
+    "equipment_install": "construction",
+}
+
+
+def phase_after_milestones(phase: str | None, events: list[Any], today: Any = None) -> str | None:
+    """The campus phase no lower than a milestone it has already reached.
+
+    The phase ladder takes the furthest-along claim that survives the merge's filters,
+    and a filter can remove every claim that held it up: on 2026-10-21 Google's
+    Clydesdale (#1325) fell to `announced` when the company's own page ("Google
+    announces the development…") arrived and a directory's "under construction" was
+    filtered out as second-hand — beside a groundbreaking the row had recorded for
+    October 2025, and Niagara to `announced` beside two approved permits.
+
+    Only a milestone that counts as reached lifts the campus: confirmed (no
+    `unconfirmed` reason — a forecast is a schedule), dated, and not in the future.
+    A paused or cancelled campus stays so: breaking ground once does not mean work
+    is still going on.
+    """
+    import datetime as dt
+
+    from tracker.upsert import _PHASE_RANK
+    from tracker.vocab import PHASE_TERMINAL
+
+    if phase in PHASE_TERMINAL:
+        return phase
+    today = today or dt.date.today()
+    best = phase
+    for event in events or ():
+        floor = MILESTONE_PHASE.get(getattr(event, "event_type", None) or "")
+        when = getattr(event, "event_date", None)
+        if floor is None or when is None or getattr(event, "unconfirmed", None) is not None:
+            continue
+        if (when.date() if isinstance(when, dt.datetime) else when) > today:
+            continue
+        if _PHASE_RANK.get(floor, -1) > _PHASE_RANK.get(best, -1):
+            best = floor
+    return best
+
+
+def settled_phase(phase: str | None, project: Any) -> str | None:
+    """The phase the write path stores: the claims' answer, raised by the milestones
+    the campus has reached and then by its named tranches.
+
+    One function for `reconcile` (the write) and `logic.check_collisions` (the drift
+    check), so the nightly check expects exactly what a recompute stores.
+    """
+    raised = phase_after_milestones(phase, list(getattr(project, "events", ()) or ()))
+    blocks = list(getattr(project, "blocks", ()) or ())
+    if not blocks:
+        return raised
+    return phase_after_blocks(raised, blocks, structure(project))
+
+
 def phase_after_blocks(
     phase: str | None, blocks: list[Any], nested: Structure | None = None
 ) -> str | None:
@@ -1907,6 +1974,10 @@ def reconcile(project: Any) -> list[str]:
     way it once undid an `audit` action on `mw_planned`.
     """
     if not project.blocks:
+        # The milestones still have their say on a campus with no tranches.
+        project.phase = phase_after_milestones(
+            project.phase, list(getattr(project, "events", ()) or ())
+        )
         return []
 
     nested = structure(project)
@@ -1936,7 +2007,11 @@ def reconcile(project: Any) -> list[str]:
                 "double-count or the campus figure is stale"
             )
 
-    project.phase = phase_after_blocks(project.phase, list(project.blocks), nested)
+    project.phase = phase_after_blocks(
+        phase_after_milestones(project.phase, list(getattr(project, "events", ()) or ())),
+        list(project.blocks),
+        nested,
+    )
 
     if project.customer is None and got.customer is not None:
         project.customer = got.customer

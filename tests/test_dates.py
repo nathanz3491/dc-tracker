@@ -316,6 +316,23 @@ def test_a_citation_that_already_has_a_date_keeps_it(session):
     assert session.scalar(select(Source)).published_at == dt.datetime(2019, 3, 3)
 
 
+def test_a_citation_dated_later_than_its_url_takes_the_earlier_date(session):
+    """The news watch's sighting date, kept before the page's own was learned.
+
+    DCK's 2017 Digital Realty article was found by a search on 2026-10-12, and the
+    citation kept that date; read as 2026, it won a capacity merge on recency.
+    """
+    cited(session, "https://x.test/2017/10/05/slug")
+    source = session.scalar(select(Source))
+    source.published_at = dt.datetime(2026, 10, 12)
+    session.flush()
+
+    report = dates.run(session, apply=True)
+
+    assert report.citations == 1
+    assert session.scalar(select(Source)).published_at == dt.datetime(2017, 10, 5)
+
+
 def test_a_preview_copies_nothing(session):
     cited(session, "https://x.test/2026/07/13/slug")
     report = dates.run(session, apply=False)

@@ -32,6 +32,7 @@ A 待确认 value is unconfirmed for one of two very different reasons, and they
 
 - **Nothing backs it.** The model offered no sentence, or the sentence was not in the article, or did not state the value. The figure may be right; the tracker could not show it. Look for another source.
 - **It belongs to something else.** The sentence is real, but the figure is too large to be this campus's — usually a company's whole programme quoted in an article about one site, such as "a $500 billion buildout". These are marked in red **not this site's figure**. The figure is real; it is the wrong thing.
+- **It is not money spent on the site.** The sentence is real, but the investment it quotes is somebody's extrapolation or projection ("an extrapolated total capital expenditure … potentially ranging from $8.3 billion"), or what a customer contract is worth ("a $9.7 billion AI cloud agreement"). Kept and shown with that reason, and left out of [Capex](capex). A budget reported as "could reach $900 million" is an ordinary plan and is not marked.
 
 ## What the popover shows
 
@@ -51,7 +52,8 @@ Each campus is rebuilt from what all its sources say, never edited by hand a lit
 2. A quoted claim beats a 待确认 one.
 3. A figure for the whole campus beats a figure for one building.
 4. A first-hand source beats a directory or wiki, which only fills gaps.
-5. Then the field's own rule: the latest and strongest source for most fields, the largest for running capacity (it only grows), the earliest for the announcement date.
+5. A statement published more than a year before another of the same standing no longer wins for coming from a weightier source: a builder's 2016 press release does not outrank this year's report. The date is the one the sentence gives for the figure when it gives one, else the article's.
+6. Then the field's own rule: the latest and strongest source for most fields, the largest for running capacity (it only grows), the earliest for the announcement date.
 
 The project page's **N other claims** shows every competing value and which was kept. [Field dictionary](fields) gives each field's rule.
 

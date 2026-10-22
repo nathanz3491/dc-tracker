@@ -4,6 +4,14 @@ Changes a reader of the console will notice, newest first. The console's version
 
 ## 22 October 2026
 
+### Old press releases no longer outrank this year's reporting
+
+- **A newer statement wins over a weightier but much older one.** Reading builders' whole newsrooms brought in press releases from 2015 to 2023, and a company's own release outranked trade press however old it was: Aligned's DFW-02 read 30 MW and a 2017 tenant instead of 46 MW and Lambda; Sabey's Round Rock read 72 MW instead of 84. A statement more than a year older than another of the same standing no longer wins on its source alone. See [Where a value came from](provenance).
+- **Investment that is not money spent on the site is left out of Capex.** An analyst's extrapolation (Riot's Corsicana, $8.3 billion), a directory's projection, and the value of a customer contract (IREN's $9.7 billion cloud agreement with Microsoft) had been stored as campus investment. They are kept, marked 待确认 with the reason, and no longer summed.
+- **"December of 2021" is a month.** A month the model wrote as 1 January is corrected from the sentence beside it.
+- **An article is dated by its publisher, not by when we found it.** A 2017 article found by a search this month had been read as this month's news, and won on recency; Digital Realty's Santa Clara campus read 6 MW instead of 48.
+- **A campus's phase is never below a permit approved or ground broken.** Google's Clydesdale had fallen back to *announced* beside its October 2025 groundbreaking. See [Field dictionary](fields).
+
 ### Tranches that nest
 
 - **A campus's tranches are summed as the tree they form.** Sources describe a campus as a whole, again phase by phase and again building by building; added up side by side, the same megawatts were counted several times. Now a building is *part of* its phase, a phase *part of* the campus, and the campus counts each megawatt once. On a [project's page](project-page) the parts sit indented under what they are part of.

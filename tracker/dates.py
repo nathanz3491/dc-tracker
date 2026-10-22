@@ -242,9 +242,9 @@ def _propagate(session: Session, found: dict[str, dt.datetime], *, apply: bool) 
     column and calling the tiebreak fixed would be the most expensive kind of
     no-op: 1,600 page requests spent on a value nothing consults.
 
-    Only ever fills, never overwrites — the same rule `upsert_record` follows. A
-    date already on a citation came from the publisher when the article was read,
-    and a later pass has no better claim to it.
+    Never moves a date later — the same rule `upsert_record` follows. It may move one
+    earlier: a citation dated by when the news watch found its URL is corrected to
+    the publisher's date once the queue row has learned it.
 
     `found` is what *this* run resolved, and it is what makes the preview honest:
     without `apply` nothing has been written to `ingest_url` yet, so a join alone
@@ -258,10 +258,13 @@ def _propagate(session: Session, found: dict[str, dt.datetime], *, apply: bool) 
     )
     dates.update({url: when for url, when in found.items() if url not in dates})
 
+    # Also a citation dated *later* than its URL: the news watch's sighting date,
+    # kept before the page's own was learned (`upsert_record` explains). An earlier
+    # date for the same URL is the publisher's; a citation is never moved later.
     rows = [
         row
-        for row in session.scalars(select(Source).where(Source.published_at.is_(None))).all()
-        if row.url in dates
+        for row in session.scalars(select(Source)).all()
+        if row.url in dates and (row.published_at is None or dates[row.url] < row.published_at)
     ]
     if not apply:
         return len(rows)

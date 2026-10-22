@@ -412,6 +412,18 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: evidences this role", and no sentence does; the citation is on `source_id`
     #: for a reader who wants to see where the name came from.
     "role_inferred",
+    #: `investment_usd` only. Quoted, verified, and an extrapolation or a projection
+    #: rather than a figure anybody committed to: "an extrapolated total capital
+    #: expenditure ... potentially ranging from $8.3 billion" (an analyst on Riot's
+    #: Corsicana), "we project it ... at a capital cost of $8.1 B" (a directory's own
+    #: model). Kept and shown, and left out of Capex like `out_of_scale`.
+    "speculative",
+    #: `investment_usd` only. Quoted and verified, and the value of a customer
+    #: contract — what a tenant will pay — not money spent building the site:
+    #: "IREN's $9.7 billion AI cloud agreement with Microsoft" (Childress). Left out
+    #: of Capex like `out_of_scale`; it belongs to the buyer's position, not the
+    #: campus's cost.
+    "contract_value",
 )
 
 # --- the claim envelope ----------------------------------------------------

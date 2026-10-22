@@ -53,6 +53,8 @@ _NO_SENTENCE: dict[str, str] = {
     "quote_off_target": "the one offered does not state it",
     "forecast": "the article only expects it",
     "out_of_scale": "judged too large for one campus",
+    "speculative": "an extrapolation, not a committed figure",
+    "contract_value": "a contract's value, not spending on the site",
 }
 
 

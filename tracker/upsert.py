@@ -390,6 +390,10 @@ class _Claim:
     #: from the source's `claim_meta`; None for day precision or not a date. Read
     #: by `_refine_date`, so a coarse date never displaces a finer one inside it.
     precision: str | None = None
+    #: When the figure was true, when the sentence says so ("16 MW ... as of December
+    #: 2016", `claim_meta` axis `as_of`). Dates the claim for `stale_claims` ahead of
+    #: its article's publication: a 2026 article can quote a 2016 figure.
+    as_of: Any = None
 
     def recency(self, *, by_publication: bool) -> Any:
         """The timestamp this claim is ranked by.
@@ -485,6 +489,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     precision=(
                         _recorded_precision(s, name) if name in _DATE_PRECISION_FIELDS else None
                     ),
+                    as_of=_recorded_axis(s, name, "as_of"),
                 )
             )
     # Confirmed first, then first-hand, then strongest source, then most recent.
@@ -504,20 +509,79 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
     # What "most recent" means is the one part of this that is configurable, and
     # the default is the wrong answer kept deliberately: `fetched_at` is crawl
     # order. See `Settings.merge_by_publication_date`.
+    #
+    # One exception to weight before recency: a claim published more than
+    # `STALE_AFTER` before another claim of the same standing (`stale_claims`) no
+    # longer outranks it for being heavier. Reading a builder's whole newsroom made
+    # its 2016 press releases (weight 3) beat 2026 trade press (weight 2) on
+    # capacity, tenant and date — Aligned's DFW-02 read 30 MW and Sabre, its 2017
+    # tenant, on 2026-10-21.
     by_publication = _prefer_publication_date(settings)
     for claims_list in out.values():
+        stale = stale_claims(claims_list)
         claims_list.sort(
             key=lambda c: (
                 not c.decided_against,
                 c.confirmed,
                 not c.part,
                 not c.tertiary,
+                id(c) not in stale,
                 c.weight,
                 c.recency(by_publication=by_publication),
                 c.url,
             ),
             reverse=True,
         )
+    return out
+
+
+#: How much older than another claim of the same standing a claim's article must be
+#: before its source's weight stops deciding between them. A year: a plan restated
+#: within months is the same plan told twice, and crawl order is as good as any for
+#: that; one restated a year or more later has moved, and the older telling — however
+#: authoritative its publisher — describes the site as it was.
+STALE_AFTER: _dt.timedelta = _dt.timedelta(days=365)
+
+
+def _published_day(claim: _Claim) -> _dt.date | None:
+    """When a claim was true: its own `as_of` when the sentence gave one, else its
+    article's publication date, else None."""
+    value = claim.as_of or claim.published_at
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    if isinstance(value, str):
+        try:
+            return _dt.date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def stale_claims(claims: list[_Claim]) -> set[int]:
+    """`id()`s of the claims a newer claim of the same standing has outdated.
+
+    Standing is what sorts ahead of weight — decided against or not, quoted or not,
+    the whole site or one building, first-hand or a directory — so only rivals the
+    weight comparison would otherwise decide between are compared. Both dates must be
+    known: an undated claim is never stale and never makes another one stale, because
+    the only date it has is when the crawler happened to visit.
+    """
+    newest: dict[tuple[bool, bool, bool, bool], _dt.date] = {}
+    for claim in claims:
+        day = _published_day(claim)
+        if day is None:
+            continue
+        standing = (claim.decided_against, claim.confirmed, claim.part, claim.tertiary)
+        if standing not in newest or day > newest[standing]:
+            newest[standing] = day
+    out: set[int] = set()
+    for claim in claims:
+        day = _published_day(claim)
+        standing = (claim.decided_against, claim.confirmed, claim.part, claim.tertiary)
+        if day is not None and newest[standing] - day > STALE_AFTER:
+            out.add(id(claim))
     return out
 
 
@@ -1858,10 +1922,15 @@ def upsert_record(
         # writes it on `ingest_url` for anything found in a feed, and that is a
         # fact about the URL, not about this particular reading of it — so the
         # lookup is by URL and every path (crawl, manual, EDGAR) gets it for free.
-        # Only ever filled, never overwritten: a later re-read of the same article
-        # must not move the date the publisher put on it.
-        if row.published_at is None:
-            row.published_at = _published_at(session, sr.url)
+        # Never moved later: a re-read must not make an article look newer. It may
+        # move *earlier*: the news watch dates a URL by when its search found it,
+        # and the page's own date, learned on reading it, replaces that on the queue
+        # row (`crawl.record_url`). A citation written in between kept the watch's
+        # date — DCK's 2017 Digital Realty piece read as 2026-10-12, which then won a
+        # merge on recency (`stale_claims`).
+        known = _published_at(session, sr.url)
+        if known is not None and (row.published_at is None or known < row.published_at):
+            row.published_at = known
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------

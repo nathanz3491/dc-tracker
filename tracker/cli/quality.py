@@ -1339,6 +1339,10 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
     campus column only when nothing describes the whole site, so a re-gate can move
     a published capacity or investment — at the next `backfill derive`, which the
     nightly loop runs straight after this.
+
+    It also reads every quoted investment sentence for money that is not spending on
+    the site — an extrapolation, a customer contract's value (`crawl.money_kind`) —
+    and marks it 待确认 with that reason, which keeps it out of Capex.
     """
     from tracker.backfill import regate_scope
 
@@ -1353,6 +1357,8 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
                 "claims": report.claims,
                 "changed": report.changed,
                 "moved": report.moved,
+                "money_marked": report.money_marked,
+                "money_restored": report.money_restored,
                 "applied": apply and not dry_run,
             }
         )
@@ -1364,6 +1370,10 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
     table.add_row("sources with an envelope", f"{report.sources:,}")
     table.add_row("claims re-gated", f"{report.claims:,}")
     table.add_row("relabelled", f"{report.changed:,}")
+    for reason, count in sorted(report.money_marked.items()):
+        table.add_row(f"investment marked {reason}", f"{count:,}")
+    if report.money_restored:
+        table.add_row("investment restored to quoted", f"{report.money_restored:,}")
     console.print(table)
 
     for was, went in sorted(report.moved.items()):

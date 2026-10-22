@@ -798,7 +798,10 @@ _MONTH_WORD = r"(?:" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\.?
 _DAY_THEN_YEAR = re.compile(
     rf"(?:\b{_MONTH_WORD}\s+\d{{1,2}}(?:st|nd|rd|th)?|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH_WORD}),?\s*$"
 )
-_MONTH_THEN_YEAR = re.compile(rf"\b({_MONTH_WORD})[\s,]*$")
+#: "December 2021", "December, 2021" and "December of 2021". The last was read as a
+#: bare year: Aligned's SLC02 "completion projected in December of 2021" was stored
+#: as 1 January 2021, year-precise, on 2026-10-21.
+_MONTH_THEN_YEAR = re.compile(rf"\b({_MONTH_WORD})(?:\s+of)?[\s,]*$")
 _QUARTER_THEN_YEAR = re.compile(
     r"(?:\bq[1-4]|\b[1-4]q|\b(?:first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter)"
     r"(?:\s+of)?[\s,]*$"
@@ -863,6 +866,40 @@ def precision_in_quote(value: Any, quote: str | None) -> str | None:
         if precision in readings:
             return precision
     return None
+
+
+def month_named_in_quote(value: Any, quote: str | None) -> dt.date | None:
+    """The month a sentence names for a date the model wrote as 1 January, or None.
+
+    The extraction prompt has the model write a bare year as `YYYY-01-01`, and it
+    sometimes does so for a month too: "completion projected in December of 2021"
+    came back as 2021-01-01. The sentence beside it is the evidence, so this reads
+    it: the value must be 1 January, its year must appear exactly once in the
+    sentence, and directly after one month name — "December 2021", "December of
+    2021" — that is not January. Anything else (two mentions of the year, a day, a
+    quarter, no month) returns None and changes nothing.
+    """
+    if value is None or not quote:
+        return None
+    iso = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    parts = re.fullmatch(r"(\d{4})-01-01", iso.strip()[:10])
+    if not parts:
+        return None
+    year = parts.group(1)
+    text = " ".join(str(quote).lower().split())
+    hits = list(re.finditer(rf"(?<!\d){year}(?!\d)", text))
+    if len(hits) != 1:
+        return None
+    before = text[max(0, hits[0].start() - 40) : hits[0].start()]
+    if _DAY_THEN_YEAR.search(before):
+        return None
+    named = _MONTH_THEN_YEAR.search(before)
+    if not named:
+        return None
+    month = _MONTHS.get(named.group(1).rstrip("."))
+    if not month or month == 1:
+        return None
+    return dt.date(int(year), month, 1)
 
 
 # --- Closed vocabularies ----------------------------------------------------

@@ -479,6 +479,10 @@ class ScopeReport:
     changed: int = 0
     #: old scope -> new scope -> count, for the only summary that matters.
     moved: dict[str, dict[str, int]] = field(default_factory=dict)
+    #: Investment claims `crawl.money_kind` now reads as not capital spending, by
+    #: reason, and ones it no longer does (its rule changed) restored to quoted.
+    money_marked: dict[str, int] = field(default_factory=dict)
+    money_restored: int = 0
 
     def note(self, old: str, new: str) -> None:
         bucket = "block:*" if new.startswith("block:") else new
@@ -574,9 +578,66 @@ def regate_scope(session: Session, *, apply: bool = False) -> ScopeReport:
                 source.claim_meta = (
                     json.dumps(meta, sort_keys=True, ensure_ascii=False) if meta else None
                 )
+            _regate_money(source, claims, quotes, report, apply=apply)
     if apply:
         session.flush()
     return report
+
+
+def _ordered_fields(names: set[str]) -> str | None:
+    """A citation's `fields` list in canonical order, as `upsert.derive_fields` writes it."""
+    from tracker.vocab import WRITABLE_FIELDS
+
+    return ",".join(f for f in WRITABLE_FIELDS if f in names) or None
+
+
+#: The reasons `_regate_money` owns: it adds them, and it may take them back.
+_MONEY_REASONS: frozenset[str] = frozenset({"speculative", "contract_value"})
+
+
+def _regate_money(
+    source: Any, claims: dict, quotes: dict, report: ScopeReport, *, apply: bool
+) -> None:
+    """Mark a quoted investment figure that is an extrapolation or a contract's value.
+
+    The ingest gate's `crawl.money_kind`, re-run over a stored claim the way the
+    scope gate is: free, from the sentence on disk, so citations read before the rule
+    existed are held to it the same night. Only a quoted claim is marked, and only a
+    mark this rule made is ever taken back — a figure refused for another reason
+    stays refused.
+    """
+    import json
+
+    from tracker.ingest.crawl import money_kind
+
+    name = "investment_usd"
+    value, quote = claims.get(name), quotes.get(name)
+    if value is None or not quote:
+        return
+    unconfirmed = [f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()]
+    try:
+        reasons = json.loads(source.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return
+    if not isinstance(reasons, dict):
+        return
+    kind = money_kind(quote, value)
+    held = reasons.get(name)
+    fields = [f.strip() for f in (source.fields or "").split(",") if f.strip()]
+    if kind and name not in unconfirmed:
+        report.money_marked[kind] = report.money_marked.get(kind, 0) + 1
+        if apply:
+            reasons[name] = kind
+            source.unconfirmed_fields = ",".join(sorted({*unconfirmed, name}))
+            source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True)
+            source.fields = ",".join(f for f in fields if f != name) or None
+    elif not kind and held in _MONEY_REASONS:
+        report.money_restored += 1
+        if apply:
+            reasons.pop(name, None)
+            source.unconfirmed_fields = ",".join(f for f in unconfirmed if f != name) or None
+            source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True) if reasons else None
+            source.fields = _ordered_fields({*fields, name})
 
 
 # --- deriving the basis axis ------------------------------------------------
@@ -626,11 +687,15 @@ class PrecisionReport:
     found: dict[str, int] = field(default_factory=dict)
     #: Projects whose cached `*_precision` columns moved.
     projects_touched: int = 0
+    #: Dates the model wrote as 1 January whose sentence names the month
+    #: (`normalize.month_named_in_quote`); the stored claim takes the month.
+    months_corrected: int = 0
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("quoted date claims read", self.claims),
             ("claims given a precision", self.changed),
+            ("months stored as January, corrected", self.months_corrected),
             ("projects whose cache moved", self.projects_touched),
         ]
 
@@ -651,12 +716,13 @@ def derive_date_precision(session: Session, *, apply: bool = False) -> Precision
     """
     import json
 
-    from tracker.normalize import precision_in_quote
+    from tracker.normalize import month_named_in_quote, precision_in_quote
     from tracker.upsert import apply_date_precision, claims_by_field
 
     report = PrecisionReport()
     for project in session.scalars(select(Project)).all():
         touched_project = False
+        months_before = report.months_corrected
         for source in project.sources:
             if not source.quotes:
                 continue
@@ -675,6 +741,17 @@ def derive_date_precision(session: Session, *, apply: bool = False) -> Precision
                     continue
                 report.claims += 1
                 entry = meta.get(name) if isinstance(meta.get(name), dict) else {}
+                # Before the precision: a month the model wrote as 1 January was
+                # recorded `year`-precise, which the check below would keep.
+                named = month_named_in_quote(value, quote)
+                if named is not None:
+                    claims[name] = named.isoformat()
+                    meta[name] = {**entry, "date_precision": "month"}
+                    report.months_corrected += 1
+                    report.changed += 1
+                    report.found["month"] = report.found.get("month", 0) + 1
+                    touched = True
+                    continue
                 if entry.get("date_precision"):
                     report.found[entry["date_precision"]] = (
                         report.found.get(entry["date_precision"], 0) + 1
@@ -689,10 +766,17 @@ def derive_date_precision(session: Session, *, apply: bool = False) -> Precision
                 touched = True
             if touched and apply:
                 source.claim_meta = json.dumps(meta, sort_keys=True, ensure_ascii=False)
+                source.claims = json.dumps(claims, sort_keys=True, ensure_ascii=False)
                 touched_project = True
         if touched_project and apply:
             before = (project.first_announced_precision, project.expected_online_precision)
-            apply_date_precision(project, claims_by_field(list(project.sources)))
+            if report.months_corrected > months_before:
+                # A claim's value moved, not only its precision: re-derive the row.
+                from tracker.upsert import recompute_from_sources
+
+                recompute_from_sources(session, project)
+            else:
+                apply_date_precision(project, claims_by_field(list(project.sources)))
             if (project.first_announced_precision, project.expected_online_precision) != before:
                 report.projects_touched += 1
     if apply:

@@ -873,9 +873,12 @@ def _demoted_investment(session: Session) -> tuple[set[int], set[int]]:
         # reason added to `DECIDED_REASONS` has to be classified here on purpose.
         # Left as an else-branch it would join the excluded pile silently, and the
         # silence is the danger, not the destination.
+        # `speculative` and `contract_value` (`crawl.money_kind`) are excluded on
+        # purpose: a figure somebody extrapolated, or what a customer will pay over
+        # years, is quoted and still not this site's capital spending.
         if why in {"no_quote", "quote_unverified", "quote_off_target"}:
             unquoted.add(pid)
-        else:  # out_of_scale, misread, superseded, or a pre-0013 source with none
+        else:  # out_of_scale, speculative, contract_value, misread, superseded, pre-0013
             out_of_scale.add(pid)
     return out_of_scale - confirmed, unquoted - confirmed - out_of_scale
 

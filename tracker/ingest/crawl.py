@@ -63,6 +63,7 @@ from tracker.normalize import (
     canonical_url,
     is_blank,
     looks_english,
+    month_named_in_quote,
     norm_country,
     norm_date_detail,
     norm_excerpt,
@@ -1902,6 +1903,98 @@ def _implausible_investment(claims: dict[str, Any]) -> str | None:
     )
 
 
+#: A dollar figure, as the sentence writes it: "$8.3 billion", "$8.1 B", "$573 million".
+_MONEY = r"\$\s?\d[\d.,]*\s*(?:billion|million|bn|mn|b|m)?\b"
+
+#: Wording that makes the money directly beside it an extrapolation or a projection —
+#: somebody's arithmetic, not a figure a builder, a buyer or a filing committed to.
+#: Positional: the hedge must sit within the clause before the figure. "Potential"
+#: alone anywhere in the sentence is not enough; "a $2B campus that could bring 500
+#: jobs" is a committed figure with a speculative clause beside it.
+#:
+#: Deliberately not "could reach" or "could top": that is how a reporter phrases an
+#: ordinary planned budget ("total investment could reach $900 million"), and on the
+#: 10-21 copy marking Fermi's own "costs could top $60 billion" handed the field to
+#: a $300 billion programme total that includes its power plants.
+_SPECULATIVE_MONEY = re.compile(
+    r"\b(?:extrapolat\w*|potentially|we (?:estimate|project)|"
+    r"analysts? (?:estimate|project|expect)\w*)\b[^.;$]{0,80}?" + _MONEY
+)
+
+#: The value of a contract to provide a service — compute, cloud, hosting, a lease —
+#: which is what a buyer will pay over years, not what building the site costs.
+#: Two orders: "$9.7 billion AI cloud agreement" and "a cloud contract worth $9.7
+#: billion". An investment, development or financing agreement is money for the
+#: site, and is never matched: the service word must name the contract.
+_SERVICE = (
+    r"(?:cloud|compute|computing|gpu|hosting|colocation|lease|leasing|services?|capacity|offtake)"
+)
+_CONTRACT_MONEY = re.compile(
+    _MONEY
+    + r"(?:\s+[\w-]+){0,3}?\s+(?:ai\s+)?"
+    + _SERVICE
+    + r"\s+(?:agreement|contract|deal)s?\b"
+    + r"|\b"
+    + _SERVICE
+    + r"\s+(?:agreement|contract|deal)s?\s+(?:worth|valued at|of)\s+"
+    + r"(?:about |approximately |roughly |up to |nearly |more than )?"
+    + _MONEY
+)
+
+
+_MONEY_PARTS = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)\s*(billion|million|bn|mn|b|m)?\b")
+_MONEY_SCALE = {"billion": 1e9, "bn": 1e9, "b": 1e9, "million": 1e6, "mn": 1e6, "m": 1e6}
+
+
+def _dollars(fragment: str) -> float | None:
+    """The amount of the last dollar figure in `fragment`, or None."""
+    found = list(_MONEY_PARTS.finditer(fragment))
+    if not found:
+        return None
+    number, unit = found[-1].groups()
+    try:
+        amount = float(number.replace(",", ""))
+    except ValueError:
+        return None
+    return amount * _MONEY_SCALE.get(unit or "", 1.0)
+
+
+def money_kind(quote: str | None, value: Any = None) -> str | None:
+    """Why a quoted investment figure is not this site's capital spending, or None.
+
+    `speculative` for an extrapolation or a projection, `contract_value` for what a
+    customer contract is worth (`vocab.UNCONFIRMED_REASONS`). Both were stored as
+    campus investment on 2026-10-21: Riot Corsicana's "extrapolated total capital
+    expenditure ... potentially ranging from $8.3 billion" replaced a quoted $333M,
+    and IREN Childress took "IREN's $9.7 billion AI cloud agreement with Microsoft".
+    Read from the verified sentence alone, the way the scope gate reads one building's
+    figure, so it costs nothing and re-runs over stored claims (`backfill scope`).
+
+    With `value`, the hedged or contracted figure must be the one claimed (within 5%):
+    "$400M+ minimum committed, potentially closer to $1B" claims the committed $400M,
+    which the hedge on the $1B does not touch.
+    """
+    if not quote:
+        return None
+    text = " ".join(str(quote).lower().split())
+    try:
+        claimed = float(value) if value is not None and not isinstance(value, bool) else None
+    except (TypeError, ValueError):
+        claimed = None
+
+    def about_the_claim(match: re.Match[str]) -> bool:
+        if claimed is None or claimed <= 0:
+            return True
+        amount = _dollars(match.group(0))
+        return amount is not None and abs(amount - claimed) <= 0.05 * claimed
+
+    if any(about_the_claim(m) for m in _CONTRACT_MONEY.finditer(text)):
+        return "contract_value"
+    if any(about_the_claim(m) for m in _SPECULATIVE_MONEY.finditer(text)):
+        return "speculative"
+    return None
+
+
 def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecord]:
     """Milestones from one extracted project, each verified against the article.
 
@@ -2756,6 +2849,14 @@ def build_records(
         values, coercion_notes, precisions = _coerce(raw)
         evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
         kept, quotes, dropped = evidence_gate(values, evidence, result.markdown, precisions)
+        # A month the model wrote as 1 January: "December of 2021" came back as
+        # 2021-01-01. The verified sentence names the month, so the value takes it.
+        for name in ("first_announced", "expected_online"):
+            named = month_named_in_quote(kept.get(name), quotes.get(name))
+            if named is not None:
+                kept[name] = named.isoformat() if isinstance(kept[name], str) else named
+                if precisions is not None:
+                    precisions[name] = "month"
 
         # Identity: without a company and a locality there is nothing to dedup on,
         # so the "project" is a passing mention rather than a record.
@@ -2832,6 +2933,13 @@ def build_records(
         scale_note = _implausible_investment(claims)
         if scale_note:
             reasons["investment_usd"] = "out_of_scale"
+        # Quoted, and still not money spent building the site: an extrapolation, or a
+        # customer contract's value. Same treatment as `out_of_scale` — kept, shown,
+        # and left out of Capex.
+        elif "investment_usd" in kept and (
+            kind := money_kind(quotes.get("investment_usd"), kept["investment_usd"])
+        ):
+            reasons["investment_usd"] = kind
         unconfirmed = set(reasons)
 
         risks, risk_notes = _risks(raw, result.markdown, result.url)

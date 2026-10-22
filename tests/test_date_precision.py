@@ -119,3 +119,75 @@ def test_the_backfill_fills_existing_claims_and_the_row_cache(session):
     assert applied.projects_touched == 1
     assert project.expected_online_precision == "year"
     assert derive_date_precision(session, apply=True).changed == 0, "idempotent"
+
+
+# --- a month the model wrote as 1 January (the 2026-10-21 loop) ----------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "quote", "expected"),
+    [
+        # Aligned SLC02: stored as 2021-01-01, year-precise.
+        ("2021-01-01", "with completion projected in December of 2021.", dt.date(2021, 12, 1)),
+        ("2027-01-01", "expected online in June 2027", dt.date(2027, 6, 1)),
+        ("2027-01-01", "online by Sept. 2027", dt.date(2027, 9, 1)),
+        # Already right, or not a month: nothing to correct.
+        ("2027-01-01", "in January 2027", None),
+        ("2027-01-01", "online in 2027", None),
+        ("2027-01-01", "in Q3 2027", None),
+        ("2027-01-01", "on June 3, 2027", None),
+        # The year twice: which mention the value came from is not knowable.
+        ("2027-01-01", "phase one in March 2027 and phase two later in 2027", None),
+        # Not 1 January: the model wrote a month itself.
+        ("2027-06-01", "in June 2027", None),
+    ],
+)
+def test_a_named_month_corrects_a_january_the_model_wrote(value, quote, expected):
+    from tracker.normalize import month_named_in_quote
+
+    assert month_named_in_quote(value, quote) == expected
+
+
+def test_month_of_year_is_a_month_not_a_year():
+    assert precision_in_quote("2021-12-01", "completion projected in December of 2021") == "month"
+
+
+def test_the_backfill_corrects_a_stored_january_and_the_row(session):
+    """The SLC02 claim: a `year` precision was recorded, so the old backfill kept it."""
+    from tracker.backfill import derive_date_precision
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="SLC02",
+        company="Aligned",
+        city="West Jordan",
+        state="UT",
+        dedup_key="k",
+        phase="operational",
+        confidence=1,
+        expected_online=dt.date(2021, 1, 1),
+    )
+    session.add(project)
+    session.flush()
+    session.add(
+        Source(
+            project_id=project.id,
+            url="https://example.test/slc",
+            source_type="trade_press",
+            fetched_at=dt.datetime(2026, 10, 21),
+            claims=json.dumps({"expected_online": "2021-01-01"}),
+            quotes=json.dumps(
+                {"expected_online": "with completion projected in December of 2021."}
+            ),
+            claim_meta=json.dumps({"expected_online": {"date_precision": "year"}}),
+            fields="expected_online",
+        )
+    )
+    session.flush()
+    session.refresh(project)
+
+    report = derive_date_precision(session, apply=True)
+    assert report.months_corrected == 1
+    assert project.expected_online == dt.date(2021, 12, 1)
+    assert project.expected_online_precision == "month"
+    assert derive_date_precision(session, apply=True).months_corrected == 0, "idempotent"

@@ -100,6 +100,10 @@ _REASON_NOTES: dict[str, str] = {
     "programme-wide total quoted in an article about one campus",
     "listing_date": "the only date given is a directory's own — when it listed, "
     "updated or first reported the site — not when the project was announced",
+    "speculative": "quoted, but an extrapolation or a projection, not a figure anybody "
+    "committed to — left out of Capex",
+    "contract_value": "quoted, but the value of a customer contract, not money spent "
+    "building the site — left out of Capex",
 }
 
 

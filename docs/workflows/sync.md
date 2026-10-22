@@ -521,6 +521,31 @@ not written, so the next read after the fix writes it. On production on 2026-10-
 no campus broke any held relationship, so nothing a crawl wrote that night would
 have been refused.
 
+**Quoted money that is not spending on the site is marked, not stored as fact.** An
+analyst's extrapolation ("an extrapolated total capital expenditure … potentially
+ranging from $8.3 billion"), a directory's own projection ("we project … a capital
+cost of $8.1 B") and a customer contract's value ("a $9.7 billion AI cloud agreement
+with Microsoft") all passed the quote check on 2026-10-21 and became campus
+investment. `crawl.money_kind` reads the verified sentence for the claimed figure and
+marks it 待确认 `speculative` or `contract_value`; Capex leaves both out, like a
+programme total. "Could reach" and "could top" are not enough — that is how ordinary
+planned budgets are reported — and the hedge must be on the figure claimed. The same
+rule re-runs over stored claims every night in `backfill scope`.
+
+**A month the model wrote as 1 January takes the sentence's month.** The prompt asks
+for a bare year as `YYYY-01-01`, and the model sometimes does that for a month too:
+"completion projected in December of 2021" came back 2021-01-01 and was labelled
+year-precise. `normalize.month_named_in_quote` corrects it after the evidence gate,
+and `backfill precision` corrects stored claims; "December of 2021" now also reads as
+a month.
+
+**A citation is dated by its article, not by when the watch found it.** The news
+watch dates a URL by its search hit, and the page's own date, learned on reading it,
+replaces that on the queue row. A citation written in between kept the sighting —
+DCK's 2017 Digital Realty article read as 2026-10-12 and won a capacity field on
+recency. A citation now takes the earliest date known for its URL, never a later one,
+on every write and in `backfill dates`.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -730,6 +755,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
+| Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
+| A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
+| A month the model wrote as 1 January | `tracker/normalize.py` — `month_named_in_quote`, `_MONTH_THEN_YEAR`; `tracker/ingest/crawl.py` — after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |
 | Whether a figure is one building's | `tracker/ingest/crawl.py` — `axis_gate`; `tracker/vocab.py` — `part_from_quote`, `PART_FIELDS`, `PART_WINDOW`, `INITIAL_WINDOW`; `tracker/backfill.py` — `regate_scope`; `tracker/upsert.py` — `contenders`; `tracker/gapfill.py` — `_fact_axes` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |
 | The database mover | `scripts/sync_db.py` — `pull`, `push`, `snapshot`, `verify`, `_COUNTED` |

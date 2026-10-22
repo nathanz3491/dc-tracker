@@ -893,6 +893,63 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An old press release no longer outranks this year's reporting** (`tracker/upsert.py`
+  `stale_claims`, `STALE_AFTER`, `_Claim.as_of`; `tests/test_merge_recency.py`). The
+  merge ranks quoted, whole-site, first-hand claims by source weight before date, so
+  a builder's own release (weight 3) beat trade press (weight 2) however old it was.
+  Harmless while articles arrived as news; since 10-19 the loop reads builders' whole
+  newsrooms, and on 2026-10-21 it read 99 of Aligned's posts back to 2015. Aligned
+  DFW-02 went to 30 MW, a 2017 tenant and a 2015 opening; Northlake to 84 MW; Sabey's
+  Round Rock to 72 MW. A claim dated (by its own `as_of`, else its article) more than a
+  year before a rival of the same standing now no longer wins on weight; undated
+  claims and claims within a year are ranked as before, the cases `logic conflicts`
+  exists for. With the three fixes below, the 10-21 evening copy moves 37 stored
+  figures and dates and 21 phases — the night's stale winners back, and older figures
+  elsewhere: NTT Ashburn 21 -> 224 MW (a 2012 figure for the campus), NTT Mesa 240 ->
+  324, STACK PHXL2 230 -> 150, Digital Realty Santa Clara 6 -> 48 MW. Some are
+  scope questions a date cannot settle and are listed in the plan for a person: Meta
+  Stanton Springs $1.5B -> $750M (a 2025 article quoting 2018's figure), CoreSite DE3
+  18 -> 60 MW (the expansion, not the building).
+- **Quoted money that is not spending on the site is kept out of Capex** (`tracker/
+  ingest/crawl.py` `money_kind`; `tracker/backfill.py` `regate_scope`; reasons
+  `speculative`, `contract_value` in `vocab.UNCONFIRMED_REASONS`; `tests/
+  test_investment_kind.py`). Riot Corsicana's "extrapolated total capital expenditure
+  … potentially ranging from $8.3 billion" replaced a quoted $333M, and IREN
+  Childress took "IREN's $9.7 billion AI cloud agreement with Microsoft" as its
+  investment. The verified sentence is read for the claimed figure: an
+  extrapolation or projection, or a service contract's value, is marked 待确认 with
+  that reason and left out of Capex like a programme total. "Could reach" and "could
+  top" are deliberately not enough — marking Fermi's own "costs could top $60
+  billion" handed the field to a $300 billion total that includes its power plants.
+  Re-run over stored claims by the nightly `backfill scope`: 4 figures on the copy.
+- **A citation is dated by its article, not by when the news watch found it**
+  (`tracker/upsert.py` `upsert_record`; `tracker/dates.py` `_propagate`;
+  `tests/test_dates.py`). The watch dates a URL by its search hit; the page's own
+  date, learned on reading it, replaced that on the queue row but never reached a
+  citation already written ("only ever filled"). DCK's 2017 article on Digital
+  Realty's Santa Clara "6MW of new capacity" read as 2026-10-12, won the capacity
+  field on recency, and its 48 MW campus showed 6. A citation now takes the earliest
+  date known for its URL — never a later one; `backfill dates` corrects stored ones
+  (6 more than a year off on the copy, 228 citations dated in all).
+- **A campus's phase is never below a permit approved or ground broken**
+  (`tracker/blocks.py` `MILESTONE_PHASE`, `phase_after_milestones`, `settled_phase`;
+  `tracker/logic.py` drift check; `tests/test_phase_milestones.py`). The phase ladder
+  takes the furthest claim the merge's filters keep, and on 10-21 a filter removed
+  every claim holding three campuses up: Google's Clydesdale fell to `announced`
+  beside its October 2025 groundbreaking, Niagara to `announced` beside two approved
+  permits. A quoted, dated, past `permit_approved` now floors the phase at
+  permitting, a `groundbreaking` or `equipment_install` at construction; paused and
+  cancelled stay. `energized` and `first_customer` are left out on purpose — power on
+  is as often a construction feed or the site's own plant, and mapped to operational
+  they lifted 45 campuses on the copy, Fermi's Matador among them. 21 phases rise.
+  The write path and the nightly drift check read the same function.
+- **A month the model wrote as 1 January takes the sentence's month**
+  (`tracker/normalize.py` `month_named_in_quote`, `_MONTH_THEN_YEAR`;
+  `tracker/backfill.py` `derive_date_precision`; `tests/test_date_precision.py`).
+  Aligned SLC02's "completion projected in December of 2021" was stored as
+  2021-01-01, year-precise: "December of 2021" was not read as a month, and nothing
+  corrected the model's January. Corrected at extraction and by `backfill precision`;
+  3 stored claims on the copy.
 - **Capex no longer credits buyers past the campus they buy** (`tracker/capex.py`,
   reader docs *Capex*, `tests/test_capex.py`). A campus's tranches that name buyers were
   summed as though they divided the campus, but where they describe it more than once

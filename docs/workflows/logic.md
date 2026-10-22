@@ -153,6 +153,13 @@ cannot tell a superseded figure from a rival one. Hyperion (#10) held Meta's 202
 $10B over its 2026 $50B because both come from the same publisher at the same
 weight, and crawl order decided it.
 
+Since 2026-10-22 one exception sits before weight (`upsert.stale_claims`): a claim
+published — or dated by its own `as_of` — more than a year before a rival of the same
+standing no longer wins for being heavier. Reading a builder's whole newsroom had made
+its 2016 press releases beat 2026 trade press on capacity, tenant and date. Within a
+year, and whenever either date is unknown, the order is unchanged, so the cases this
+section exists for still reach it.
+
 **What counts as a dispute** — five filters, each removing a case a model cannot
 help with:
 
@@ -217,8 +224,11 @@ Three stages before anything is put to a model:
    not recompute. Re-running the policy is arithmetic.
 
    "The answer that policy gives" includes what happens after the merge. For
-   `phase`, a *named* building further along raises the campus
-   (`blocks.phase_after_blocks`), so a row whose claims say `construction` and whose
+   `phase`, a milestone the campus has reached raises it first — an approved permit
+   to permitting, a groundbreaking to construction (`blocks.phase_after_milestones`,
+   since 2026-10-22) — and then a *named* building further along raises it
+   (`blocks.phase_after_blocks`); both through `blocks.settled_phase`, which the
+   write path and this check share. So a row whose claims say `construction` and whose
    serving TX-1 hall says `operational` has not drifted. Compared against the claims
    alone, 48 such rows were reported and "repaired" every night, and every
    recompute raised them straight back. An unnamed tranche ("Phase 1") no longer
@@ -467,10 +477,10 @@ Touching any of these means the poster is in scope. Re-render with
 | The four layers, and the spend dials | `tracker/logic.py` — `review`, `MAX_TOKENS` |
 | Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `_nested_blocks`, `dedupe`, `ERROR`, `WARNING`; `tracker/blocks.py` — `structure`, `rollup` |
 | Suspected delays, and tranches past their date | `tracker/delays.py` — `assess`, `suspected_delay`, `suspected`, `tranche_state`, `period_end`, `read_as` |
-| Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field` |
+| Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field`, `claims_by_field` (the order), `stale_claims`, `STALE_AFTER` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news` |
-| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `phase_after_blocks`, `raise_phase` |
+| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |

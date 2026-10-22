@@ -13,7 +13,7 @@ Before a field's own rule applies, every field follows the same order: a ruled-o
 | **Buyer** | `customer` | The tenant that will occupy it and use the compute. | The strongest, latest source. If none names one, it may come from a company named as customer or from the tenant of its largest building, labelled *derived*. |
 | **City** | `city` | The town it is filed under. | First seen. |
 | **State** | `state` | Two-letter US state. | First seen. |
-| **Phase** | `phase` | How far along it is. See [Phases and progress](progress). | A stop (paused, cancelled) from a credible source wins; otherwise the furthest-along phase a quoted source supports. |
+| **Phase** | `phase` | How far along it is. See [Phases and progress](progress). | A stop (paused, cancelled) from a credible source wins; otherwise the furthest-along phase a quoted source supports — and never below a milestone the campus has reached: an approved permit means at least permitting, a groundbreaking at least construction. |
 | **Planned (MW)** | `mw_planned` | Planned capacity, meant as computing (IT) load, in megawatts. | The strongest, latest source. A building's figure only when nothing covers the whole campus. |
 | **Running (MW)** | `mw_built` | Capacity switched on today. | The **largest** figure any source gives. *n/a* until something is running. |
 | **Investment (USD)** | `investment_usd` | Announced investment in the campus, in US dollars. | The strongest, latest source. Programme, regional and portfolio totals are kept out. |
