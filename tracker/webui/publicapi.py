@@ -405,6 +405,10 @@ def company(session: Session, slug: str, prefix: str, *, tally: Any = None) -> d
         "also_written": profile["also_written"],
         "website": profile["domain"],
         "totals": profile["totals"],
+        # The campuses it builds, whole, whoever buys them, beside `totals` (which
+        # credits each campus to its buyer, as Capex does): `{campuses, mw_planned,
+        # mw_built}`. Additive.
+        "builds": {k: profile["builds"][k] for k in ("campuses", "mw_planned", "mw_built")},
         "states": [{"state": s, "projects": n} for s, n in profile["states"]],
         "phases": [{"phase": p, "projects": n} for p, n in profile["phases"]],
         "projects": [
