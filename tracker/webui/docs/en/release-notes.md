@@ -18,6 +18,9 @@ Changes a reader of the console will notice, newest first. The console's version
 - **An article is dated by its publisher, not by when we found it.** A 2017 article found by a search this month had been read as this month's news, and won on recency; Digital Realty's Santa Clara campus read 6 MW instead of 48.
 - **A campus's phase is never below a permit approved or ground broken.** Google's Clydesdale had fallen back to *announced* beside its October 2025 groundbreaking. See [Field dictionary](fields).
 - **Three more listing sites count as directories.** A state listing recounting CoreWeave's 2025 announcement had held its Lancaster campus at *announced*; it reads under construction again.
+
+### Every page tells the same story
+
 - **Rows corrected by hand.** Eight campuses the night had stored twice are one row each again; QTS Richmond 5 no longer carries six copies of another campus's 238 MW; the Plano and Ashburn campuses are named as campuses, with figures that belong to them; CoreSite DE3 is 18 MW, Meta Stanton Springs $1.5 billion, and Meta Jeffersonville operating.
 - **A tenant of one part is no longer the campus's buyer.** DreamHost, a 2012 tenant of NTT Ashburn's 3.6 MW first phase, held all 224 MW on the Capex page; the rest of such a campus now sits under *(no named customer)*. Related Digital's 1 GW data center at Chicago's South Works has its own row again. See [Capex](capex).
 - **A campus is called a suspected delay only after a search.** Each night, a campus past its online date is searched for news of opening, slipping or stopping, from a little before the date to today; it is flagged only if that search finds nothing that puts it running. Several old campuses that had simply opened without an article we read leave the list. See [Numbers and dates](numbers-and-dates).
