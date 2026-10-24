@@ -8,6 +8,7 @@ pin what counts as supply in which year, and what each delay-risk level rests on
 from __future__ import annotations
 
 import datetime as dt
+import json
 from types import SimpleNamespace
 
 from tracker import supply
@@ -38,6 +39,21 @@ def _campus(
         blocks=list(blocks),
         # Searched for going live today (`delays.searched_since_due`).
         golive_checked_at=dt.datetime.combine(TODAY, dt.time.min),
+        # A source states its date in words the gate verified (`facts.stated`).
+        sources=[_stating(expected)] if expected else [],
+    )
+
+
+def _stating(expected):
+    return SimpleNamespace(
+        id=1,
+        url="https://news.test/campus",
+        source_type="trade_press",
+        extractor=None,
+        claims=json.dumps({"expected_online": expected.isoformat()}),
+        fields="expected_online",
+        unconfirmed_fields=None,
+        unconfirmed_reasons=None,
     )
 
 

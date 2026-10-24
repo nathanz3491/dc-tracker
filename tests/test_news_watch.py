@@ -31,7 +31,7 @@ from tracker.ingest.discover import (
 )
 from tracker.ingest.fetch import FetchResult
 from tracker.ingest.search import QuotaExhausted, SearchHit
-from tracker.models import CompanyWatch, IngestUrl, NewsWatch, Project, SeenUrl, Watch
+from tracker.models import CompanyWatch, IngestUrl, NewsWatch, Project, SeenUrl, Source, Watch
 from tracker.vocab import PENDING_URL_STATUS
 
 NOW = dt.datetime(2026, 10, 18, 10, 0)
@@ -445,6 +445,21 @@ def _campus(session, n: int, **kw) -> Project:
     session.add(project)
     session.flush()
     return project
+
+
+def _date_cited(session, project) -> None:
+    """A citation stating the campus's online date in words the gate verified."""
+    session.add(
+        Source(
+            project_id=project.id,
+            url=f"https://news.test/date/{project.id}",
+            source_type="trade_press",
+            claims=f'{{"expected_online": "{project.expected_online.isoformat()}"}}',
+            fields="expected_online",
+        )
+    )
+    session.flush()
+    session.refresh(project)
 
 
 def test_the_query_names_the_company_as_the_press_does_and_the_place():
@@ -886,6 +901,7 @@ def test_a_campus_past_its_date_is_searched_for_going_live_before_it_is_flagged(
     late = _campus(session, 1, phase="construction")
     late.expected_online = dt.date(2022, 1, 1)
     late.expected_online_precision = "year"
+    _date_cited(session, late)
     session.commit()
     today = NOW.date()
     assert delays.suspected_delay(late, today=today) is None  # not searched yet
@@ -928,6 +944,8 @@ def test_what_could_settle_a_late_flag_is_read_before_anything_else(session, mon
     on_time = _campus(session, 2, phase="construction")
     on_time.expected_online = dt.date(2030, 1, 1)
     session.flush()
+    _date_cited(session, late)
+    _date_cited(session, on_time)
     days = dt.timedelta(days=1)
     _queue(session, "https://a.test/backlog", "prospect:x", NOW - 900 * days)
     _queue(session, "https://a.test/news", "lead", NOW - 2 * days)

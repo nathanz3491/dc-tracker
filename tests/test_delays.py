@@ -10,15 +10,46 @@ twice stops reading it. Most of this file is the second kind.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
 
 from tracker import delays, logic
-from tracker.models import CapacityBlock, Event, Project
+from tracker.models import CapacityBlock, Event, Project, Source
 
 TODAY = dt.date(2026, 10, 20)
+
+
+def _stating(expected, *, quoted=True, url="https://news.test/campus"):
+    """A citation giving `expected` as the online date: quoted, or 待确认."""
+    return SimpleNamespace(
+        id=1,
+        url=url,
+        source_type="trade_press",
+        extractor=None,
+        claims=json.dumps({"expected_online": expected.isoformat()}),
+        fields=None if not quoted else "expected_online",
+        unconfirmed_fields=None if quoted else "expected_online",
+        unconfirmed_reasons=None if quoted else json.dumps({"expected_online": "no_quote"}),
+    )
+
+
+def _cite(session, project, *, quoted=True, url="https://news.test/campus"):
+    """Store `_stating` for a saved campus, under its own URL."""
+    said = _stating(project.expected_online, quoted=quoted, url=f"{url}/{project.id}")
+    session.add(
+        Source(
+            project_id=project.id,
+            url=said.url,
+            source_type="trade_press",
+            claims=said.claims,
+            fields=said.fields,
+            unconfirmed_fields=said.unconfirmed_fields,
+            unconfirmed_reasons=said.unconfirmed_reasons,
+        )
+    )
 
 
 def _block(status="planned", expected=None, energized=None, label="Phase 1", parent=None):
@@ -245,7 +276,8 @@ def test_other_milestones_are_not_news_of_going_live():
 # --- every surface reads the same answer ------------------------------------------
 
 
-def _row(session, name, **kwargs) -> Project:
+def _row(session, name, *, quoted=True, **kwargs) -> Project:
+    """A campus, with a citation stating its online date when it has one."""
     project = Project(
         name=name,
         company="Someone",
@@ -261,6 +293,9 @@ def _row(session, name, **kwargs) -> Project:
     )
     session.add(project)
     session.flush()
+    if project.expected_online is not None:
+        _cite(session, project, quoted=quoted)
+        session.flush()
     return project
 
 
@@ -448,6 +483,7 @@ def test_a_late_campus_is_not_flagged_until_a_search_after_its_date_found_nothin
         blocks=[],
         events=[],
         golive_checked_at=None,
+        sources=[_stating(dt.date(2022, 1, 1))],
     )
     assert delays.suspected_delay(stub, today=TODAY) is None
     assert delays.suspected_delay(stub, today=TODAY, require_check=False) is not None
@@ -481,3 +517,75 @@ def test_the_watch_lists_the_late_campuses_still_waiting_for_their_search(sessio
     assert set(delays.suspected(session, today=TODAY)) == {
         p.id for p in session.query(Project) if p.name == "Searched"
     }
+
+
+def test_only_a_date_a_source_states_makes_a_campus_late(session, monkeypatch):
+    """On 10-24 five of ten campuses past their date rested on a date nobody had
+    verified: a directory page's guess at Carter's Store, a month an article never gave
+    at Compass Hoffman Estates (it said "2026"), a misread a directory copied at NTT
+    Gainesville."""
+    monkeypatch.setattr(delays, "as_of", lambda: TODAY)
+    quoted = _row(session, "Quoted", expected_online=dt.date(2024, 4, 1))
+    doubted = _row(session, "Doubted", quoted=False, expected_online=dt.date(2024, 4, 1))
+    listed = _row(session, "Listed", quoted=False, expected_online=dt.date(2024, 4, 1))
+    _cite(session, listed, url="https://www.dcatlas.io/campus")  # a directory, quoted
+    other = _row(session, "Other", expected_online=dt.date(2024, 4, 1))
+    other.expected_online = dt.date(2024, 7, 1)  # the row holds a date nobody quoted
+    session.commit()
+    for project in (quoted, doubted, listed, other):
+        session.refresh(project)
+
+    assert set(delays.suspected(session, today=TODAY)) == {quoted.id}
+    one_by_one = {
+        p.id for p in (quoted, doubted, listed, other) if delays.suspected_delay(p, today=TODAY)
+    }
+    assert one_by_one == {quoted.id}
+    assert [pid for pid, _ in delays.awaiting_search(session, today=TODAY)] == []
+
+
+def _listing(phase, *, url, quoted=True, read=dt.datetime(2026, 9, 1)):
+    """A citation giving the campus's phase, read on `read`."""
+    return SimpleNamespace(
+        id=2,
+        url=url,
+        source_type="trade_press",
+        extractor=None,
+        claims=json.dumps({"phase": phase}),
+        fields="phase" if quoted else None,
+        unconfirmed_fields=None if quoted else "phase",
+        unconfirmed_reasons=None if quoted else json.dumps({"phase": "quote_off_target"}),
+        published_at=None,
+        fetched_at=read,
+    )
+
+
+def test_a_directory_listing_the_campus_as_running_is_news_of_going_live():
+    """Aligned's Sterling building (IAD-03), due fall 2023, was listed as operational by
+    three directories and flagged for three years, because no press release said so."""
+    due = dt.date(2023, 10, 1)
+    stub = SimpleNamespace(
+        expected_online=due,
+        expected_online_precision="month",
+        phase="construction",
+        mw_built=None,
+        blocks=[],
+        events=[],
+        golive_checked_at=dt.datetime(2026, 10, 1),
+        sources=[_stating(due)],
+    )
+    assert delays.suspected_delay(stub, today=TODAY) is not None
+
+    listed = _listing("operational", url="https://baxtel.com/data-center/aligned-iad03")
+    stub.sources = [_stating(due), listed]
+    assert delays.listed_running(stub.sources, due)
+    assert delays.suspected_delay(stub, today=TODAY) is None
+
+    # A listing read before the date cannot show the date being met.
+    early = _listing("operational", url="https://baxtel.com/x", read=dt.datetime(2023, 1, 5))
+    # A model's 待确认 reading, with no quote behind it, is not a report.
+    guessed = _listing("operational", url="https://news.test/guess", quoted=False)
+    # Nor a phase short of running.
+    building = _listing("construction", url="https://baxtel.com/y")
+    for weak in (early, guessed, building):
+        stub.sources = [_stating(due), weak]
+        assert delays.suspected_delay(stub, today=TODAY) is not None, weak.url

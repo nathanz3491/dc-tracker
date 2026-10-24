@@ -157,7 +157,13 @@ results are queued as `watch:#<id>` and read that night. The search's time goes 
 the row (`project.golive_checked_at`, migration 0047), and `delays.assess` flags a
 campus only once a search made after its period ended has run
 (`delays.searched_since_due`). A campus whose date slips later needs a new search
-once the new date has passed.
+once the new date has passed. **Only a date a source states in its own words can make a campus late**
+(`facts.stated`): on 10-24 five of the ten campuses past their date rested on a
+待确认 date or a directory's copy. Four were records to fix -- a directory page's
+guess, a month an article never gave, a misread copied by a directory, a 2013
+announcement -- and the fifth, DC Blox Conyers, a real slip whose date the reader
+had stated without a quote. They are not searched for either; a re-read that quotes
+the date brings a real one back.
 
 **A result no campus story can be in is never queued** (`screen.not_news`, asked in
 `watch._screened`): a PDF, a stock-quote or stock-chatter page (Stocktwits, Simply

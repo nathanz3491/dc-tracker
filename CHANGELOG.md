@@ -939,6 +939,30 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Only a date a source states in its own words can make a campus a suspected
+  delay** (`tracker/facts.py` `stated`; `tracker/delays.py` `assess`, `suspected`,
+  `suspected_delay`; reader docs *Numbers and dates* en/zh; `docs/workflows/sync.md`;
+  `tests/test_delays.py`). On 10-24 five of the ten campuses past their date rested
+  on a date nobody had verified. Four were records to fix, not delays:
+  - Carter's Store (AWS, Spotsylvania) had a directory page's March 2026, though the
+    campus is only rezoned.
+  - Compass Hoffman Estates had a June 2026 no article gave; the source's "2026" was
+    the substation's power date.
+  - NTT Gainesville had a directory's copy of a misread.
+  - Savvis MP2 had a 2013 announcement for a building that opened in May 2014.
+
+  The fifth, DC Blox Conyers, is a real slip whose date had been taken without a
+  quote. A 待确认 date, or a directory's, now shows on the page as before but raises
+  no flag and costs no search; a re-read that quotes it brings a real delay back. The
+  rule reads the tier from the campus's citations, with the same function the
+  statement table uses, so the table, the page and the API agree.
+- **A source listing a campus as operational counts as news of it going live,
+  a directory included** (`tracker/delays.py` `listed_running`; `tracker/facts.py`
+  `stated(tiers=)`; `tests/test_delays.py`). The flag says nothing reported shows the
+  campus running. Aligned's Sterling building (IAD-03), due in fall 2023, has been
+  listed as operational by three directories since 2023, with no press release, and
+  was flagged. A directory's word still does not set the phase the page shows. A
+  listing read before the date, or a model's unquoted reading, does not count.
 - **A campus is searched for by its site code, or by a short name that is its whole
   name** (`tracker/ingest/watch.py` `_names`, `_SITE_CODE`; `tests/test_news_watch.py`).
   The news watch and the go-live search dropped every campus name of four letters or

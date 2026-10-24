@@ -172,6 +172,41 @@ def _held(stored: Any, value: Any) -> bool:
     return str(stored).strip().casefold() == str(value).strip().casefold()
 
 
+def stated(
+    stored: Any, sources: Iterable[Any], field: str, *, tiers: Iterable[str] = ("confirmed",)
+) -> bool:
+    """Whether a citation states the value a campus's `field` holds, in its own words.
+
+    A `confirmed` statement of exactly that value (:func:`_held`): one whose quote
+    the evidence gate verified, from a source that is neither a directory nor
+    ruled out. `tiers` widens it -- `delays` also asks whether a directory lists a
+    campus as operational. The tier every surface shows for it, computed from the same citation
+    columns and the same :func:`_source_tier` as the stored statements, so a reader
+    of the citations already loaded (`capex.working_set`) and a reader of this table
+    cannot answer differently.
+
+    What `delays.assess` asks before calling a campus late: on 2026-10-24 five of
+    ten campuses past their date rested on a date nobody had verified -- 待确认
+    (Carter's Store, Compass Hoffman Estates, Savvis MP2, DC Blox Conyers) or a
+    directory's copy of a misread (NTT Gainesville). See `delays` rule 1.
+    """
+    from tracker.upsert import is_placeholder
+
+    wanted = set(tiers)
+    for source in sources:
+        claims = _load(getattr(source, "claims", None), {})
+        value = claims.get(field) if isinstance(claims, dict) else None
+        if value is None or not _held(stored, value):
+            continue
+        reasons = _load(getattr(source, "unconfirmed_reasons", None), {})
+        reason = reasons.get(field) if isinstance(reasons, dict) else None
+        unconfirmed = _listed(getattr(source, "unconfirmed_fields", None))
+        confirmed = not is_placeholder(source) and field not in unconfirmed
+        if _source_tier(source, confirmed=confirmed, reason=reason) in wanted:
+            return True
+    return False
+
+
 def statements(
     project: Project,
     *,

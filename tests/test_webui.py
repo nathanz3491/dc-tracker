@@ -4807,13 +4807,23 @@ def test_a_suspected_delay_reaches_the_table_the_index_and_the_page(server, seed
     from sqlalchemy import select
 
     from tracker.db import open_db
-    from tracker.models import Project
+    from tracker.models import Project, Source
 
     with session_scope(open_db(seeded_db, readonly=False)) as session:
         project = session.scalars(select(Project)).one()
         project.expected_online = dt.date(2020, 1, 1)
         project.expected_online_precision = "year"
         project.golive_checked_at = dt.datetime(2021, 1, 5)
+        # A date a source states in words the gate verified (`facts.stated`).
+        session.add(
+            Source(
+                project_id=project.id,
+                url="https://news.test/the-date",
+                source_type="trade_press",
+                claims='{"expected_online": "2020-01-01"}',
+                fields="expected_online",
+            )
+        )
 
     address, _ = server
     _status, page = request(address, "/api/projects?delayed=1")

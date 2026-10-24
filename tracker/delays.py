@@ -19,7 +19,15 @@ What it asks, in order:
 
 1. **A stated online date whose period is over.** "Q3 2025" is stored as
    2025-07-01 and "2026" as 2026-01-01; a source promising a period has not missed
-   it until the period ends (:func:`period_end`).
+   it until the period ends (:func:`period_end`). *Stated* means a citation says it
+   in words the evidence gate verified (`facts.stated`): a 待确认 date, or a
+   directory's copy, does not make a campus late. On 2026-10-24 five of the ten
+   campuses past their date rested on such a date. Four were records to fix: a
+   directory page's guess (Carter's Store), a month an article never gave (Compass
+   Hoffman Estates, where the article said "2026"), a misread copied by a directory
+   (NTT Gainesville), a 2013 announcement (Savvis MP2). The fifth, DC Blox Conyers,
+   was a real slip whose date had been taken without a quote; a re-read that quotes
+   it flags it again.
 2. **A phase that does not already settle it.** An operational campus is not late,
    and a paused or cancelled one has a status of its own: calling a stopped campus
    "delayed" would bury the more important fact under a softer one.
@@ -29,7 +37,12 @@ What it asks, in order:
    row shows it: on a production copy on 2026-10-20, Red Oak read "360 MW running of
    360" beside a 2020 date and would have carried "no news of going live" next to it.
    An energisation from *before* the date is not that news: it is usually an earlier
-   phase, and it cannot show the date being met.
+   phase, and it cannot show the date being met. **Nor a source listing it as
+   operational**, read on or after the date (:func:`listed_running`) -- a directory
+   included, though a directory's word does not make the row's phase. The flag says
+   "nothing reported says it runs"; Aligned's Sterling building was listed as
+   operational since 2023 by three directories and flagged anyway, because no press
+   release announced the opening.
 4. **No tranche still to come.** A campus whose date passed while a later tranche
    runs to its own schedule is not late: the date on the row was the first phase's.
 
@@ -242,19 +255,29 @@ def assess(
     today: dt.date,
     checked_at: Any = None,
     require_check: bool = False,
+    sources: Iterable[Any] | None = None,
 ) -> SuspectedDelay | None:
     """The one definition of a suspected delay. See the module docstring for the rule.
 
-    Structural on purpose: `blocks` and `events` are anything carrying the attributes
-    the ORM rows have, so the batch reader below can hand in rows it loaded in three
-    queries and get exactly the answer `suspected_delay` gives for one project.
+    Structural on purpose: `blocks`, `events` and `sources` are anything carrying the
+    attributes the ORM rows have, so the batch reader below can hand in rows it
+    loaded in four queries and get exactly the answer `suspected_delay` gives for
+    one project.
 
-    `require_check` adds the rule's fifth condition (:func:`searched_since_due`): the
-    project readers pass it, with the campus's `golive_checked_at`; the news watch
-    leaves it off to find the campuses that still need their search.
+    `sources` are the campus's citations, which rule 1's "stated" (`facts.stated`)
+    and rule 3's listing (:func:`listed_running`) read; None skips both, for a caller
+    asking about a date alone. `require_check` adds the rule's fifth condition
+    (:func:`searched_since_due`): the project readers pass it, with the campus's
+    `golive_checked_at`; the news watch leaves it off to find the campuses that still
+    need their search.
     """
+    from tracker.facts import stated as facts_stated
+
     expected = _as_date(expected_online)
     if expected is None:
+        return None
+    cited = None if sources is None else list(sources)
+    if cited is not None and not facts_stated(expected, cited, "expected_online"):
         return None
     due = period_end(expected, precision)
     if due >= today:
@@ -269,6 +292,8 @@ def assess(
     if LIVE in states or COMING in states:
         return None
     if any(_went_live_since(e, expected, today) for e in events):
+        return None
+    if cited is not None and listed_running(cited, expected):
         return None
     if require_check and not searched_since_due(checked_at, due):
         return None
@@ -286,6 +311,31 @@ def assess(
         as_of=today,
         phase=stage,
         reason=_reason(read, shown, days, stage),
+    )
+
+
+def listed_running(sources: Iterable[Any], expected: dt.date) -> bool:
+    """Whether a citation read on or after `expected` lists the campus as operational.
+
+    A directory counts (`facts.stated` at the `directory` tier as well as
+    `confirmed`): its word does not set the row's phase, which a source of the top
+    tier decides, but it is a report that the campus runs, and the flag says that
+    nothing reported does. Aligned's Sterling building (IAD-03) was due in fall 2023
+    and listed as operational by three directories, with no press release; it was
+    flagged for three years. A 待确认 "operational" -- a model's reading no quote
+    bore out -- does not count, and nor does a listing read before the date, which
+    cannot show the date being met.
+    """
+    from tracker.facts import stated as facts_stated
+
+    since = [s for s in sources if (_read_on(s) or dt.date.min) >= expected]
+    return facts_stated("operational", since, "phase", tiers=("confirmed", "directory"))
+
+
+def _read_on(source: Any) -> dt.date | None:
+    """When a citation was published, else read."""
+    return _as_date(getattr(source, "published_at", None)) or _as_date(
+        getattr(source, "fetched_at", None)
     )
 
 
@@ -308,7 +358,8 @@ def searched_since_due(checked_at: Any, due: dt.date) -> bool:
 def suspected_delay(
     project: Any, *, today: dt.date | None = None, require_check: bool = True
 ) -> SuspectedDelay | None:
-    """Whether one project is a suspected delay, and why. Reads its tranches and milestones."""
+    """Whether one project is a suspected delay, and why. Reads its tranches,
+    milestones and citations."""
     return assess(
         expected_online=getattr(project, "expected_online", None),
         precision=getattr(project, "expected_online_precision", None),
@@ -319,6 +370,7 @@ def suspected_delay(
         today=today if today is not None else as_of(),
         checked_at=getattr(project, "golive_checked_at", None),
         require_check=require_check,
+        sources=getattr(project, "sources", ()) or (),
     )
 
 
@@ -329,12 +381,12 @@ def suspected(
 
     For the readers that ask about the whole fleet at once — the console's light
     index, the table's filter and sort — and must not hydrate every project to do
-    it. Three queries: the rows whose stored date has passed and whose phase leaves
+    it. Four queries: the rows whose stored date has passed and whose phase leaves
     the question open (a period cannot end before the day it starts on, so nothing
-    else can qualify), then the tranches and energisations of only those rows.
-    Every answer still comes from :func:`assess`.
+    else can qualify), then the tranches, energisations and citations of only those
+    rows. Every answer still comes from :func:`assess`.
     """
-    from tracker.models import CapacityBlock, Event, Project
+    from tracker.models import CapacityBlock, Event, Project, Source
 
     when = today if today is not None else as_of()
     open_phases = LIVE_PHASES | set(PHASE_TERMINAL)
@@ -367,6 +419,23 @@ def suspected(
         select(Event).where(Event.project_id.in_(candidates), Event.event_type == "energized")
     ):
         events.setdefault(event.project_id, []).append(event)
+    cited: dict[int, list[Any]] = {}
+    for source in session.execute(
+        select(
+            Source.id,
+            Source.project_id,
+            Source.url,
+            Source.source_type,
+            Source.extractor,
+            Source.claims,
+            Source.fields,
+            Source.unconfirmed_fields,
+            Source.unconfirmed_reasons,
+            Source.published_at,
+            Source.fetched_at,
+        ).where(Source.project_id.in_(candidates))
+    ):
+        cited.setdefault(source.project_id, []).append(source)
 
     out: dict[int, SuspectedDelay] = {}
     for pid, expected, precision, phase, built, checked in rows:
@@ -380,6 +449,7 @@ def suspected(
             today=when,
             checked_at=checked,
             require_check=require_check,
+            sources=cited.get(pid, ()),
         )
         if found is not None:
             out[pid] = found
@@ -426,6 +496,7 @@ __all__ = [
     "as_of",
     "assess",
     "awaiting_search",
+    "listed_running",
     "period_end",
     "read_as",
     "searched_since_due",

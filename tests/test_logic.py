@@ -169,6 +169,7 @@ def test_a_future_delay_is_not_a_future_milestone(session):
 
 def test_a_date_that_has_passed_without_the_project_arriving(session):
     late = _project(session, name="A", phase="construction", expected_online=dt.date(2024, 1, 1))
+    _claimed(session, late, "https://a.test/date", expected_online="2024-01-01")
     assert "past_its_own_date" in _codes(late)
 
     # Not flagged once it is running, nor once it is cancelled.
@@ -204,6 +205,7 @@ def test_a_stated_period_is_not_overdue_until_it_ends(session, stored, precision
         expected_online=stored,
         expected_online_precision=precision,
     )
+    _claimed(session, project, "https://a.test/date", expected_online=stored.isoformat())
     assert ("past_its_own_date" in _codes(project)) is late
 
 
@@ -1146,6 +1148,7 @@ def test_a_slipped_tranche_is_named_and_so_is_the_campus_it_leaves_late(session)
     line has to say the same thing, because one function decides both.
     """
     project = _project(session, phase="construction", expected_online=dt.date(2024, 1, 1))
+    _claimed(session, project, "https://a.test/date", expected_online="2024-01-01")
     _blk(
         session,
         project,
