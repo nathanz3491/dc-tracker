@@ -480,7 +480,7 @@ def test_a_site_code_or_a_short_whole_name_is_searched_and_a_short_word_is_not()
     dojo = Project(name="Dojo", company="Tesla", city="Palo Alto")
     assert watch.anchor(dojo) == '"Tesla" ("Palo Alto" OR "Dojo")'
     mp2 = Project(name="Savvis MP2", company="Savvis", city="Shakopee")
-    assert watch.anchor(mp2) == '"Savvis" ("Shakopee" OR "MP2")'
+    assert watch.anchor(mp2) == '("Savvis" OR "Centersquare") ("Shakopee" OR "MP2")'
     split = Project(name="VA-2", company="Iron Mountain", city="Manassas")
     assert watch.anchor(split) == '"Iron Mountain" ("Manassas" OR "VA 2")'
     for name, city in (

@@ -397,8 +397,8 @@ aliases = ["Ascent Corporation"]
 [[operator]]
 name = "Centersquare"
 kind = "landlord"
-aliases = ["Cyxtera", "Cyxtera Technologies", "Evoque"]
-note = "Cyxtera and Evoque merged into Centersquare in 2024. Both predecessor names are in the database, which is what an unrostered rename looks like from the inside."
+aliases = ["Cyxtera", "Cyxtera Technologies", "Evoque", "Savvis", "Csquare"]
+note = "Cyxtera and Evoque merged into Centersquare in 2024. Both predecessor names are in the database, which is what an unrostered rename looks like from the inside. Savvis is the line's first name: its data centers went to CenturyLink (2011), then Cyxtera (2017); Savvis MP2 in Shakopee, opened May 2014, is Csquare's Shakopee MSP1 today, and its row stayed a 2014 announcement because the news watch searched only \"Savvis\". Csquare is the name the operator's site carries since late 2025."
 
 [[operator]]
 name = "Lancium"

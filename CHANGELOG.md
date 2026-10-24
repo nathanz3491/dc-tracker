@@ -939,6 +939,12 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Savvis and Csquare are known as Centersquare** (`tracker/seed/operators.toml`;
+  `tests/test_news_watch.py`). Savvis's data centers went to CenturyLink, then
+  Cyxtera, then Centersquare, whose site now reads Csquare. Savvis MP2 in Shakopee
+  opened in May 2014 and is Csquare's Shakopee MSP1 today, but its row stayed a 2013
+  announcement: the news watch searched only "Savvis". It now searches
+  `("Savvis" OR "Centersquare")`, and the company pages read the row as Centersquare's.
 - **Only a date a source states in its own words can make a campus a suspected
   delay** (`tracker/facts.py` `stated`; `tracker/delays.py` `assess`, `suspected`,
   `suspected_delay`; reader docs *Numbers and dates* en/zh; `docs/workflows/sync.md`;
