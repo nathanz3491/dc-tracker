@@ -456,13 +456,23 @@ def suspected(
     return out
 
 
+#: How long a flagged campus goes before its go-live search is made again. The
+#: client's rule is that a search *still* finds no news: searched once, Tesla's Dojo
+#: stayed flagged with a query that could not find its 2025 shutdown, and nothing
+#: would ever have asked again. A month keeps the cost to about one search a day.
+GOLIVE_RECHECK: Final = dt.timedelta(days=30)
+
+
 def awaiting_search(
     session: Session, *, today: dt.date | None = None
 ) -> list[tuple[int, SuspectedDelay]]:
-    """Campuses that meet every condition but the search, most overdue first.
+    """Campuses whose go-live search is due, never-searched first, most overdue first.
 
     What the news watch's go-live check works through (`ingest.watch.run`): each is
-    late by the record and has not been searched since its period ended.
+    late by the record, and either has not been searched since its period ended or
+    -- flagged, then -- was last searched more than :data:`GOLIVE_RECHECK` ago. The
+    search a flag rests on stands meanwhile: a campus due its repeat stays flagged
+    until the repeat finds something, not hidden while it waits.
     """
     from tracker.models import Project
 
@@ -475,17 +485,22 @@ def awaiting_search(
             select(Project.id, Project.golive_checked_at).where(Project.id.in_(list(unchecked)))
         ).all()
     )
-    waiting = [
-        (pid, late)
-        for pid, late in unchecked.items()
-        if not searched_since_due(checked.get(pid), late.due)
-    ]
-    waiting.sort(key=lambda item: (-item[1].days_late, item[0]))
-    return waiting
+    stale = when - GOLIVE_RECHECK
+    first, again = [], []
+    for pid, late in unchecked.items():
+        last = _as_date(checked.get(pid))
+        if not searched_since_due(last, late.due):
+            first.append((pid, late))
+        elif last <= stale:
+            again.append((pid, late))
+    first.sort(key=lambda item: (-item[1].days_late, item[0]))
+    again.sort(key=lambda item: (_as_date(checked.get(item[0])), item[0]))
+    return first + again
 
 
 __all__ = [
     "COMING",
+    "GOLIVE_RECHECK",
     "LATE",
     "LIVE",
     "LIVE_PHASES",

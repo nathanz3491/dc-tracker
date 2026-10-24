@@ -963,6 +963,13 @@ initial build of the v1 PRD.
   listed as operational by three directories since 2023, with no press release, and
   was flagged. A directory's word still does not set the phase the page shows. A
   listing read before the date, or a model's unquoted reading, does not count.
+- **A flagged campus is searched for again every 30 days** (`tracker/delays.py`
+  `awaiting_search`, `GOLIVE_RECHECK`; `tracker news` report line; `docs/workflows/sync.md`;
+  reader docs en/zh; `tests/test_delays.py`). The client's rule is that a search
+  *still* finds no news. Each campus was searched once, so Tesla's Dojo, shut down in
+  August 2025, stayed flagged on a query that could not find it, and nothing asked
+  again. Campuses never searched go first, then the longest-unsearched. The flag
+  stands while its repeat waits, so it does not flicker.
 - **A campus is searched for by its site code, or by a short name that is its whole
   name** (`tracker/ingest/watch.py` `_names`, `_SITE_CODE`; `tests/test_news_watch.py`).
   The news watch and the go-live search dropped every campus name of four letters or

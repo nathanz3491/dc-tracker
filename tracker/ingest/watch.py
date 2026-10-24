@@ -248,7 +248,7 @@ class WatchReport:
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
-            ("past their date, never searched for going live", self.due_golive),
+            ("past their date, due a go-live search", self.due_golive),
             ("of them searched now", self.golive_checked),
             ("go-live results queued", self.golive_queued),
             ("campuses due again", self.due_followups),

@@ -519,6 +519,44 @@ def test_the_watch_lists_the_late_campuses_still_waiting_for_their_search(sessio
     }
 
 
+def test_a_flagged_campus_is_searched_again_after_a_month_and_stays_flagged_meanwhile(session):
+    """The client's rule is that a search *still* finds nothing. Searched once, Tesla's
+    Dojo stayed flagged on a query that could not find its 2025 shutdown."""
+    recent = _row(
+        session,
+        "Recent",
+        expected_online=dt.date(2024, 4, 1),
+        expected_online_precision="month",
+        golive_checked_at=dt.datetime.combine(TODAY - dt.timedelta(days=29), dt.time.min),
+    )
+    month = _row(
+        session,
+        "Month",
+        expected_online=dt.date(2024, 4, 1),
+        expected_online_precision="month",
+        golive_checked_at=dt.datetime.combine(TODAY - dt.timedelta(days=30), dt.time.min),
+    )
+    oldest = _row(
+        session,
+        "Oldest",
+        expected_online=dt.date(2024, 4, 1),
+        expected_online_precision="month",
+        golive_checked_at=dt.datetime(2025, 1, 1),
+    )
+    never = _row(
+        session,
+        "Never",
+        expected_online=dt.date(2025, 4, 1),
+        expected_online_precision="month",
+        golive_checked_at=None,
+    )
+    session.commit()
+    got = [pid for pid, _late in delays.awaiting_search(session, today=TODAY)]
+    assert got == [never.id, oldest.id, month.id], "never searched first, then stalest"
+    flagged = set(delays.suspected(session, today=TODAY))
+    assert flagged == {recent.id, month.id, oldest.id}, "waiting for a repeat is not unflagged"
+
+
 def test_only_a_date_a_source_states_makes_a_campus_late(session, monkeypatch):
     """On 10-24 five of ten campuses past their date rested on a date nobody had
     verified: a directory page's guess at Carter's Store, a month an article never gave
