@@ -43,6 +43,12 @@ Run as a module for the shell script that reads it::
     python -m tracker.spend report   <ledger>  # the morning report, by phase
     python -m tracker.spend searches <ledger>  # web searches sent; 0 when none
     python -m tracker.spend summary  <ledger>  # the closing line: models, then searches
+    python -m tracker.spend allowance <dir>    # tonight's ceiling from the month's ledgers
+
+**The month.** OpenCode Go allows $80 a month on the flash model, and other work
+shares the plan; the tracker keeps to 85% of it (:func:`monthly_budget`). The nightly
+loop reads its ceiling from :func:`allowance`, over every ledger in its directory, so
+a dear night is paid back by the next ones.
 """
 
 from __future__ import annotations
@@ -100,6 +106,77 @@ BEIJING: Final = dt.timezone(dt.timedelta(hours=8), "Asia/Shanghai")
 PEAK_WINDOWS: Final = ((9, 12), (14, 18))
 
 PEAK_MULTIPLIER: Final = 2.0
+
+#: OpenCode Go's monthly allowance for the flash model, in dollars (2026-10-18). Go
+#: also caps $40 a week and $16 every five hours.
+GO_MONTHLY_USD: Final = 80.0
+
+#: The tracker's share of that allowance. Other work runs on the same plan, and the
+#: user set the tracker at about 85% of it (2026-10-25).
+TRACKER_SHARE: Final = 0.85
+
+#: What the tracker spends on an ordinary day outside the nightly loop -- the
+#: console's AI panels, hand-run commands -- in yuan. No ledger records those calls;
+#: the hand-run reads and lookups of 10-22 and 10-24 came to under ¥2 together, and
+#: most days have none. Held back from every night's share so the month still
+#: closes near the tracker's share.
+DAYTIME_CNY: Final = 1.0
+
+#: The days the allowance is spread over: a rolling month, which keeps a calendar
+#: month inside the share as well.
+WINDOW_DAYS: Final = 30
+
+#: The most one night may spend, whatever budget is passed in. Inside the tracker's
+#: share of Go's other two caps: seven nights at this are ¥140 against 85% of $40 a
+#: week (about ¥241), and one is under 85% of $16 per five hours (about ¥97).
+NIGHT_MAX_CNY: Final = 20.0
+
+#: How fast the nights pay back what the last 29 days spent over their share -- a
+#: phase that ran past the ceiling, a day of hand-run work recorded in a ledger: a
+#: seventh of the excess a night, so no one night is left with nothing to spend, and
+#: a night at nothing reads no news.
+CATCH_UP_DAYS: Final = 7
+
+
+def monthly_budget() -> float:
+    """What the nightly loop may spend in a rolling month, in yuan.
+
+    The tracker's share of OpenCode Go's monthly allowance, less the daytime spend
+    no ledger sees: $80 x ¥7.1 x 85% - 30 x ¥1 = ¥452.80.
+    """
+    return GO_MONTHLY_USD * CNY_PER_USD * TRACKER_SHARE - WINDOW_DAYS * DAYTIME_CNY
+
+
+def allowance(calls: Iterable[Call], *, now: dt.datetime, budget: float | None = None) -> float:
+    """Tonight's money ceiling, in yuan, from what the last 29 days spent.
+
+    A night's share of the month (:func:`monthly_budget` / 30, ¥15.09), less a
+    seventh of whatever the previous 29 days spent over their share; never below
+    nothing or above :data:`NIGHT_MAX_CNY`. Nights that spend their allowance close a
+    month at the budget, and a dear stretch is paid back over the next week.
+
+    **Unspent money is not carried over.** Letting a quiet fortnight's savings raise
+    the next nights was tried on the 10-25 ledgers and failed: four weeks ran above
+    the share on October's underspend, and when the cheap nights left the window the
+    month was used up and two nights had nothing to spend.
+    """
+    month = monthly_budget() if budget is None else budget
+    share = month / WINDOW_DAYS
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.UTC)
+    since = now - dt.timedelta(days=WINDOW_DAYS - 1)
+    spent = total(c for c in calls if c.when is not None and since <= c.when <= now)
+    over = max(0.0, spent - share * (WINDOW_DAYS - 1))
+    return max(0.0, min(NIGHT_MAX_CNY, share - over / CATCH_UP_DAYS))
+
+
+def read_all(directory: Path | str) -> list[Call]:
+    """Every call in every ledger in `directory`: the nights, and any hand-run ledger."""
+    try:
+        paths = sorted(Path(directory).glob("*.spend"))
+    except OSError:
+        return []
+    return [call for path in paths for call in read(path)]
 
 
 def is_peak(when: dt.datetime) -> bool:
@@ -302,17 +379,22 @@ def report(calls: Sequence[Call]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """`total`, `report`, `searches` or `summary` of a ledger.
+    """`total`, `report`, `searches` or `summary` of a ledger, or tonight's
+    `allowance` from a directory of them.
 
     Never fails: a shell under `set -e` reads it.
     """
     args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 2 or args[0] not in {"total", "report", "searches", "summary"}:
+    if len(args) != 2 or args[0] not in {"total", "report", "searches", "summary", "allowance"}:
         print(
-            "usage: python -m tracker.spend {total|report|searches|summary} <ledger>",
+            "usage: python -m tracker.spend {total|report|searches|summary} <ledger>\n"
+            "       python -m tracker.spend allowance <ledger directory>",
             file=sys.stderr,
         )
         return 2
+    if args[0] == "allowance":
+        print(f"{allowance(read_all(args[1]), now=dt.datetime.now(dt.UTC)):.2f}")
+        return 0
     calls = read(args[1])
     if args[0] == "total":
         print(f"{total(calls):.2f}")
@@ -332,22 +414,31 @@ if __name__ == "__main__":
 
 __all__ = [
     "BEIJING",
+    "CATCH_UP_DAYS",
     "CNY_PER_USD",
+    "DAYTIME_CNY",
     "FETCH_CNY",
     "FETCH_MODEL",
+    "GO_MONTHLY_USD",
+    "NIGHT_MAX_CNY",
     "PEAK_WINDOWS",
     "PRICES",
     "SEARCH_CNY",
     "SEARCH_MODEL",
+    "TRACKER_SHARE",
     "UNKNOWN_MODEL",
+    "WINDOW_DAYS",
     "Call",
     "PhaseSpend",
+    "allowance",
     "by_phase",
     "fetches",
     "is_peak",
+    "monthly_budget",
     "next_off_peak",
     "parse",
     "read",
+    "read_all",
     "report",
     "searches",
     "summary",

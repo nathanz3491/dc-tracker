@@ -89,10 +89,18 @@
 #             lawsuit against a tracked campus once waited behind the backlog until
 #             10-03 and was mailed as news.
 #
-# WHAT IT COSTS, AND THE CEILING. The ceiling is money: `--cny` (default ¥15, from
-# 2026-10-18, when OpenCode Go's DeepSeek V4.1 Flash allowance became $80 a month —
-# about ¥18 a day), priced from the spend ledger by `tracker.spend` at OpenCode Go's
-# rates for the hour each call was made. Web searches are a separate bill (prepaid
+# WHAT IT COSTS, AND THE CEILING. The ceiling is money, priced from the spend ledger by
+# `tracker.spend` at OpenCode Go's rates for the hour each call was made. By default it
+# is tonight's share of a month (`tracker.spend allowance`, from 2026-10-25). OpenCode
+# Go's flash allowance is $80 a month, and other work runs on the same plan, so the
+# tracker keeps to 85% of it, less ¥1 a day for the console and hand-run commands,
+# which no ledger records: ¥452.80 over a rolling 30 days, ¥15.09 a night, less a
+# seventh of whatever the last 29 days spent over their share. Unspent money is not
+# carried over: tried on the 10-25 ledgers, it ran four weeks above the share on
+# October's savings and then left two nights with nothing. Before that it was a flat ¥15 that no
+# night reached: from 10-19 to 10-25 the loop spent ¥9.47-12.86 a night and stopped
+# at its fixed point with seven hours to spare, so the volumes below were raised the
+# same day. `--cny N` still sets a flat ceiling for one night. Web searches are a separate bill (prepaid
 # Serper credit, about ¥0.007 each): the ledger records them and `--search-cap`
 # (default 2000 a night, `TRACKER_SEARCH_CAP`) stops every command at it; the news
 # watch, which runs first, may use all but 500 of them, so the research that runs
@@ -114,6 +122,14 @@
 # at ~¥0.12 a row, about ¥5), 40 queued articles (~¥0.01 each), 18 feeds, and 60 findings and
 # 40 pairs a round. About ¥7 a night, so the ceiling still has room; the enrich pass
 # is the largest single phase, which bounds the overshoot at about `--cny` + ¥5.
+#
+# Raised again on 2026-10-25, to spend the month's share: 80 rows on 320 articles
+# (69% of rows still lacked a basic field), 900 queued articles, and 120 each to
+# re-read and re-check. About ¥16-17 a night at the 10-25 rates, which the night's
+# ¥15.09 trims; enrich runs after the duplicate, audit,
+# obstacle, contradiction and tranche passes in a round, so a ceiling reached early
+# cuts reading, never settling. An overshoot is one
+# enrich pass (about ¥6), and the next nights' allowance pays it back.
 #
 # Later rounds are cheaper than the first: every paid phase records what it answered
 # or could not decide, keyed on the evidence it was shown, and does not re-offer it
@@ -187,15 +203,15 @@ PAIRS=40
 AUDIT=60
 RISKS=40
 NEST=20
-ENRICH=40
-ENRICH_BUDGET=160
+ENRICH=80
+ENRICH_BUDGET=320
 ENRICH_ROUNDS=1
-DISCOVER=600
+DISCOVER=900
 BASELINES=300
 SEARCH_CAP=2000
 DATES=150
-REREAD=60
-RECHECK=60
+REREAD=120
+RECHECK=120
 # The twin pass: rows created in the last TWIN_DAYS days, at most TWINS of them a
 # night. A lookback rather than tonight alone, because a night whose pass was capped,
 # crashed or blind (it ran before the rows had a county until 2026-10-20) was never
@@ -209,7 +225,8 @@ DO_MERGE=1
 DO_ENRICH=1
 DO_DISCOVER=1
 TOKEN_CAP=25000000
-CNY_CAP=15
+# Empty: tonight's share of the month (`tracker.spend allowance`). `--cny` sets it.
+CNY_CAP=
 JUDGEMENT_EFFORT=high
 EXTRACTION_EFFORT=
 LOCAL_JUDGEMENT=0
@@ -234,10 +251,10 @@ started in tmux and left.
   --audit N          audit findings per round (default 60)
   --risks N          obstacles per round (default 40)
   --nest N           campuses whose tranches the model nests, per round (default 20)
-  --enrich N         projects to enrich (default 40); 0 to skip
-  --enrich-budget N  articles the enrich phase may read (default 160)
+  --enrich N         projects to enrich (default 80); 0 to skip
+  --enrich-budget N  articles the enrich phase may read (default 320)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
-  --discover N       queued articles to read, the news first (default 600); 0 to skip
+  --discover N       queued articles to read, the news first (default 900); 0 to skip
                      discovery, the news watch and the read altogether
   --baselines N      campuses the news watch gives their first, year-long look each
                      night (default 300); 0 for follow-ups only
@@ -245,12 +262,13 @@ started in tmux and left.
                      watch may use all but 500, which the research keeps
   --dates N          pages to ask for a publish date, first round (default 150); 0 to skip
   --reread N         articles to re-read under the current prompt, first round
-                     (default 60); 0 to skip
+                     (default 120); 0 to skip
   --recheck N        articles holding a refusal from before the gate's last
-                     revision to re-read, first round (default 60); 0 to skip
+                     revision to re-read, first round (default 120); 0 to skip
   --min-confidence F floor a duplicate fold needs (default 0.85)
   --no-merge         never fold duplicates; park and rule only. Deletes nothing.
-  --cny N            stop when the night's model spend, priced, reaches N yuan (default 15)
+  --cny N            stop when the night's model spend, priced, reaches N yuan (default:
+                     tonight's share of the tracker's month, `tracker.spend allowance`)
   --tokens N         also stop when prompt+reply tokens pass N (default 25,000,000)
   --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default high)
   --extraction-effort E reasoning for reading articles (default: whatever .env says)
@@ -350,6 +368,18 @@ mkdir -p "$(dirname "$LOG")"
 # file made a second night start at the first night's total. Exported, so every
 # `tracker` child below appends to it.
 export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight-$(date '+%Y%m%d-%H%M%S').spend}"
+# Tonight's money ceiling, unless `--cny` named one: the tracker's daily share of its
+# month on OpenCode Go, less a seventh of whatever the last 29 days overspent
+# (`tracker.spend allowance`, which reads every ledger beside this one). A ceiling
+# that cannot be read falls back to the old ¥15.
+CNY_FROM='--cny'
+if [ -z "$CNY_CAP" ]; then
+  CNY_CAP="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>/dev/null || true)"
+  CNY_FROM="the month's allowance"
+  case "$CNY_CAP" in
+    ''|*[!0-9.]*) CNY_CAP=15; CNY_FROM='the fallback, as no allowance could be read' ;;
+  esac
+fi
 exec > >(tee -a "$LOG") 2>&1
 
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has no
@@ -560,6 +590,7 @@ say "overnight starting  (pid $$)"
 printf '    repo      %s\n' "$REPO"
 printf '    ceilings  %sh, %s rounds, ¥%s, %s tokens, %s searches\n' \
   "$HOURS" "$ROUNDS" "$CNY_CAP" "$TOKEN_CAP" "$SEARCH_CAP"
+printf '    money     ¥%s tonight, from %s\n' "$CNY_CAP" "$CNY_FROM"
 printf '    per round %s findings, %s audit, %s risks, %s pairs\n' \
   "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS"
 printf '    enrich    %s row(s) below T2, %s article budget, first %s round(s)\n' \

@@ -356,7 +356,7 @@ def test_the_loop_adds_campuses_through_the_identity_check():
     First round only, capped, and through the ordinary crawl — whose identity check
     is what keeps a campus held under another name from gaining a twin."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "DISCOVER=600\n" in text
+    assert "DISCOVER=900\n" in text
     assert 'if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then' in text
     assert "tracker discover --no-show < /dev/null || true" in text
     assert 'tracker news --baselines "$BASELINES"' in text
@@ -376,8 +376,13 @@ def test_the_news_comes_first_in_the_night():
 
 
 def test_the_night_has_a_model_ceiling_and_a_separate_search_cap():
+    """The ceiling is tonight's share of the tracker's month on OpenCode Go (85% of
+    $80, other work shares the plan), read from every ledger; ¥15 if none can be."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "CNY_CAP=15\n" in text, "OpenCode Go's $80 a month, about ¥18 a day; ¥15 is the plan"
+    assert "CNY_CAP=\n" in text
+    assert '"$PY" -m tracker.spend allowance "$(dirname "$LOG")"' in text
+    assert "CNY_CAP=15; CNY_FROM=" in text, "a fallback when no allowance can be read"
+    assert text.index("tracker.spend allowance") < text.index('say "overnight starting')
     assert "SEARCH_CAP=2000\n" in text
     assert 'export TRACKER_SEARCH_CAP="$SEARCH_CAP"' in text
     assert 'tracker news report --since "$STARTED_UTC"' in text
@@ -634,7 +639,7 @@ def test_the_first_round_asks_publishers_for_dates_and_rereads_old_prompts():
     loop never asked a publisher, and 2,320 last read by a superseded prompt
     because nothing re-read them."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "DATES=150\n" in text and "REREAD=60\n" in text
+    assert "DATES=150\n" in text and "REREAD=120\n" in text
     assert 'tracker backfill dates --apply --refetch --yes --limit "$DATES"' in text
     assert "tracker ingest crawl --stale-prompt --cached-only --existing-only" in text
     reread = text.index('phase "reread')

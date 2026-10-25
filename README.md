@@ -191,8 +191,13 @@ until two consecutive rounds fail to reduce either count, because neither is a
 queue that drains — ruling a claim out re-derives a row and can raise a finding
 the old value hid, and merging changes the survivor's claim set and can match a
 third row. Ceilings on hours, rounds, **yuan** and tokens, a `VACUUM INTO` snapshot
-before the first merge, and one run at a time. The money ceiling (`--cny`, default
-¥15) is checked before every paid phase and counts every paid model call: each one
+before the first merge, and one run at a time. The money ceiling is tonight's share
+of a month by default (`python -m tracker.spend allowance <ledger directory>`). Other
+work shares the OpenCode Go plan, so the tracker keeps to 85% of its $80 month, less
+¥1 a day for the console and hand-run commands: ¥452.80 over a rolling 30 days. A night
+gets a thirtieth of that, ¥15.09, less a seventh of whatever the last 29 days spent over
+their share; unspent money is not carried over. `--cny N` sets a flat ceiling instead. It is
+checked before every paid phase and counts every paid model call: each one
 appends a line to the night's spend ledger (`TRACKER_SPEND_LEDGER`, which the script
 sets), `tracker/spend.py` prices it at the published rate for the hour it was made,
 and the morning report breaks the total down by command and stage. A token ceiling

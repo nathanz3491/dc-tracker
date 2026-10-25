@@ -515,6 +515,27 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly loop spends a fixed share of the month, and reads more to fill it**
+  (`tracker/spend.py` `allowance`, `monthly_budget`, `read_all`, `allowance` command;
+  `scripts/overnight.sh`; README; `tests/test_cost_controls.py`,
+  `tests/test_overnight.py`). OpenCode Go allows $80 a month on the flash model, and
+  other work shares the plan, so the tracker keeps to 85% of it: ¥452.80 over a
+  rolling 30 days, after ¥1 a day held back for the console and hand-run commands,
+  which no ledger records. Each night's ceiling is a thirtieth of that, ¥15.09, less a
+  seventh of whatever the last 29 days spent over their share. It used to be a flat
+  ¥15 that no night reached: from 10-19 to 10-25 the loop spent ¥9.47-12.86 a night,
+  about 60% of the allowance, and stopped with seven hours to spare. So it now:
+  - enriches 80 campuses on 320 articles a night (69% of campuses still lacked a
+    basic field);
+  - reads 900 queued articles;
+  - re-reads and re-checks 120 each.
+
+  Unspent money is not carried over. Tried on the real ledgers, that ran four weeks
+  above the share on October's savings, then left two nights with nothing to spend.
+  Simulated over 120 nights on the 10-25 ledgers, no 30 days exceed ¥452.80 (85% of
+  $80 with the daytime allowance), and no night falls below ¥15.09. More enriching
+  means more web searches, from the prepaid credit (31,902 left on 10-25, about 24
+  nights at the new rate).
 - **Where a figure came from is now read from the master data table, so the download
   and the page cannot disagree** (`tracker/facts.py` `Statements`, `follow`,
   `drifted`; migration 0048 `fact_claim`; `tracker/export.py` `to_json_object`,

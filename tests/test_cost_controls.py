@@ -315,3 +315,78 @@ def test_the_cache_can_be_turned_off():
     backend = _Backend()
     assert cached(backend, Settings(search_cache_days=0)) is backend
     assert isinstance(cached(backend, Settings(search_cache_days=7)), CachedProvider)
+
+
+# --- the month (2026-10-25) --------------------------------------------------------
+
+
+def _night(day: dt.datetime, cny: float) -> str:
+    """A ledger line costing `cny` yuan off-peak: flash replies at $0.60 per million."""
+    reply = round(cny / (0.60 * spend.CNY_PER_USD) * 1e6)
+    return f"{day:%Y-%m-%dT%H:%M:%SZ}\t1\tenrich\tdeepseek-v4.1-flash\t0\t{reply}\t0\t0\textract\n"
+
+
+def test_the_tracker_keeps_to_85_percent_of_the_month_less_the_daytime_calls():
+    assert spend.monthly_budget() == pytest.approx(80 * 7.1 * 0.85 - 30 * 1.0)  # ¥452.80
+
+
+def test_a_month_spent_at_its_share_leaves_tonight_its_share():
+    now = dt.datetime(2026, 11, 20, 10, 0, tzinfo=dt.UTC)
+    share = spend.monthly_budget() / 30
+    lines = [_night(now - dt.timedelta(days=d), share) for d in range(1, 30)]
+    calls = [spend.parse(line) for line in lines]
+    assert spend.allowance(calls, now=now) == pytest.approx(share, abs=0.01)
+
+
+def test_a_quiet_month_is_not_carried_over():
+    """Carrying October's underspend over ran nights above the share for four weeks,
+    then left two nights with nothing once the cheap ones left the window."""
+    now = dt.datetime(2026, 10, 26, 10, 0, tzinfo=dt.UTC)
+    quiet = [spend.parse(_night(now - dt.timedelta(days=d), 11.0)) for d in range(1, 30)]
+    share = spend.monthly_budget() / 30
+    assert spend.allowance(quiet, now=now) == pytest.approx(share)
+    assert spend.allowance([], now=now) == pytest.approx(share)
+
+
+def test_a_dear_month_pays_itself_back_over_a_week_not_in_one_night():
+    now = dt.datetime(2026, 11, 20, 10, 0, tzinfo=dt.UTC)
+    share = spend.monthly_budget() / 30
+    dear = [spend.parse(_night(now - dt.timedelta(days=d), share + 3)) for d in range(1, 30)]
+    tonight = spend.allowance(dear, now=now)
+    assert tonight == pytest.approx(share - 29 * 3 / 7, abs=0.05)
+    assert tonight > 0, "a night at nothing reads no news"
+    gone = [spend.parse(_night(now - dt.timedelta(days=1), 600.0))]
+    assert spend.allowance(gone, now=now) == 0.0
+
+
+def test_nights_that_want_more_than_their_share_keep_every_month_inside_the_budget():
+    now = dt.datetime(2026, 11, 1, 10, 0, tzinfo=dt.UTC)
+    nights: list = []
+    spent = []
+    for day in range(90):
+        when = now + dt.timedelta(days=day)
+        cny = min(spend.allowance(nights, now=when), 25.0)
+        nights.append(spend.parse(_night(when, cny)))
+        spent.append(cny)
+    worst = max(sum(spent[i : i + 30]) for i in range(61))
+    assert worst <= spend.monthly_budget() + 0.05
+    assert min(spent) > 0
+
+
+def test_only_the_last_29_days_count_and_searches_never_do(tmp_path):
+    now = dt.datetime(2026, 11, 20, 10, 0, tzinfo=dt.UTC)
+    (tmp_path / "old.spend").write_text(
+        _night(now - dt.timedelta(days=40), 500.0), encoding="utf-8"
+    )
+    (tmp_path / "night.spend").write_text(
+        "2026-11-19T12:00:00Z\t1\tnews\tserper\t0\t0\t0\t0\tnews\n" * 1000, encoding="utf-8"
+    )
+    (tmp_path / "notes.txt").write_text(_night(now - dt.timedelta(days=1), 500.0), encoding="utf-8")
+    assert spend.allowance(spend.read_all(tmp_path), now=now) == pytest.approx(
+        spend.monthly_budget() / 30
+    )
+
+
+def test_the_allowance_is_a_command_the_loop_can_read(tmp_path, capsys):
+    assert spend.main(["allowance", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == f"{spend.monthly_budget() / 30:.2f}"
