@@ -284,6 +284,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "duplicates park",
             "duplicates unpark",
             "duplicates parked",
+            # The opposite question — one row holding several campuses. A read, beside
+            # the reads it mirrors; the repair it points to is `logic rule-out`.
+            "duplicates mixed",
             "merge",
             "exclude",
             "rename",

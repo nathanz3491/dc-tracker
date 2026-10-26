@@ -49,6 +49,7 @@ COMMANDS = {
     "digest",
     "discover",
     "duplicates",
+    "duplicates mixed",
     "duplicates park",
     "duplicates parked",
     "duplicates resolve",

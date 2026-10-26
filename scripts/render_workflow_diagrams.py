@@ -588,7 +588,7 @@ def sync() -> Canvas:
 
 
 def duplicates() -> Canvas:
-    c = Canvas(1500, 1000)
+    c = Canvas(1500, 1240)
     c.title(
         "tracker duplicates — raise a pair, rank it, answer it",
         "One site often has a builder, a landlord and an occupier. Every dedup key is correct; the "
@@ -722,9 +722,40 @@ def duplicates() -> Canvas:
     c.arrow([rails.right(), (924, rails.cy), (924, merge.cy), (936, merge.cy)], colour=RED)
 
     c.box(
-        1160, 630, 292, 236, "The group, and what is outside it",
-        ["duplicates · list the suspected groups", "duplicates park · these are different sites", "duplicates unpark · reopen that decision", "duplicates parked · who ruled what, and why", "duplicates resolve · work through them", "", "merge lives outside the group on purpose:", "it deletes rows, and that deserves its own", "name.", "", "A wrong merge destroys two rows and no", "re-crawl recovers them; a wrong split is", "visible and recoverable. That asymmetry is", "why every rail above refuses rather than asks."],
+        1160, 630, 292, 250, "The group, and what is outside it",
+        ["duplicates · list the suspected groups", "duplicates park · these are different sites", "duplicates unpark · reopen that decision", "duplicates parked · who ruled what, and why", "duplicates resolve · work through them", "duplicates mixed · one row, several campuses", "", "merge lives outside the group on purpose:", "it deletes rows, and that deserves its own", "name.", "", "A wrong merge destroys two rows and no", "re-crawl recovers them; a wrong split is", "visible and recoverable. That asymmetry is", "why every rail above refuses rather than asks."],
         role="panel", title_size=13, align="left", sub_size=10.2,
+    )
+
+    c.rule(918)
+    c.section(48, 952, "the mirror question", "duplicates mixed — one row holding several campuses. Read-only: a person splits it")
+
+    reading = c.box(
+        48, 984, 268, 158, "What a citation calls its site",
+        ["the name it gives, minus whatever names", "no site — industry words, places, the", "company, its brands and its tenants,", "codenames, building codes — plus the", "roads its location sentences give.", "", "Coordinates are a town's centre and", "capacity is not identity, so neither", "joins sites nor separates them"],
+        role="cool", title_size=12.5, align="left", sub_size=10.2,
+    )
+    grouped = c.box(
+        348, 984, 236, 158, "Grouped into sites",
+        ["citations sharing a word (a spelling", "one letter off counts), a building", "code, or a sentence naming the", "other's site are one site.", "", "Joining is the cautious direction:", "a wrong join hides a mixed row, a", "wrong split lists a sound one"],
+        role="cool2", title_size=12.5, align="left", sub_size=10.2,
+    )
+    listed = c.box(
+        616, 984, 330, 158, "Listed when two sites never meet",
+        ["· one of the two is a name, not only a road:", "   Red Oak is on Stainback and on Batchler", "· each is named by two publishers, or by an", "   address or a corner (Pecos & Crismon)", "· a codename never stands as a site", "· a word one company uses 100 km apart is", "   a brand, not a site: SUPERNAP", "· a claim a person ruled out is not evidence"],
+        role="red", title_size=12.5, align="left", sub_size=10.2,
+    )
+    splits = c.box(
+        978, 984, 220, 158, "A person splits it",
+        ["logic rule-out ID FIELD", "   --citation N  (blocks for", "   the citation's tranches)", "tranches rule ID T elsewhere", "rename · unalias", "", "The row leaves the list once", "nothing the other site's", "citations claim still stands"],
+        role="panel", title_size=12.5, align="left", sub_size=10.2,
+    )
+    for a, b in ((reading, grouped), (grouped, listed), (listed, splits)):
+        c.arrow([a.right(), (b.x, b.cy)])
+    c.box(
+        1230, 984, 222, 158, "Measured, 2026-10-26",
+        ["14 rows listed; on reading, all 14", "hold two campuses or more: AWS in", "Spotsylvania and Louisa, NTT's", "three Mesa rows, Digital Realty in", "Santa Clara, Hillsboro and", "Charlotte, Prime, Prologis, Nvidia,", "DataBank, STACK, NTT Hillsboro"],
+        role="plain", title_size=12.5, align="left", sub_size=10.2,
     )
 
     c.footer(

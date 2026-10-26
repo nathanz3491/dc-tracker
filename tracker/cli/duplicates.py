@@ -2,7 +2,8 @@
 
 The group proposes, parks and (behind `--merge`) folds; `merge` lives beside it in
 this module because it is the disposing half of the same question, while staying a
-top-level command by name because it deletes rows and deserves its own. The
+top-level command by name because it deletes rows and deserves its own. `duplicates
+mixed` is the mirror question — one row holding several campuses — and only reports. The
 pipeline is drawn in `docs/workflows/duplicates.md`; touching a function named in
 that page's source map means updating the page in the same commit (`CLAUDE.md` §7).
 """
@@ -78,7 +79,8 @@ def duplicates(
     two answers to one: `park` records that a group is *not* one campus, `unpark`
     reopens that decision, and `parked` shows every pair already ruled out. The
     other answer is `tracker merge`, which lives outside this group because it
-    deletes rows and that deserves its own name.
+    deletes rows and that deserves its own name. `mixed` asks the opposite question:
+    which single rows hold citations about more than one campus.
 
     One site often has a builder, a landlord and an occupier, and whichever name a
     source picks becomes its own row with its own dedup key. Every key is correct;
@@ -661,6 +663,93 @@ def duplicates_parked() -> None:
     engine = _read_engine()
     with session_scope(engine, commit=False) as session:
         _print_parked(pairs_mod.listing(session))
+
+
+@duplicates_app.command("mixed")
+def duplicates_mixed(
+    limit: Annotated[int, typer.Option("--limit", help="Rows to show.")] = 30,
+) -> None:
+    """Rows whose citations describe more than one campus: the opposite question.
+
+    `tracker duplicates` asks whether two rows are one campus; this asks whether one
+    row is several. A row is one company in one town or county, so where a company
+    builds several campuses there, every article about any of them lands on the same
+    row and its capacity, dates and phase become a mixture nobody chose. AWS's #158 in
+    Spotsylvania County carried the Cosner, Orrock, Crossroads and Carter's Store
+    campuses at once; NTT's Mesa rows, the Elliot Road campus open since 2022 and the
+    land at Pecos and Crismon roads bought in 2025 for a campus due in 2028.
+
+    Each row is listed with its sites, the citations that name each one, and what
+    those citations claim. A site is what is left of a citation's name once industry
+    words, places, company names, brands, codenames and building codes are taken out,
+    plus the roads its location sentences give. A row is listed only when two sites
+    never meet in one citation, at least one is a name rather than only a road, and
+    each is named by two publishers or by an address.
+
+    Read-only: nothing is split. A person repairs a row with the tools that exist —
+    `tracker logic rule-out ID FIELD --citation N` takes a citation's claim off the row
+    (`blocks` takes its tranches), `tracker tranches rule ID TRANCHE elsewhere` moves
+    one tranche out, `tracker rename` names the row for the campus it keeps, and
+    `tracker unalias` stops a folded key routing another campus's articles here. A row
+    leaves this list once nothing the other site's citations claim still stands, and a
+    name ruled out as a misreading stops raising it.
+    """
+    from tracker import mixed as mixed_mod
+
+    engine = _read_engine()
+    with session_scope(engine, commit=False) as session:
+        rows = mixed_mod.mixed_rows(session)
+
+    if json_mode():
+        emit({"count": len(rows), "rows": [r.as_json() for r in rows]})
+        return
+
+    if not rows:
+        console.print("[green]no row's citations describe more than one campus[/green]")
+        return
+
+    most = rows[0]
+    console.print(
+        f"[bold]{len(rows)}[/bold] row(s) whose citations describe more than one campus — "
+        "each mixes those sites' figures until a person splits it."
+    )
+    console.print(
+        f"[dim]most on one row: #{most.project_id} {escape(most.company)} — "
+        f"{escape(most.name)}, {len(most.sites)} sites[/dim]\n"
+    )
+    table = Table(header_style="bold", box=TABLE_BOX, show_lines=False)
+    table.add_column("row", max_width=38)
+    table.add_column("site", max_width=46)
+    table.add_column("citations", max_width=24)
+    table.add_column("they say", max_width=40, style="dim")
+    for row in rows[:limit]:
+        heading = (
+            f"#{row.project_id} {escape(row.company)} — {escape(row.name)}\n"
+            f"[dim]{escape(row.place)}, {row.state} · {row.citations} citations[/dim]"
+        )
+        for i, site in enumerate(row.sites):
+            label = escape(site.label)
+            if site.is_row_name:
+                label += " [cyan](the row's name)[/cyan]"
+            if site.roads:
+                label += f"\n[dim]on {escape(', '.join(r.title() for r in site.roads))}[/dim]"
+            table.add_row(
+                heading if i == 0 else "",
+                label,
+                ", ".join(str(s) for s in site.source_ids),
+                escape(site.says or "—"),
+                end_section=i == len(row.sites) - 1,
+            )
+    console.print(table)
+    if len(rows) > limit:
+        console.print(f"[dim]{len(rows) - limit} more; raise --limit[/dim]")
+    console.print(
+        "\n[dim]keep one campus per row: take the other's claims off with[/dim] "
+        "tracker logic rule-out ID FIELD --citation N --why ...\n"
+        "[dim](FIELD is mw_planned, phase, expected_online, … or blocks for its tranches); "
+        "`tracker rename` if the row is named for the campus it gives up. A row leaves "
+        "this list once nothing the other site's citations claim still stands.[/dim]"
+    )
 
 
 @app.command()

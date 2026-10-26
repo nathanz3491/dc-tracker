@@ -858,6 +858,9 @@ say 'how the figures relate'
 tracker invariants --record < /dev/null || true
 echo
 tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
+# The opposite question: one row holding several campuses' citations, so its figures
+# are a mixture. Read-only — the count and the worst row; a person splits them.
+tracker duplicates mixed < /dev/null 2>&1 | sed -n '1,2p' || true
 
 ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
 say "overnight complete — ${ELAPSED}m, $(spent_summary)"

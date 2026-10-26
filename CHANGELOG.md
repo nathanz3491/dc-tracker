@@ -48,6 +48,29 @@ initial build of the v1 PRD.
   return every night. A run asked about a few fields now also stops as soon as those
   are filled and hands the rest of its article share to the next campus — this applies
   to `--basics` too.
+- **A person can see which campus rows hold more than one campus, and which citation
+  says which** (`tracker duplicates mixed`; `tracker/mixed.py` `mixed_rows`;
+  `tracker/cli/duplicates.py` `duplicates_mixed`; the morning report in
+  `scripts/overnight.sh`; `docs/workflows/duplicates.md` and its poster;
+  `tests/test_mixed.py`). A row is one company in one town or county, so where a
+  company builds several campuses there, every article about any of them lands on the
+  same row and its capacity, dates and phase become a mixture nobody chose: AWS's
+  Spotsylvania County row, named for the Carter's Store Tech Campus, also carried the
+  Cosner, Orrock and Crossroads campuses, and each of NTT's three Mesa rows held both
+  the Elliot Road campus, open since 2022, and the land at Pecos and Crismon roads
+  bought in 2025 for a campus due in 2028. The new report is the mirror of `tracker
+  duplicates`: it lists each such row with its sites, the citations that name each one
+  and what they claim, and writes nothing — a person splits the row with `tracker
+  logic rule-out` (a citation's claims, or with `blocks` its tranches), `tranches rule
+  … elsewhere`, `rename` and `unalias`, and the row leaves the list once nothing the
+  other campus's citations claim still stands. A site is what is left of a citation's
+  name once industry words, places, company names and brands, codenames and building
+  codes are taken out, plus the roads its location sentences give; a row is listed only
+  when two sites never meet in one citation, one of them is a name rather than only a
+  road, and each is named by two publishers or by an address. On the 2026-10-26
+  snapshot it lists 14 rows, and read by hand all 14 hold two campuses or more; a first
+  draft on name words alone listed 34, about 20 of them one campus under two names. The
+  morning report prints its count under `tracker duplicates`'s.
 - **A reader can see which suppliers are being named on campuses for the first time,
   across the whole portfolio or one company's campuses** (`tracker/parties.py`
   `newly_named`, `NEW_DAYS`; `tracker/vocab.py` `PARTY_ROLES_SUPPLYING`;

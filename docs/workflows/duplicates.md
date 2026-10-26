@@ -6,11 +6,15 @@ One site often has a builder, a landlord and an occupier, and whichever name a
 source picks becomes its own row with its own dedup key. Every key is correct; the
 building is one.
 
-Bare `tracker duplicates` and `duplicates parked` are **read-only**. `park`,
-`unpark` and `resolve` write and take the single-writer lock, so per `CLAUDE.md` §2
-they run on the production host.
+The opposite happens too: one row holding several campuses' citations, because a
+company built more than one in the same town or county. `duplicates mixed` lists
+those — see [One row, several campuses](#one-row-several-campuses-duplicates-mixed).
 
-![The duplicates workflow: four detection passes, the ranked evidence classes, and the three answers with every rail that refuses a merge](duplicates.svg)
+Bare `tracker duplicates`, `duplicates parked` and `duplicates mixed` are
+**read-only**. `park`, `unpark` and `resolve` write and take the single-writer lock,
+so per `CLAUDE.md` §2 they run on the production host.
+
+![The duplicates workflow: four detection passes, the ranked evidence classes, the three answers with every rail that refuses a merge, and the mirror check for one row holding several campuses](duplicates.svg)
 
 ## How a pair is raised
 
@@ -120,6 +124,7 @@ so four rows for one site are one decision rather than six.
 | `duplicates unpark A B …` | yes | the exact inverse, including its shape |
 | `duplicates parked` | no | every pair ruled out, with `decided_by` and the reason |
 | `duplicates resolve` | yes | works through them with a model |
+| `duplicates mixed` | no | the opposite question: rows whose citations describe more than one campus, with the citations that name each site and what they claim |
 
 `tracker merge` lives **outside** the group on purpose: it deletes rows, and that
 deserves its own name.
@@ -322,6 +327,107 @@ the article extraction already read, rather than fetching it again, and is hande
 suspected row's full details so it answers the same question `resolve` asks here, one
 call earlier and with nothing yet to undo.
 
+## One row, several campuses: `duplicates mixed`
+
+The mirror of everything above. A row's identity is one company in one place —
+`dedup_key` is `company|locality|STATE` — so where a company builds several campuses
+in one county or one town, every article about any of them is filed on the same row,
+and its capacity, dates and phase become a mixture nobody chose. On the 2026-10-26
+production snapshot AWS's #158 in Spotsylvania County, named for the Carter's Store
+Tech Campus, also cited the Cosner, Orrock and Crossroads campuses; each of NTT's
+three Mesa rows mixed the Elliot Road campus, open since 2022, with the land at Pecos
+and Crismon roads bought in 2025 for a campus due in 2028.
+
+`duplicates mixed` lists those rows with their sites, the citations that name each
+site, and what those citations claim. It is **read-only**: splitting is a person's
+call, made with the tools below, and nothing here writes. The nightly morning report
+prints its first two lines — how many rows, and the one with the most sites — under
+`tracker duplicates`'s.
+
+### What a citation's site is
+
+Every citation keeps the name it gave the site (`claims.name`) and the sentences
+behind its claims (`quotes`). Its site is what is left of that name once everything
+that names no particular site is taken out, plus the roads its location sentences
+(the quotes behind its name, city, county and state) put it on.
+
+| Taken out | Why |
+| --- | --- |
+| industry words, stages, sizes and ordinals | "Digital Infrastructure Campus", "AI-Ready", "High Performance Computing Center" say what kind of site, not which. Each raised a false site on the snapshot |
+| every locality the database knows in the state, and the state | every Ashburn campus is called Ashburn something |
+| the company, its spellings and initials; rostered operators and end users; parties named at two or more places | "Anthropic-Amazon New Carlisle" says who, not where |
+| a word one company uses at two campuses 100 km apart (`BRAND_KM`) or in two states | SUPERNAP is Las Vegas and Reno; Fairwater is Wisconsin and Atlanta |
+| building codes — `PH1`, `DFW-02`, `IAD 327` — and capitals with no digit | one campus holds many buildings: NTT's VA1 to VA7 in Ashburn. A code still joins the citations that share it |
+| codenames, "Project X" | how a site is known before it has a public name. Six false sites on the snapshot were a codename beside a public name: Helios, Matador, Excalibur, Morgan, Llano, Potomac Promise |
+| a landmark after "former" or "near" | the "Former Sears HQ" is 3333 Beverly Road |
+
+A party named for the one site it holds stays: "Pacific Proving LLC" sold NTT the land
+at Pecos and Crismon roads, and taking party names out of site names took the site's
+own name with it.
+
+### Which citations are one site
+
+Citations are joined when they share a word (a spelling one letter off counts —
+"Camelia" is "Camellia", "Bridgefeld" is "Bridgefield"), share a building code, or
+one's location sentence names the other's site. **Joining is the cautious
+direction**: a wrong join hides a mixed row, a wrong split lists a sound one. Fermi's
+Matador articles say it is "officially named" the Donald J. Trump Advanced Energy and
+Intelligence Campus, and that sentence keeps the two names one campus. A landform is
+not a name for this purpose: a sentence about water discharged "into Sedges Creek" does
+not name AWS's Northeast Creek campus.
+
+### When two sites are listed
+
+Two sites that never meet are listed only when
+
+* **one of them is a name, not only a road.** A campus has several sides: DataBank's
+  Red Oak campus is "along Stainback Road" in one article and at "3080 Batchler Rd."
+  in another;
+* **each is named by two publishers, or by an address or a street corner.** One
+  article's nickname — RagingWire's "The Bolt", Aligned's "Deer Valley" — is not a
+  second campus; a directory's page for "NTT Global Data Centers Mesa Campus (Pecos &
+  Crismon)" is.
+
+Three signals were measured and left out. **Coordinates**: every stored point is the
+town's Census centre, one per row, so two campuses in one town share it. **Capacity**:
+one campus's buildings are quoted at different sizes, and Prime's two Santa Clara
+buildings are 9 MW each, so a figure neither joins sites nor separates them. **Towns
+inside a county row**: 15 county rows had citations naming two towns, and 13 were one
+campus seen from its town and from the next one.
+
+### Measured
+
+On the 2026-10-26 snapshot (954 rows, 7,648 citations) the report lists 14 rows, and
+read by hand every one holds two campuses or more: AWS in Spotsylvania and Louisa
+counties, NTT's three Mesa rows, Digital Realty in Santa Clara, Hillsboro and
+Charlotte, Prime in Santa Clara, Prologis and Nvidia in San Jose, DataBank in Atlanta,
+and STACK and NTT in Hillsboro. A first draft that compared name words alone listed 34
+rows, about 20 of them one campus under two names; each rule above is one of those
+shapes. Recall is what that precision cost. A row is missed when its second campus is
+named by one publisher only — STACK's Phoenix row holds one article about its Avondale
+Techplex campus — or when the two names meet: xAI's Memphis row holds Colossus on Paul
+R. Lowry Road and Colossus 2 on Tulane Road, but the names share their word once the
+ordinal is dropped, and one article names both roads in a sentence.
+
+### What a person does
+
+Keep one campus on the row and take the other's claims off it:
+
+* `tracker logic rule-out ID FIELD --citation N --why …` takes one citation's claim
+  about one field out of the merge; `blocks` as the field takes its tranches off the
+  row.
+* `tracker tranches rule ID TRANCHE elsewhere --by NAME` moves a single tranche out.
+* `tracker rename ID NAME --why …` when the row is named for the campus it gives up.
+* `tracker unalias KEY --why …` when a merge's key routes the other campus's articles
+  here.
+
+The report reads those rulings. A claim decided against is not evidence, and a
+citation none of whose claims still stands — every figure, date and phase, and its
+tranches — is left out, so a row leaves the list as it is repaired. A row that is one
+campus after all leaves it the same way: rule the odd name out (`tracker logic
+rule-out ID name --citation N`). Nothing here creates the other campus's row; a
+reading filed under another key, or `tracker ingest manual`, does.
+
 ## Source map
 
 Touching any of these means the poster is in scope. Re-render with
@@ -347,4 +453,5 @@ Touching any of these means the poster is in scope. Re-render with
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
 | The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
-| CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `unalias`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `_print_parked`, `_dupe_prompt` |
+| One row, several campuses | `tracker/mixed.py` — `mixed_rows`, `_Lexicon.build`, `_Row.read`, `_Row.words`, `_group`, `_names_the_other`, `_disagree`, `_stated`, `_ruled_out`, `_carries_anything`, `_NOT_A_SITE`, `_LANDFORMS`, `_CODE`, `_CODENAME`, `_LANDMARK`, `BRAND_KM`; `scripts/overnight.sh` — the morning report |
+| CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `unalias`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `duplicates_mixed`, `_print_parked`, `_dupe_prompt` |

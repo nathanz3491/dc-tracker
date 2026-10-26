@@ -1851,7 +1851,7 @@ def test_capex_json_is_parseable(dated_pipeline: Path):
 
 #: (group, a phrase only the callback's docstring contains, its subcommands)
 _GROUPS = [
-    ("duplicates", "builder, a landlord and an occupier", ("park", "unpark", "parked")),
+    ("duplicates", "builder, a landlord and an occupier", ("park", "unpark", "parked", "mixed")),
     ("audit", "wrong by a thousandfold", ("check", "resolve")),
     ("risks", "single `blocker` column could not answer", ("confirm",)),
     ("queue", "the whole URL", ("check", "prune")),

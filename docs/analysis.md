@@ -277,6 +277,22 @@ three and two of four, including the Ashburn group where RagingWire and NTT hold
 A person at the keyboard may merge what the rails refuse a model. The rails guard an
 *unattended* decision, and `--ask` is the opposite of unattended.
 
+### The opposite: one row holding several campuses
+
+```bash
+tracker duplicates mixed                 # rows whose citations name more than one campus
+tracker --json duplicates mixed          # the same, with every site's citations and claims
+```
+
+A row is one company in one town or county, so a company with three campuses in one
+county can end up with one row carrying all three campuses' capacity, dates and phase
+— AWS's Spotsylvania row did, and each of NTT's three Mesa rows held two campuses.
+The report lists each such row with the citations that name each site and what they
+claim, and changes nothing; `tracker logic rule-out` takes the other campus's claims
+off the row, and the row leaves the list once none of them still stands. How a site
+is read from a citation, and what keeps the list short, is in
+[the duplicates workflow](workflows/duplicates.md#one-row-several-campuses-duplicates-mixed).
+
 ## What could stop these projects being built
 
 ```bash

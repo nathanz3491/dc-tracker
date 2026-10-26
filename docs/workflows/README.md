@@ -9,7 +9,7 @@ and where a run stops.**
 | --- | --- | --- |
 | [enrich](enrich.md) | `tracker enrich` | Which of six retrieval methods runs in which round, why a round stops, when the expensive model rungs are reached — and the three rails that decide what they are never asked |
 | [sync](sync.md) | `tracker sync` — and the unrelated `scripts/sync_db.py` | The seven phases, which two are off by default, which cap bounds which spend, and the gate standing between the queue and a new row |
-| [duplicates](duplicates.md) | `tracker duplicates`, `park`, `unpark`, `parked`, `resolve` | How a pair is *raised*, how its evidence is ranked, and every rail that refuses a merge |
+| [duplicates](duplicates.md) | `tracker duplicates`, `park`, `unpark`, `parked`, `resolve`, `mixed` | How a pair is *raised*, how its evidence is ranked, and every rail that refuses a merge — and the mirror, one row holding several campuses |
 | [logic](logic.md) | `tracker logic check`, `conflicts`, `resolve` | Which layer costs money, which one writes, and what "settled" means for each |
 
 Each file leads with a full-page diagram and then carries the detail a diagram
