@@ -150,6 +150,18 @@ def enrich(
             ),
         ),
     ] = False,
+    pipeline: Annotated[
+        bool,
+        typer.Option(
+            "--pipeline",
+            help=(
+                "With --select/--all: choose campuses under construction or in "
+                "permitting that lack an online date or planned capacity, largest "
+                "first, and ask only for those two fields — what the supply and "
+                "delay views read. The overnight loop's first enrich pass."
+            ),
+        ),
+    ] = False,
     reread: Annotated[
         bool,
         typer.Option(
@@ -247,6 +259,14 @@ def enrich(
     if t2 and not (select or enrich_all):
         _fail("--t2 is a way of choosing rows; pass it with --select N or --all")
         return
+    if pipeline and not (select or enrich_all):
+        _fail("--pipeline is a way of choosing rows; pass it with --select N or --all")
+        return
+    if pipeline and (t2 or basics or fields):
+        _fail(
+            "--pipeline chooses its own rows and fields; pass it without --t2, --basics or --fields"
+        )
+        return
     # `--basics` is a modifier, not a fourth selector: it changes which FIELDS are
     # chased, not how rows are picked, so it composes with all three. On its own it
     # also implies the rows — every row whose defining fields are short — because
@@ -278,7 +298,7 @@ def enrich(
     # `--t2` is the same kind of question: the rows it picks are defined by the
     # fields that tier measures, and a 9-field target would both leave out a row at
     # ten fields that still fails it and stop a chosen row before its gap is filled.
-    if t2:
+    if t2 or pipeline:
         target_fields = None
 
     # What the agent pass may go after. Narrowing it is the cheapest saving
@@ -301,6 +321,8 @@ def enrich(
             return
     elif basics:
         agent_fields = clean_mod.basic_fillable()
+    elif pipeline:
+        agent_fields = enrich_mod.PIPELINE_FIELDS
 
     if browser:
         # Checked here rather than caught around the constructor: the import
@@ -339,6 +361,21 @@ def enrich(
                     return
                 console.print(
                     f"selected {len(wanted)} row(s) short of a defining field, fewest gaps first"
+                )
+            elif pipeline:
+                chosen = enrich_mod.select_pipeline(
+                    session, None if enrich_all else select, max_attempts=max_attempts
+                )
+                wanted += [p for p in chosen if p not in wanted]
+                if not wanted:
+                    console.print(
+                        "[green]nothing to do[/green] — no campus being built or "
+                        "permitted is missing a date or capacity worth asking about"
+                    )
+                    return
+                console.print(
+                    f"selected {len(chosen)} campus(es) being built or permitted with no "
+                    "online date or capacity, largest first"
                 )
             elif select or enrich_all:
                 # --all is --select with no cap: same query, same ordering, and
@@ -397,7 +434,13 @@ def enrich(
                 # query is an API call and every hit it returns is an article to
                 # read, so a field nobody has published costs money every round
                 # until it stops being asked about.
-                want_fields=tuple(clean_mod.BASIC_FIELDS) if basics else None,
+                want_fields=(
+                    tuple(clean_mod.BASIC_FIELDS)
+                    if basics
+                    else enrich_mod.PIPELINE_FIELDS
+                    if pipeline
+                    else None
+                ),
                 max_attempts=max_attempts,
                 reread=reread,
                 focus=focus,

@@ -420,6 +420,18 @@ def test_it_stops_once_every_field_is_filled(session):
     assert report.articles_read == 0
 
 
+def test_a_run_asked_about_two_fields_stops_once_they_are_filled(session):
+    """Its unspent share passes to the next row; reading on would chase fields
+    nobody asked for."""
+    project = add_project(
+        session, phase="construction", mw_planned=230.0, expected_online=dt.date(2027, 1, 1)
+    )
+    add_queued(session, "https://x.com/stack-hillsboro-news", "STACK Hillsboro")
+    report = run(session, project.id, want_fields=enrich.PIPELINE_FIELDS)
+    assert report.stopped_because == "every field it was asked about is filled"
+    assert report.articles_read == 0
+
+
 def test_the_round_ceiling_is_honoured(session):
     """A harvester that keeps yielding new URLs must still terminate."""
     project = add_project(session)
@@ -774,6 +786,44 @@ def test_select_prefers_projects_closest_to_the_target(session):
     chosen = enrich.select_projects(session, 2, target=9)
     assert chosen[0] == near.id, "the project needing one more field comes first"
     assert far.id in chosen
+
+
+def test_the_pipeline_pass_takes_campuses_the_forward_views_cannot_place(session):
+    """On 10-26, 111 of 258 campuses under construction and 135 of 169 in permitting
+    had no online date: invisible to the supply chart and the delay flags."""
+    big = add_project(
+        session, city="Abilene", company="Big Co", phase="construction", mw_planned=1200.0
+    )
+    small = add_project(
+        session, city="Reno", company="Small Co", phase="permitting", mw_planned=20.0
+    )
+    unsized = add_project(
+        session,
+        city="Mesa",
+        company="Unsized Co",
+        phase="construction",
+        expected_online=dt.date(2027, 1, 1),
+    )
+    placed = add_project(
+        session,
+        city="Plano",
+        company="Placed Co",
+        phase="construction",
+        mw_planned=300.0,
+        expected_online=dt.date(2027, 1, 1),
+    )
+    running = add_project(
+        session, city="Quincy", company="Running Co", phase="operational", mw_planned=90.0
+    )
+    announced = add_project(
+        session, city="Tulsa", company="Early Co", phase="announced", mw_planned=500.0
+    )
+
+    chosen = enrich.select_pipeline(session, 10)
+    assert chosen == [big.id, small.id, unsized.id], "largest first, size unknown last"
+    for left_out in (placed, running, announced):
+        assert left_out.id not in chosen
+    assert enrich.select_pipeline(session, 1) == [big.id]
 
 
 def test_select_skips_projects_already_at_the_target(session):

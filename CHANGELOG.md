@@ -12,6 +12,24 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Every night now looks for the opening date and size of campuses being built or
+  permitted, before anything else in its enrich pass** (`tracker enrich --pipeline`;
+  `tracker/ingest/enrich.py` `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`,
+  and the new stop in `run`; `scripts/overnight.sh` `PIPELINE`, `PIPELINE_BUDGET`;
+  `docs/workflows/enrich.md` and its diagram; `tests/test_enrich.py`,
+  `tests/test_cli.py`, `tests/test_overnight.py`). A campus with no expected online
+  date is missing from the supply-by-year chart and can never be flagged as late; one
+  with no planned capacity adds nothing to it. On 2026-10-26 that was 111 of 258
+  campuses under construction and 135 of 169 in permitting, and the night's enrich
+  rarely reached them, because it ranks rows by how close they are to the nine-field
+  bar and these usually are. The loop now gives them their own pass first, largest
+  planned capacity first and unknown size last, asking about those two fields only:
+  30 campuses and 120 articles, taken from the 80 campuses and 200 articles the
+  general pass had alone (now 50). A campus asked twice with nothing found is passed
+  over until it gains a new article, as elsewhere in enrich, so the same thirty do not
+  return every night. A run asked about a few fields now also stops as soon as those
+  are filled and hands the rest of its article share to the next campus — this applies
+  to `--basics` too.
 - **A reader can see which suppliers are being named on campuses for the first time,
   across the whole portfolio or one company's campuses** (`tracker/parties.py`
   `newly_named`, `NEW_DAYS`; `tracker/vocab.py` `PARTY_ROLES_SUPPLYING`;

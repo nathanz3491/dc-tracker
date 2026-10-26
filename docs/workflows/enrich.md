@@ -65,6 +65,18 @@ and found nothing — 0 of 15 on 10-04 — because what they lacked was an inves
 figure or a built capacity nobody had printed. Such a field reopens as soon as the row
 gains a citation, and `tracker clean` still names it (`fields_published`).
 
+**`--pipeline` points the work at campuses the forward views cannot place**, with
+`--select` or `--all`: rows under construction or in permitting that have no expected
+online date or no planned capacity, largest planned capacity first and unknown size
+last, asked about those two fields and nothing else. A campus with no date is missing
+from the supply-by-year chart and can never be flagged as late; one with no size adds
+nothing to it. On 2026-10-26 that was 111 of 258 campuses under construction and 135
+of 169 in permitting, and the `--t2` order seldom reached them: it ranks by how close a
+row is to the bar, and these rows usually miss one of nine fields at most. The
+overnight loop now gives them their own pass before the T2 one (30 rows, 120 articles,
+out of the 80 rows the T2 pass had alone). Rows asked twice with nothing found are
+passed over exactly as above, so the same thirty do not come back every night.
+
 ## `--basics`: the fields that say what a project is
 
 A modifier rather than a fourth way of choosing rows — it changes which *fields* are
@@ -194,8 +206,11 @@ long.
 
 ## Why a round stops
 
-Eight reasons, each reported verbatim as `stopped_because` — the eighth, **"read its
-share of the article budget"**, is the batch budget below. Two are worth knowing:
+Nine reasons, each reported verbatim as `stopped_because` — one, **"read its share of
+the article budget"**, is the batch budget below, and another, **"every field it was
+asked about is filled"**, ends a `--basics` or `--pipeline` row as soon as the fields
+it was chosen for are filled, so the rest of its share passes to the next row. Two
+are worth knowing:
 
 * **"a full round filled nothing new"** is the real stop condition. "Cost no
   object" means bounded by diminishing returns; `--max-rounds` and `--max-articles`
@@ -336,7 +351,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `ArchiveSweep`, `will_harvest`; `tracker/ingest/discover.py` — `RecentWalkFetcher`, `RememberingFetcher`, `walk_cache`, `WALK_FRESH`, `run` (the walk it keeps) |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |

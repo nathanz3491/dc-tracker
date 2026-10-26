@@ -397,6 +397,18 @@ def test_enrich_runs_once_a_night_on_rows_below_t2():
     assert re.search(r"tracker enrich --select \"\$ENRICH\" --t2 ", text)
 
 
+def test_campuses_being_built_without_a_date_are_enriched_before_the_t2_pass():
+    """On 10-26, 246 campuses being built or permitted had no online date, so the
+    supply chart and the delay flags could not place them; the T2 pass ranks by a
+    score those rows rarely lead. They get their own slice of the night, first."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    pipeline = text.index(
+        'tracker enrich --select "$PIPELINE" --pipeline --budget "$PIPELINE_BUDGET"'
+    )
+    assert pipeline < text.index('tracker enrich --select "$ENRICH" --t2 ')
+    assert "PIPELINE=30\n" in text and "ENRICH=50\n" in text
+
+
 @needs_bash
 def test_a_count_that_wobbles_back_down_is_not_progress(tmp_path):
     """The counts from 2026-09-29, round by round. Compared with the round before,

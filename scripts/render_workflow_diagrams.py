@@ -327,22 +327,22 @@ def enrich() -> Canvas:
     # A modifier, not a fourth selector: it changes which FIELDS are chased, so it
     # composes with the three above. Alone it picks the rows too, which is why it
     # sits in this column at all.
-    basc = c.box(48, 358, 186, 44, "--basics", ["every row short of a", "field that defines it"], role="teal", title_size=11.5, sub_size=9)
+    basc = c.box(48, 358, 186, 50, "--basics", ["every row short of a", "field that defines it"], role="teal", title_size=11.5, sub_size=9)
 
     order = c.box(
-        278, 196, 178, 206, "Rows, ordered",
-        ["closest to the target first,", "capacity breaks the tie;", "finished rows, and rows with", "nothing fillable left to ask,", "are passed over", "", "--basics: fewest defining", "fields missing first", "--t2: fewest T2 gaps first", "", "--budget is the real ceiling"],
+        278, 196, 178, 234, "Rows, ordered",
+        ["closest to the target first,", "capacity breaks the tie;", "finished rows, and rows with", "nothing fillable left to ask,", "are passed over", "", "--basics: fewest defining", "fields missing first", "--t2: fewest T2 gaps first", "--pipeline: being built, no", "date or MW, largest first", "", "--budget is the real ceiling"],
         role="cool2",
     )
     for b in (ids, sel, allr, basc):
         c.arrow([b.right(), (278, b.cy)])
 
     derive = c.box(
-        278, 430, 178, 78, "1 · derive",
+        278, 458, 178, 78, "1 · derive",
         ["county, lat, lon from Census.", "Free and certain, so these", "fields are never searched for"],
         role="teal",
     )
-    c.arrow([order.bottom(), (order.cx, 386)])
+    c.arrow([order.bottom(), derive.top()])
 
     frame = c.frame(492, 176, 314, 400, "HARVEST · repeated, up to six rounds")
     y = 210
@@ -393,9 +393,15 @@ def enrich() -> Canvas:
     )
 
     c.text(
-        48, 612,
-        "The other five stops, each reported by name: every field is filled · the row is already at the target (a refusal phrased "
-        "so it cannot read as success) · no harvester found an unread article · the six-round ceiling · its budget share is read.",
+        48, 602,
+        "The other six stops, each reported by name: every field is filled · every field it was asked about is filled (--basics, "
+        "--pipeline) · the row is already at the target",
+        size=10.5, colour=SLATE,
+    )
+    c.text(
+        48, 618,
+        "(a refusal phrased so it cannot read as success) · no harvester found an unread article · the six-round ceiling · its budget "
+        "share is read.",
         size=10.5, colour=SLATE,
     )
 
@@ -437,8 +443,8 @@ def enrich() -> Canvas:
     # The three rails that decide what it is NOT asked. Every one of them saves by
     # not making a call, which is the only saving worth the name at this price.
     c.box(
-        802, 826, 208, 152, "and what it is not asked",
-        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early;", "--t2: only the gaps T2 counts;", "a struck fact counts as tried"],
+        802, 826, 208, 166, "and what it is not asked",
+        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early;", "--t2: only the gaps T2 counts;", "--pipeline: only date and MW;", "a struck fact counts as tried"],
         role="red", title_size=11.5, sub_size=9,
     )
     c.arrow([agent.bottom(), (agent.cx, 826)], colour=RED)

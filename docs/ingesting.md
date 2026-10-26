@@ -668,7 +668,8 @@ field a free one would have filled:
 | refresh | fetch | re-read its existing citations, which get edited |
 
 Each round harvests, extracts, re-measures, and repeats. It stops when a round fills
-nothing new, when no harvester has an unread article, or when every field is filled —
+nothing new, when no harvester has an unread article, or when every field is filled
+(or every field it was asked about, under `--basics` or `--pipeline`) —
 not at a fixed article count. `--max-rounds` and `--max-articles` exist only so a bug
 cannot spend without limit.
 

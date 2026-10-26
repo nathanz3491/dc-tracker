@@ -1054,6 +1054,21 @@ def test_enrich_t2_is_a_way_of_choosing_rows(initialized: Path):
     assert "nothing to do" in result.output and "T2" in result.output
 
 
+def test_enrich_pipeline_is_a_way_of_choosing_rows_and_its_own_target(initialized: Path):
+    """`--pipeline` picks campuses being built or permitted that lack a date or a
+    size, and asks only for those two; mixing it with another target is refused."""
+    refused = invoke(initialized, "enrich", "1", "--pipeline")
+    assert refused.exit_code == 2
+    assert "--select" in refused.output
+
+    mixed = invoke(initialized, "enrich", "--select", "5", "--pipeline", "--t2")
+    assert mixed.exit_code == 2
+
+    result = invoke(initialized, "enrich", "--select", "5", "--pipeline")
+    assert result.exit_code == 0, result.output
+    assert "nothing to do" in result.output
+
+
 def test_enrich_refuses_fields_and_basics_together(initialized: Path):
     result = invoke(initialized, "enrich", "--basics", "--fields", "mw_planned", "--select", "1")
     assert result.exit_code == 2

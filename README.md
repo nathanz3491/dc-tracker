@@ -225,6 +225,10 @@ other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap
 `risks`, the logic and duplicate agents, and — in the first round only
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
+Before it, a smaller enrich pass looks for the opening date and planned capacity of
+campuses being built or permitted that lack one (`--pipeline`, default 30 campuses
+and 120 articles), largest first: without a date a campus is missing from the
+supply chart and can never be flagged as late.
 The first round also reads the news and adds campuses (`--discover`, default 40): it
 polls the feeds, which costs nothing, and reads that many queued articles through
 the crawl's identity check (`ingest crawl --from-queue --new-first`). Everything

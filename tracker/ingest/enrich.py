@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
@@ -792,6 +792,12 @@ def run(
         if not any(s.is_gap for s in gaps):
             report.stopped_because = "every field is filled"
             break
+        # A run asked about a few fields is done when they are: what it would read
+        # next goes after fields nobody asked for, and the share it leaves passes to
+        # the rows after it (`run_many`).
+        if want_fields is not None and not any(s.is_gap and s.field in want_fields for s in gaps):
+            report.stopped_because = "every field it was asked about is filled"
+            break
         if target_fields is not None:
             filled, _ = report_score(gaps)
             if filled >= target_fields:
@@ -1076,6 +1082,52 @@ def select_projects(
     return chosen
 
 
+#: The phases whose campuses make the forward views: the supply by year, the
+#: suspected delays, a company's next three years.
+PIPELINE_PHASES: Final = ("construction", "permitting")
+
+#: What those views cannot place a campus without: when, and how much.
+PIPELINE_FIELDS: Final = ("expected_online", "mw_planned")
+
+
+def select_pipeline(
+    session: Session, limit: int | None, *, max_attempts: int | None = None
+) -> list[int]:
+    """Campuses being built or permitted that lack an online date or planned capacity.
+
+    The forward views read those two fields and nothing else: a campus with no date
+    is in no year of the supply chart and can never be a suspected delay, and one
+    with no capacity adds nothing to anybody's pipeline. On a copy of production on
+    2026-10-26, 111 of 258 campuses under construction and 135 of 169 in permitting
+    had no online date, and 133 of the 427 no planned capacity -- while the nightly
+    enrich chose by the `T2` tier, which weighs every field alike.
+
+    The largest first, then those whose size is unknown: a gigawatt campus missing
+    its date moves the forward views more than a 20 MW one. A campus is skipped when
+    both of its missing fields have been asked about to the limit with no citation
+    gained since (`pursuable`), and comes back the moment it gains one.
+    """
+    from sqlalchemy import desc, or_
+
+    cap = attempts.DEFAULT_MAX_ATTEMPTS if max_attempts is None else max_attempts
+    ranked = session.scalars(
+        select(Project.id)
+        .where(Project.phase.in_(PIPELINE_PHASES))
+        .where(or_(Project.expected_online.is_(None), Project.mw_planned.is_(None)))
+        .order_by(desc(Project.mw_planned.is_not(None)), desc(Project.mw_planned), Project.id)
+    ).all()
+    chosen: list[int] = []
+    for project_id in ranked:
+        if limit is not None and len(chosen) >= limit:
+            break
+        project = session.get(Project, project_id)
+        short = {name for name in PIPELINE_FIELDS if getattr(project, name) is None}
+        if cap > 0 and not pursuable(project, max_attempts=cap, fields=short):
+            continue
+        chosen.append(project_id)
+    return chosen
+
+
 def t2_gaps(project: Project) -> set[str]:
     """The fields `tracker clean`'s `fields_present` condition fails this row for.
 
@@ -1238,6 +1290,8 @@ __all__ = [
     "MAX_ARTICLES_PER_ROUND",
     "MAX_QUERIES",
     "MAX_ROUNDS",
+    "PIPELINE_FIELDS",
+    "PIPELINE_PHASES",
     "ArchiveSweep",
     "BatchReport",
     "EnrichReport",
@@ -1253,6 +1307,7 @@ __all__ = [
     "run",
     "run_many",
     "search_queries",
+    "select_pipeline",
     "select_projects",
     "sweep_archives",
     "will_harvest",

@@ -124,7 +124,8 @@
 # is the largest single phase, which bounds the overshoot at about `--cny` + ¥5.
 #
 # Raised again on 2026-10-25, to spend the month's share: 80 rows on 320 articles
-# (69% of rows still lacked a basic field), 900 queued articles, and 120 each to
+# (69% of rows still lacked a basic field; split on 10-26 into 30 campuses being built
+# or permitted with no date or capacity, then 50 below T2), 900 queued articles, and 120 each to
 # re-read and re-check. About ¥16-17 a night at the 10-25 rates, which the night's
 # ¥16.09 trims; enrich runs after the duplicate, audit,
 # obstacle, contradiction and tranche passes in a round, so a ceiling reached early
@@ -203,9 +204,16 @@ PAIRS=40
 AUDIT=60
 RISKS=40
 NEST=20
-ENRICH=80
-ENRICH_BUDGET=320
+ENRICH=50
+ENRICH_BUDGET=200
 ENRICH_ROUNDS=1
+# The first enrich pass: campuses being built or permitted that lack an online date
+# or planned capacity, largest first, asked only those two fields (`enrich
+# --pipeline`). On 10-26, 111 of 258 under construction and 135 of 169 in permitting
+# had no date, so the supply chart and the delay flags could not see them; the T2
+# pass weighs every field alike and rarely chose them.
+PIPELINE=30
+PIPELINE_BUDGET=120
 DISCOVER=900
 BASELINES=300
 SEARCH_CAP=2000
@@ -251,8 +259,11 @@ started in tmux and left.
   --audit N          audit findings per round (default 60)
   --risks N          obstacles per round (default 40)
   --nest N           campuses whose tranches the model nests, per round (default 20)
-  --enrich N         projects to enrich (default 80); 0 to skip
-  --enrich-budget N  articles the enrich phase may read (default 320)
+  --pipeline N       campuses being built or permitted with no online date or
+                     capacity to enrich first (default 30); 0 to skip
+  --pipeline-budget N articles that pass may read (default 120)
+  --enrich N         projects below T2 to enrich after it (default 50); 0 to skip
+  --enrich-budget N  articles that pass may read (default 200)
   --enrich-rounds N  enrich in the first N rounds only (default 1)
   --discover N       queued articles to read, the news first (default 900); 0 to skip
                      discovery, the news watch and the read altogether
@@ -300,6 +311,8 @@ while [ $# -gt 0 ]; do
     --nest)           shift; NEST="${1:?}" ;;
     --enrich)         shift; ENRICH="${1:?}" ;;
     --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
+    --pipeline)       shift; PIPELINE="${1:?}" ;;
+    --pipeline-budget) shift; PIPELINE_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
     --discover)       shift; DISCOVER="${1:?}" ;;
     --baselines)      shift; BASELINES="${1:?}" ;;
@@ -593,8 +606,8 @@ printf '    ceilings  %sh, %s rounds, ¥%s, %s tokens, %s searches\n' \
 printf '    money     ¥%s tonight, from %s\n' "$CNY_CAP" "$CNY_FROM"
 printf '    per round %s findings, %s audit, %s risks, %s pairs\n' \
   "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS"
-printf '    enrich    %s row(s) below T2, %s article budget, first %s round(s)\n' \
-  "$ENRICH" "$ENRICH_BUDGET" "$ENRICH_ROUNDS"
+printf '    enrich    %s campus(es) with no date or capacity on %s articles, then %s row(s) below T2 on %s, first %s round(s)\n' \
+  "$PIPELINE" "$PIPELINE_BUDGET" "$ENRICH" "$ENRICH_BUDGET" "$ENRICH_ROUNDS"
 printf '    merge=%s  enrich=%s  min-confidence %s\n' "$DO_MERGE" "$DO_ENRICH" "$MIN_CONF"
 if [ "$LOCAL_JUDGEMENT" -eq 1 ]; then WHERE=', on the local model'; else WHERE=''; fi
 printf '    judgement %s effort%s\n' "$JUDGEMENT_EFFORT" "$WHERE"
@@ -743,6 +756,14 @@ for round in $(seq 1 "$ROUNDS"); do
   # round(s) only: a second pass the same night finds the same pages, and a page it
   # has read is not read again, so it was paying to be told so. `--t2` picks the rows
   # that tier fails, fewest missing first.
+  # The forward views first: campuses being built or permitted that lack the date
+  # or the capacity the supply chart and the delay flags read (`--pipeline`).
+  if [ "$round" -le "$ENRICH_ROUNDS" ] && [ "$PIPELINE" -gt 0 ] 2>/dev/null; then
+    if capped pipeline; then break; fi
+    phase "enrich — $PIPELINE campus(es) being built or permitted with no date or capacity, $PIPELINE_BUDGET article budget"
+    tracker enrich --select "$PIPELINE" --pipeline --budget "$PIPELINE_BUDGET" \
+      < /dev/null || true
+  fi
   if [ "$DO_ENRICH" -eq 1 ] && [ "$round" -le "$ENRICH_ROUNDS" ]; then
     if capped enrich; then break; fi
     phase "enrich — $ENRICH row(s) below T2, $ENRICH_BUDGET article budget"
