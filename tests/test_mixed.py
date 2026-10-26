@@ -91,6 +91,20 @@ def test_a_row_holding_three_campuses_is_listed_with_who_says_which(session):
     assert "never name each other" in found.why
 
 
+def test_a_figure_the_gate_did_not_confirm_is_not_shown(session):
+    """ATL3's row showed "9,000 MW" and "40,000 MW" on 10-26: misreadings stored
+    unconfirmed, which no published number uses. The citation still tells the sites
+    apart; only its figure is left out."""
+    row = _spotsylvania(session)
+    misread = _cite(session, row, "https://wrong.example/cosner", "Cosner Tech", mw_planned=9000.0)
+    misread.unconfirmed_fields = "mw_planned"
+    session.flush()
+    (found,) = mixed_rows(session)
+    cosner = next(s for s in found.sites if misread.id in s.source_ids)
+    assert "Cosner" in cosner.label and len(cosner.source_ids) == 3
+    assert cosner.mw == (450.0,)
+
+
 def test_one_campus_with_several_building_codes_is_not_listed(session):
     """NTT's VA1 to VA7 are seven buildings on one Ashburn campus."""
     row = _campus(

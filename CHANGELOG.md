@@ -70,7 +70,10 @@ initial build of the v1 PRD.
   road, and each is named by two publishers or by an address. On the 2026-10-26
   snapshot it lists 14 rows, and read by hand all 14 hold two campuses or more; a first
   draft on name words alone listed 34, about 20 of them one campus under two names. The
-  morning report prints its count under `tracker duplicates`'s.
+  morning report prints its count under `tracker duplicates`'s. A figure the evidence
+  gate left unconfirmed still helps tell the sites apart but is not shown: on
+  production the first run listed ATL3's sites at "9,000 MW" and "40,000 MW", two
+  misreadings no published number uses.
 - **A reader can see which suppliers are being named on campuses for the first time,
   across the whole portfolio or one company's campuses** (`tracker/parties.py`
   `newly_named`, `NEW_DAYS`; `tracker/vocab.py` `PARTY_ROLES_SUPPLYING`;

@@ -478,6 +478,11 @@ class _Reading:
     codes: frozenset[tuple[str, int]]
     codename: bool
     claims: dict[str, Any]
+    #: Claims the evidence gate did not confirm: still evidence of which site a
+    #: citation describes, never a figure to show for it. On the 10-26 copy ATL3's
+    #: row showed "9,000 MW" and "40,000 MW", two unconfirmed misreadings no
+    #: published number uses.
+    unconfirmed: frozenset[str] = frozenset()
 
     @property
     def identity(self) -> frozenset[str]:
@@ -605,6 +610,9 @@ class _Row:
             codes=codes,
             codename=bool(_CODENAME.search(name)),
             claims=live,
+            unconfirmed=frozenset(
+                f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()
+            ),
         )
 
     def tidy(self, road: str) -> str:
@@ -834,7 +842,11 @@ def _site(group: list[_Reading], own: set[str]) -> Site:
     words = sorted(_named(group) | _placed(group))
 
     def values(field: str) -> tuple:
-        got = {r.claims.get(field) for r in group if r.claims.get(field) not in (None, "")}
+        got = {
+            r.claims.get(field)
+            for r in group
+            if r.claims.get(field) not in (None, "") and field not in r.unconfirmed
+        }
         return tuple(sorted(got, key=str))
 
     online = tuple(str(v)[:7] for v in values("expected_online"))
