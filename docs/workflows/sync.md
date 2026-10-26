@@ -166,7 +166,16 @@ again. **Only a date a source states in its own words can make a campus late**
 guess, a month an article never gave, a misread copied by a directory, a 2013
 announcement -- and the fifth, DC Blox Conyers, a real slip whose date the reader
 had stated without a quote. They are not searched for either; a re-read that quotes
-the date brings a real one back.
+the date brings a real one back. **Each go-live check also re-reads the campus's own
+listing pages** when they are more than 30 days old (`watch.relist`,
+`watch.LISTING_STALE`): the directory pages it already cites, queued again and read
+first beside the search's results. A listing changes with its building, and a
+citation keeps what it said on the day it was read: NTT's VA10 page on datacenterHawk
+read "under construction" on 09-15 and "Commissioned" by 10-26, while the row stayed
+a suspected delay on the old reading. Searches still skip directories: their listings
+disagree with the record often enough (one listed DC Blox's first Conyers building as
+running in 2025 while the county said in May 2026 it was being built) that only a page
+already cited for the campus is read.
 
 **A result no campus story can be in is never queued** (`screen.not_news`, asked in
 `watch._screened`): a PDF, a stock-quote or stock-chatter page (Stocktwits, Simply
@@ -768,7 +777,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `walk_sitemap`, `index_children`, `_MEDIA_SITEMAP`, `parse_feed` (newest `lastmod` first), `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | The keyword filter, and what it dropped | `tracker/seed/feeds.toml` — `[filter]`; `tests/fixtures/keyword_cases.json`; `tracker/ingest/discover.py` — `normalize_haystack`, `_SEPARATORS`, `_term_pattern`, `_term_regex`, `_tier`, `_TERM_START`, `term_in`, `first_term`, `_terms`, `FilterSpec.matches`, `judge_candidates`, `known_project_test`, `_GENERIC_NAME_TOKENS`, `_company_words`, `record_seen`, `rejudge`, `TOO_OLD`; `tracker/dedup.py` — `company_aliases`; `tracker/ingest/wiki.py` — `_keyword_pass`, `_substantive`; migration `0039_news_watch` (`seen_url`); `tracker/cli/sync.py` — `discover --rejudge` |
 | Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`, `RememberingFetcher`, `RecentWalkFetcher`, `walk_cache`, `WALK_FRESH`; `tracker/ingest/enrich.py` — `sweep_archives`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
-| The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
+| The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `relist`, `LISTING_STALE`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`, `SEARCH_CNY`, `FETCH_CNY`, `report`, `summary`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |

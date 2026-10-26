@@ -241,6 +241,8 @@ class WatchReport:
     due_golive: int = 0
     golive_checked: int = 0
     golive_queued: int = 0
+    #: Listing pages the go-live check queued to read again (:func:`relist`).
+    golive_relisted: int = 0
 
     @property
     def queued(self) -> int:
@@ -251,6 +253,7 @@ class WatchReport:
             ("past their date, due a go-live search", self.due_golive),
             ("of them searched now", self.golive_checked),
             ("go-live results queued", self.golive_queued),
+            ("listing pages queued to read again", self.golive_relisted),
             ("campuses due again", self.due_followups),
             ("campuses never looked at", self.due_baselines),
             ("campuses looked at", len(self.looks)),
@@ -450,6 +453,59 @@ def golive_query(project: Project, late: Any, *, now: dt.datetime) -> Query | No
     words = " OR ".join(f'"{w}"' for w in GOLIVE_WORDS)
     window = f"cdr:1,cd_min:{start:%m/%d/%Y},cd_max:{now:%m/%d/%Y}"
     return Query(project.id, f"{subject} data center ({words})", "web", window, start, False)
+
+
+#: How old a cited listing page may be before a go-live check reads it again.
+LISTING_STALE: Final = dt.timedelta(days=30)
+
+
+def relist(session: Session, project: Project, *, now: dt.datetime, run_id: str) -> int:
+    """Queue the listing pages a late campus cites, read more than a month ago, again.
+
+    A directory's page about one building changes as the building does, and the
+    citation keeps what it said the day it was read. NTT's VA10 page on
+    datacenterHawk said "under construction" when it was read on 2026-09-15 and
+    "Commissioned" by 10-26, while the row stayed a suspected delay on the old
+    reading: nothing read a cited page twice. Each go-live check now queues the
+    campus's directory pages (`confidence.is_tertiary`) older than
+    :data:`LISTING_STALE`; `discover.deciding` puts them first, with the search's
+    results, and `delays.listed_running` counts what they now say. Searches still
+    skip directories (`ingest.search._SKIP_DOMAINS`): their listings disagree with
+    the record often enough -- one listed DC Blox's first Conyers building as running
+    in 2025 while the county said in May 2026 it was being built -- that only a page
+    already cited for the campus is read. Returns how many were queued.
+    """
+    from tracker import confidence
+    from tracker.models import IngestUrl, Source
+    from tracker.vocab import PENDING_URL_STATUS
+
+    stale = now - LISTING_STALE
+    queued = 0
+    for source in session.scalars(select(Source).where(Source.project_id == project.id)):
+        if not confidence.is_tertiary(source):
+            continue
+        if source.fetched_at is not None and source.fetched_at > stale:
+            continue
+        row = session.scalar(select(IngestUrl).where(IngestUrl.url == source.url))
+        if row is None:
+            session.add(
+                IngestUrl(
+                    url=source.url,
+                    run_id=run_id,
+                    status=PENDING_URL_STATUS,
+                    feed=f"watch:#{project.id}",
+                    attempts=0,
+                    first_seen_at=now,
+                    last_tried_at=now,
+                )
+            )
+        elif row.status != PENDING_URL_STATUS:
+            row.status = PENDING_URL_STATUS
+            row.run_id = run_id
+        else:
+            continue
+        queued += 1
+    return queued
 
 
 def window_for(since: dt.datetime, now: dt.datetime) -> str:
@@ -927,6 +983,7 @@ def run(
             # the same: what the database holds is all there is to go on, and a
             # campus nobody can search for must not be hidden from the list for it.
             log.info("go-live check for #%s: nothing to search by", project.id)
+        report.golive_relisted += relist(session, project, now=now, run_id=run_id)
         project.golive_checked_at = now
         report.golive_checked += 1
         session.commit()

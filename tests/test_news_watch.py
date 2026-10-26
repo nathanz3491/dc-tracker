@@ -934,6 +934,56 @@ def test_a_campus_past_its_date_is_searched_for_going_live_before_it_is_flagged(
     assert not [c for c in again.calls if "opened" in c[1]], "searched once per passed date"
 
 
+def test_a_go_live_check_reads_the_campus_s_stale_listings_again(session, monkeypatch):
+    """NTT's VA10 page on datacenterHawk said "under construction" when read on 09-15
+    and "Commissioned" by 10-26; the row stayed late on the old reading, because
+    nothing read a cited page twice."""
+    from tracker import delays
+
+    monkeypatch.setattr(discover, "utcnow", lambda: NOW)
+    late = _campus(session, 1, phase="construction")
+    late.expected_online = dt.date(2024, 1, 1)
+    late.expected_online_precision = "year"
+    _date_cited(session, late)
+    old = NOW - dt.timedelta(days=41)
+    pages = {
+        "https://datacenterhawk.com/marketplace/providers/x/va10": old,  # stale listing
+        "https://baxtel.com/data-center/fresh": NOW - dt.timedelta(days=5),  # read lately
+        "https://news.test/old-article": old,  # an article, not a listing
+    }
+    for url, when in pages.items():
+        session.add(Source(project_id=late.id, url=url, source_type="trade_press", fetched_at=when))
+        session.add(
+            IngestUrl(
+                url=url,
+                run_id="t",
+                status="ok",
+                attempts=1,
+                first_seen_at=when,
+                last_tried_at=when,
+            )
+        )
+    session.commit()
+    assert delays.awaiting_search(session, today=NOW.date())
+
+    report = watch.run(
+        session,
+        provider=FakeNews(),
+        now=NOW,
+        feeds_path=_feeds(session),
+        followups=0,
+        baselines=0,
+    )
+    status = {u.url: u.status for u in session.scalars(select(IngestUrl))}
+    assert report.golive_relisted == 1
+    assert status["https://datacenterhawk.com/marketplace/providers/x/va10"] == PENDING_URL_STATUS
+    assert status["https://baxtel.com/data-center/fresh"] == "ok"
+    assert status["https://news.test/old-article"] == "ok"
+    assert [r.url for r in discover.deciding(session)] == [
+        "https://datacenterhawk.com/marketplace/providers/x/va10"
+    ]
+
+
 def test_what_could_settle_a_late_flag_is_read_before_anything_else(session, monkeypatch):
     """On 2026-10-22 the first go-live searches queued 19 results for 13 campuses; a
     crawl in the backlog's order read one, and all 13 were flagged with their answers

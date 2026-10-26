@@ -2147,16 +2147,29 @@ def deciding(session: Session) -> list[IngestUrl]:
 
     Any `watch:#<id>` result about such a campus counts, not only the go-live
     search's: a follow-up that reports the opening settles the flag the same way.
+    So does a page the campus already cites, queued to be read again
+    (`watch.relist`): a directory listing whose status may have moved on.
     """
+    from sqlalchemy import or_
+
     from tracker import delays
+    from tracker.models import Source
 
     late = delays.suspected(session, require_check=False)
     if not late:
         return []
+    cited = select(Source.url).where(Source.project_id.in_(sorted(late)))
     rows = session.scalars(
         select(IngestUrl)
         .where(IngestUrl.status == PENDING_URL_STATUS)
-        .where(IngestUrl.feed.in_([f"watch:#{pid}" for pid in sorted(late)]))
+        .where(
+            or_(
+                IngestUrl.feed.in_([f"watch:#{pid}" for pid in sorted(late)]),
+                # A page the campus already cites, queued to be read again
+                # (`watch.relist`): a listing whose status may have moved on.
+                IngestUrl.url.in_(cited),
+            )
+        )
         .order_by(IngestUrl.published_at.desc().nullslast(), IngestUrl.id.desc())
     )
     ceiling = utcnow() + dt.timedelta(days=1)

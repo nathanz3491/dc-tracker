@@ -960,6 +960,21 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A go-live check reads a late campus's listing pages again**
+  (`tracker/ingest/watch.py` `relist`, `LISTING_STALE`; `tracker/ingest/discover.py`
+  `deciding`; `docs/workflows/sync.md` + `sync.svg`; `tests/test_news_watch.py`).
+  - The problem: a directory's page about one building changes as the building
+    does, but a citation keeps what the page said the day it was read. NTT's VA10
+    page on datacenterHawk said "under construction" on 09-15 and "Commissioned" by
+    10-26. NTT Gainesville stayed a suspected delay on the old reading, because
+    nothing read a cited page twice.
+  - The fix: each go-live check queues the campus's own directory pages that are
+    more than 30 days old, and they are read first, beside the search's results.
+    What they now say counts as news of going live.
+  - Searches still skip directories. Their listings disagree with the record often
+    enough that only a page already cited for the campus is read. One listed DC
+    Blox's first Conyers building as running in 2025, while the county said in May
+    2026 it was being built.
 - **Savvis and Csquare are known as Centersquare** (`tracker/seed/operators.toml`;
   `tests/test_news_watch.py`). Savvis's data centers went to CenturyLink, then
   Cyxtera, then Centersquare, whose site now reads Csquare. Savvis MP2 in Shakopee
