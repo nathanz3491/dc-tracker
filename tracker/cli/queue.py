@@ -660,6 +660,7 @@ def queue_screen(
             f"  found a campus   {result.found - len(lost):>6} kept, "
             f"[{'red' if lost else 'green'}]{len(lost)} would have been set aside[/] "
             f"({share:.1%}), {sum(c for *_, c in lost)} of them cited by a campus today"
+            + (f": {escape(headlines.summary(k for *_, k, _ in lost))}" if lost else "")
         )
         saved = len(spared) / result.empty if result.empty else 0.0
         console.print(
@@ -671,12 +672,13 @@ def queue_screen(
             for row_id, title, url, kind, cited in lost:
                 mark = " [yellow]cited[/yellow]" if cited else ""
                 console.print(
-                    f"  #{row_id} [{kind}]{mark} {escape(title or '')}\n        [dim]{escape(url)}[/dim]"
+                    f"  #{row_id} {escape(f'[{kind}]')}{mark} {escape(title or '')}\n"
+                    f"        [dim]{escape(url)}[/dim]"
                 )
         if spared_examples:
             console.print("\n[bold]reads that found nothing and would have been set aside[/bold]")
             for row_id, title, kind in spared_examples:
-                console.print(f"  #{row_id} [{kind}] {escape(title or '')}")
+                console.print(f"  #{row_id} {escape(f'[{kind}]')} {escape(title or '')}")
         return
 
     engine = _writable("queue screen") if drop else _read_engine()
@@ -685,7 +687,12 @@ def queue_screen(
         exempt = {row.id for row in disc.deciding(session)}
         try:
             result = headlines.screen_queue(
-                extractor, rows, want=limit or None, exempt=exempt, apply=drop
+                extractor,
+                rows,
+                want=limit or None,
+                exempt=exempt,
+                apply=drop,
+                places=headlines.places_held(session),
             )
         except LLMUnavailable as exc:
             _fail(str(exc))
@@ -705,7 +712,7 @@ def queue_screen(
         + (f": {escape(headlines.summary(k for *_, k in aside))}" if aside else "")
     )
     for row_id, title, kind in aside[:examples]:
-        console.print(f"  #{row_id} [{kind}] {escape(title or '')}")
+        console.print(f"  #{row_id} {escape(f'[{kind}]')} {escape(title or '')}")
     if aside and not drop:
         console.print("\n[dim]set them aside with:[/dim] tracker queue screen --drop")
 

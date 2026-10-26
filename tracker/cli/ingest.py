@@ -787,6 +787,7 @@ def _screen_headlines(session, queued: list, *, want: int | None, apply: bool) -
             want=want,
             exempt={row.id for row in disc.deciding(session)},
             apply=apply,
+            places=headlines.places_held(session),
         )
     except LLMUnavailable as exc:
         console.print(f"[yellow]headline screen skipped: {escape(str(exc))}[/yellow]")

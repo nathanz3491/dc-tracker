@@ -19,6 +19,15 @@ counts how many reads that found a campus it would have set aside, listing each.
 is off in the crawl until switched on (`ingest crawl --from-queue --screen`), and the
 nightly loop switches it on only with `--screen`.
 
+**A headline that names a US place is never asked about** (:func:`names_us_place`).
+The first measurement on production, 2026-10-26, judged 5,272 past reads: it would
+have set aside 42% of the reads that found nothing, and 5.6% of those that found a
+campus — 159, among them "Grimes County gives SpaceX Terafab project massive tax…",
+"CloudHQ LC11 - Loudoun, Virginia" and "Lee County, N.C.", each against the prompt's
+own rule to keep a line naming a US place. A rule the code can apply is not left to
+the model: a state, a town or county the database holds a campus in, or "… County"
+or "… Parish" in the headline keeps the page unread by the model.
+
 A page set aside is `skipped` with :data:`ASIDE` and the kind in front, not deleted,
 so `tracker queue` shows why. Unlike the address rules it is not re-asked on every
 run — a model's verdict is a call, not a free test — so a page it kept is stamped
@@ -30,6 +39,7 @@ aside again.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
@@ -40,6 +50,7 @@ from tracker.llm import LLMError, parse_json_object, spend_stage
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from tracker.ingest.screen import UsPlaces
     from tracker.llm import Extractor
     from tracker.models import IngestUrl
 
@@ -147,12 +158,48 @@ def _ask(extractor: Extractor, chunk: Sequence[Line]) -> dict[int, str]:
     return verdicts
 
 
-def judge(extractor: Extractor, lines: Sequence[Line], *, batch: int = BATCH) -> dict[int, str]:
+#: "Grimes County", "St. Tammany Parish": a US-style county in the headline itself,
+#: held or not.
+_COUNTY: Final = re.compile(r"\b[A-Z][\w.'-]*(?: [A-Z][\w.'-]*)? (?:County|Parish)\b")
+
+
+def places_held(session: Session) -> UsPlaces:
+    """Every state, and the towns and counties of the campuses the database holds."""
+    from sqlalchemy import select
+
+    from tracker.ingest import screen
+    from tracker.models import Project
+
+    return screen.us_places(
+        place for row in session.execute(select(Project.city, Project.county)) for place in row
+    )
+
+
+def names_us_place(line: Line, places: UsPlaces) -> bool:
+    """Whether a headline, or the words of its address, names a place in the US."""
+    from tracker.ingest.discover import normalize_haystack
+
+    if _COUNTY.search(line.title):
+        return True
+    return places.named_in(normalize_haystack(f"{line.title} {urlsplit(line.url).path}"))
+
+
+def judge(
+    extractor: Extractor,
+    lines: Sequence[Line],
+    *,
+    batch: int = BATCH,
+    places: UsPlaces | None = None,
+) -> dict[int, str]:
     """{key: kind} for every line to set aside; a line not in it is kept.
 
-    Raises `LLMUnavailable` when the provider cannot answer at all (no key, peak
-    hours): the caller decides whether to read unscreened.
+    With `places`, a line that names one is kept without being asked about
+    (:func:`names_us_place`). Raises `LLMUnavailable` when the provider cannot
+    answer at all (no key, peak hours): the caller decides whether to read
+    unscreened.
     """
+    if places is not None:
+        lines = [line for line in lines if not names_us_place(line, places)]
     verdicts: dict[int, str] = {}
     with spend_stage("headline screen"):
         for start in range(0, len(lines), batch):
@@ -182,13 +229,15 @@ def screen_queue(
     exempt: Collection[int] = (),
     apply: bool = True,
     batch: int = BATCH,
+    places: UsPlaces | None = None,
 ) -> Screened:
     """Walk queued pages in reading order and keep the first `want` the screen keeps.
 
     A page is kept without asking when it has no headline, was kept under this
-    prompt before, or is in `exempt` — the go-live results the delay flags wait on
-    (`discover.deciding`), whose headlines are a search's and are read whatever they
-    say. The rest are asked in batches, never many more than `want` still needs, so a
+    prompt before, names a US place (`places`, see :func:`judge`), or is in `exempt`
+    — the go-live results the delay flags wait on (`discover.deciding`), whose
+    headlines are a search's and are read whatever they say. The rest are asked in
+    batches, never many more than `want` still needs, so a
     crawl of 900 asks about the pages it would read and the few that replace the
     ones set aside. With `apply`, a kept page is stamped and a page set aside is
     `skipped` with :data:`ASIDE` and its kind; the caller commits.
@@ -201,7 +250,10 @@ def screen_queue(
     def flush() -> None:
         nonlocal asked, kept
         verdicts = judge(
-            extractor, [Line(r.id, r.title or "", r.url) for r in waiting], batch=batch
+            extractor,
+            [Line(r.id, r.title or "", r.url) for r in waiting],
+            batch=batch,
+            places=places,
         )
         asked += len(waiting)
         for row in waiting:
@@ -279,7 +331,9 @@ def measure(session: Session, extractor: Extractor, *, limit: int | None = None)
     if limit:
         query = query.limit(limit)
     rows = list(session.scalars(query))
-    verdicts = judge(extractor, [Line(r.id, r.title or "", r.url) for r in rows])
+    verdicts = judge(
+        extractor, [Line(r.id, r.title or "", r.url) for r in rows], places=places_held(session)
+    )
 
     lost_urls = [r.url for r in rows if r.status == "ok" and r.id in verdicts]
     cited = (
@@ -312,6 +366,8 @@ __all__ = [
     "Screened",
     "judge",
     "measure",
+    "names_us_place",
+    "places_held",
     "screen_queue",
     "summary",
 ]

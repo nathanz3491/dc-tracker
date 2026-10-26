@@ -102,6 +102,29 @@ def test_a_kind_not_on_the_list_or_a_line_not_asked_about_is_ignored():
     assert headlines.judge(KeywordLLM(reply=reply), lines) == {}
 
 
+def test_a_headline_naming_a_us_place_is_never_asked_about():
+    """The first production measurement lost "CloudHQ LC11 - Loudoun, Virginia" and
+    "Grimes County gives SpaceX Terafab project…" to a model told to keep them. A rule
+    the code can apply is not left to the model."""
+    from tracker.ingest import screen
+
+    places = screen.us_places(["Abilene", "Dallas"])
+    lines = [
+        headlines.Line(1, "CloudHQ LC11 - Loudoun, Virginia", "https://x.example/a"),
+        headlines.Line(
+            2, "Grimes County gives SpaceX Terafab project massive tax break", "https://x.example/b"
+        ),
+        headlines.Line(3, "Dallas", "https://edged.example/dallas"),
+        headlines.Line(4, "Campus update", "https://x.example/news/abilene-campus-update"),
+        headlines.Line(5, "Operator appoints a new CFO", "https://x.example/e"),
+    ]
+    everything = KeywordLLM(dict.fromkeys(("a", "e", "o", "u"), "unrelated"))
+    assert headlines.judge(everything, lines, places=places) == {5: "unrelated"}
+    assert [
+        line.split(". ", 1)[1].split(" | ")[0] for line in everything.calls[0].splitlines()
+    ] == ["Operator appoints a new CFO"]
+
+
 def test_headlines_are_asked_fifty_at_a_time():
     llm = KeywordLLM()
     lines = [
@@ -300,5 +323,6 @@ def test_measure_lists_each_read_it_would_have_lost(tmp_path, migrated_copy, mon
     assert result.exit_code == 0, result.output
     assert "1 would have been set aside" in result.output
     assert "Madrid campus breaks ground" in result.output
+    assert "[abroad]" in result.output, "the kind is text, not console markup"
     with session_scope(make_engine(db)) as session:
         assert session.scalars(select(IngestUrl).where(IngestUrl.status == "skipped")).all() == []

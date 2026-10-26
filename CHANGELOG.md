@@ -29,7 +29,11 @@ initial build of the v1 PRD.
   whatever they say. A page set aside is marked with the reason, not deleted, and
   `--undo` puts them all back. **The loop does not use it yet**: `tracker queue screen
   --measure` first runs the headlines of the pages already read through it and lists
-  every read that found a campus it would have set aside.
+  every read that found a campus it would have set aside. Its first run on production,
+  over 5,272 past reads, would have spared 42% of the useless reads but lost 5.6% of the
+  useful ones (159), several naming a US county or state the prompt says to keep — so a
+  headline naming a US place, a town or county the database holds, or "… County" is now
+  kept by the code without asking the model.
 - **Every night now looks for the opening date and size of campuses being built or
   permitted, before anything else in its enrich pass** (`tracker enrich --pipeline`;
   `tracker/ingest/enrich.py` `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`,
