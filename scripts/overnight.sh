@@ -216,9 +216,10 @@ PIPELINE=30
 PIPELINE_BUDGET=120
 DISCOVER=900
 # Have a model read the queued headlines first and set aside what cannot be campus
-# news (`ingest crawl --screen`). Off until `tracker queue screen --measure` shows,
-# on the pages already read, that it loses next to no campus.
-SCREEN=0
+# news (`ingest crawl --screen`). On, for pages about a place abroad only: measured
+# on 5,272 past reads on 2026-10-26, that spares 230 useless reads and loses 4 of
+# 2,841 useful ones; every other kind cost real news (`headlines.ACTED_ON`).
+SCREEN=1
 BASELINES=300
 SEARCH_CAP=2000
 DATES=150
@@ -272,7 +273,7 @@ started in tmux and left.
   --discover N       queued articles to read, the news first (default 900); 0 to skip
                      discovery, the news watch and the read altogether
   --screen           have a model read their headlines first and set aside what
-                     cannot be campus news (default off)
+                     is about a place abroad (default on)
   --no-screen        read the queue unscreened
   --baselines N      campuses the news watch gives their first, year-long look each
                      night (default 300); 0 for follow-ups only

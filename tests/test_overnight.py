@@ -365,12 +365,13 @@ def test_the_loop_adds_campuses_through_the_identity_check():
     assert "--no-verify-identity" not in text
 
 
-def test_the_headline_screen_is_off_until_it_is_measured():
-    """A model that sets aside a page costs the campus in it if it is wrong, so the
-    loop reads unscreened until `tracker queue screen --measure` says otherwise."""
+def test_the_headline_screen_is_on_for_what_was_measured_safe():
+    """A model that sets aside a page costs the campus in it if it is wrong. Measured
+    on production, only pages about a place abroad lost next to none (4 of 2,841), so
+    the loop screens and the screen acts on that kind alone (`headlines.ACTED_ON`)."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert "SCREEN=0\n" in text
-    assert "--screen)         SCREEN=1 ;;" in text
+    assert "SCREEN=1\n" in text
+    assert "--no-screen)      SCREEN=0 ;;" in text
     assert 'tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" $SCREEN_FLAG' in text
 
 

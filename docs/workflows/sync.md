@@ -478,6 +478,14 @@ prioritising after would reorder a batch that was already chosen:
    county or state that the prompt itself says to keep. So **a headline that names a US
    place is never put to the model** (`headlines.names_us_place`): a state, a town or
    county the database holds a campus in, or "… County" or "… Parish" in the headline.
+   Measured again, that lost 55 useful reads instead of 159, and by kind the ledger
+   was uneven (useless reads spared : useful reads lost): abroad 230 : 4, product
+   135 : 10, unrelated 125 : 12, people 97 : 13, markets 87 : 10, event 21 : 6. The
+   other kinds cost real news — "Hut 8 Shares Soar 34% on $9.8 Billion AI Data Center
+   lease" filed as markets — so **only a page about a place abroad is set aside**
+   (`headlines.ACTED_ON`), and the nightly loop runs the screen by default. The model
+   still names every kind; `--measure` reports them all, and what acting on
+   `ACTED_ON` alone would do.
 
 **Whatever the order, news of a campus past its date is read first**
 (`discover.deciding`): the news watch's finds about a campus that is late by the

@@ -56,8 +56,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: Stamped on a queued page the screen kept. Change it when the prompt changes, and
-#: every page is asked again under the new one.
+#: Stamped on a queued page the screen kept. Change it when the prompt or
+#: :data:`ACTED_ON` changes, and every page is asked again under the new one.
 STAMP: Final = "headline-1"
 
 #: The `error` a page set aside by its headline carries; the kind follows it. A
@@ -83,6 +83,15 @@ KINDS: Final[dict[str, str]] = {
     ),
     "unrelated": "nothing to do with data centers, or the power, land, water or permits they need",
 }
+
+#: The kinds that set a page aside; the model still names the others, which
+#: `measure` reports and nothing acts on. Measured on production 2026-10-26 over
+#: 5,272 past reads, with US places kept out of the model's hands (useless reads
+#: spared : useful reads lost): abroad 230 : 4, product 135 : 10, unrelated 125 : 12,
+#: people 97 : 13, markets 87 : 10, event 21 : 6. Only "abroad" loses next to nothing;
+#: the others cost real news — "Hut 8 Shares Soar 34% on $9.8 Billion AI Data Center
+#: …" filed as markets, a CoreWeave contract as a product.
+ACTED_ON: Final[frozenset[str]] = frozenset({"abroad"})
 
 SYSTEM: Final = (
     """You screen the reading queue of a tracker of data-center campuses in the United
@@ -230,10 +239,13 @@ def screen_queue(
     apply: bool = True,
     batch: int = BATCH,
     places: UsPlaces | None = None,
+    kinds: Collection[str] = ACTED_ON,
 ) -> Screened:
     """Walk queued pages in reading order and keep the first `want` the screen keeps.
 
-    A page is kept without asking when it has no headline, was kept under this
+    Only a verdict of one of `kinds` sets a page aside (:data:`ACTED_ON`); a page the
+    model files under any other is read. A page is kept without asking when it has no
+    headline, was kept under this
     prompt before, names a US place (`places`, see :func:`judge`), or is in `exempt`
     — the go-live results the delay flags wait on (`discover.deciding`), whose
     headlines are a search's and are read whatever they say. The rest are asked in
@@ -249,12 +261,16 @@ def screen_queue(
 
     def flush() -> None:
         nonlocal asked, kept
-        verdicts = judge(
-            extractor,
-            [Line(r.id, r.title or "", r.url) for r in waiting],
-            batch=batch,
-            places=places,
-        )
+        verdicts = {
+            key: kind
+            for key, kind in judge(
+                extractor,
+                [Line(r.id, r.title or "", r.url) for r in waiting],
+                batch=batch,
+                places=places,
+            ).items()
+            if kind in kinds
+        }
         asked += len(waiting)
         for row in waiting:
             decided[row.id] = verdicts.get(row.id)
@@ -356,6 +372,7 @@ def measure(session: Session, extractor: Extractor, *, limit: int | None = None)
 
 
 __all__ = [
+    "ACTED_ON",
     "ASIDE",
     "BATCH",
     "KINDS",

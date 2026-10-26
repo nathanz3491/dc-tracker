@@ -145,7 +145,8 @@ def test_the_crawl_still_reads_its_limit_after_the_screen_sets_pages_aside(sessi
         queued(session, "Utility signs 500 MW deal for Ohio data center", n=4),
         queued(session, "Rezoning approved for Prince William campus", n=5),
     ]
-    result = headlines.screen_queue(KeywordLLM(), rows, want=3, apply=True)
+    # Every kind acted on, to test the walk rather than which kinds count.
+    result = headlines.screen_queue(KeywordLLM(), rows, want=3, apply=True, kinds=headlines.KINDS)
 
     assert [r.id for r in result.kept] == [rows[0].id, rows[3].id, rows[4].id]
     assert [(r.id, kind) for r, kind in result.aside] == [
@@ -175,6 +176,17 @@ def test_a_page_kept_once_is_not_asked_again(session):
     assert len(result.kept) == 3
 
 
+def test_only_the_kinds_acted_on_set_a_page_aside(session):
+    """Measured on production, only "abroad" lost next to no campus: a stock-move
+    headline filed as markets was a $9.8B lease. The model still names every kind."""
+    assert {"abroad"} == headlines.ACTED_ON
+    abroad = queued(session, "A Madrid campus opens", n=1)
+    hire = queued(session, "Operator appoints a new CFO", n=2)
+    result = headlines.screen_queue(KeywordLLM(), [abroad, hire], want=None, apply=True)
+    assert [(r.id, kind) for r, kind in result.aside] == [(abroad.id, "abroad")]
+    assert [r.id for r in result.kept] == [hire.id]
+
+
 def test_go_live_results_and_untitled_pages_are_read_whatever_they_say(session):
     """A go-live search's result is read because a delay flag waits on it, and a page
     with no headline gives the screen nothing to judge."""
@@ -198,7 +210,7 @@ def test_a_crawl_reads_unscreened_when_the_model_cannot_answer(session, monkeypa
         raise llm_mod.MissingApiKey("no key")
 
     monkeypatch.setattr(llm_mod, "build_extractor", unavailable)
-    rows = [queued(session, "Operator appoints a new CFO", n=n) for n in range(3)]
+    rows = [queued(session, f"A Madrid campus opens, part {n}", n=n) for n in range(3)]
     assert _screen_headlines(session, rows, want=2, apply=True) == rows[:2]
     assert all(r.status == PENDING_URL_STATUS for r in rows)
 
@@ -208,9 +220,9 @@ def test_a_crawl_reads_unscreened_when_the_model_cannot_answer(session, monkeypa
 
 
 def test_a_dry_run_changes_nothing(session):
-    row = queued(session, "Operator appoints a new CFO", n=1)
+    row = queued(session, "A Madrid campus opens", n=1)
     result = headlines.screen_queue(KeywordLLM(), [row], want=None, apply=False)
-    assert [kind for _, kind in result.aside] == ["people"]
+    assert [kind for _, kind in result.aside] == ["abroad"]
     assert row.status == PENDING_URL_STATUS and row.error is None and row.screened_by is None
 
 
@@ -260,7 +272,7 @@ def test_undo_puts_back_what_the_screen_set_aside_and_keeps_it_back(tmp_path, mi
     from tracker.db import make_engine, session_scope
 
     with session_scope(make_engine(db)) as session:
-        row = queued(session, "Operator appoints a new CFO", n=1)
+        row = queued(session, "A Madrid campus opens", n=1)
         headlines.screen_queue(KeywordLLM(), [row], want=None, apply=True)
         assert row.status == "skipped"
         other = queued(
@@ -273,7 +285,7 @@ def test_undo_puts_back_what_the_screen_set_aside_and_keeps_it_back(tmp_path, mi
 
     with session_scope(make_engine(db)) as session:
         back = session.scalars(
-            select(IngestUrl).where(IngestUrl.title == "Operator appoints a new CFO")
+            select(IngestUrl).where(IngestUrl.title == "A Madrid campus opens")
         ).one()
         assert (back.status, back.error, back.screened_by) == (
             PENDING_URL_STATUS,
@@ -293,12 +305,12 @@ def test_the_queue_command_reports_without_writing_unless_told(
 
     monkeypatch.setattr(llm_mod, "build_extractor", lambda *a, **k: KeywordLLM())
     with session_scope(make_engine(db)) as session:
-        queued(session, "Operator appoints a new CFO", n=1)
+        queued(session, "A Madrid campus opens", n=1)
         queued(session, "County approves campus", n=2)
 
     report = _invoke(db, "queue", "screen", "--limit", "0")
     assert report.exit_code == 0, report.output
-    assert "1 would be set aside" in report.output and "people" in report.output
+    assert "1 would be set aside" in report.output and "abroad" in report.output
 
     with session_scope(make_engine(db)) as session:
         assert len(discover.pending(session)) == 2
@@ -324,5 +336,6 @@ def test_measure_lists_each_read_it_would_have_lost(tmp_path, migrated_copy, mon
     assert "1 would have been set aside" in result.output
     assert "Madrid campus breaks ground" in result.output
     assert "[abroad]" in result.output, "the kind is text, not console markup"
+    assert "acting on abroad only" in result.output
     with session_scope(make_engine(db)) as session:
         assert session.scalars(select(IngestUrl).where(IngestUrl.status == "skipped")).all() == []

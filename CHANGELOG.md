@@ -12,8 +12,8 @@ initial build of the v1 PRD.
 
 ### Added
 
-- **A model can read the queued headlines before the night pays to read the pages,
-  and set aside the ones that cannot be campus news — off until it is measured**
+- **A model reads the queued headlines before the night pays to read the pages, and
+  sets aside the ones about a place abroad — the one kind measured safe**
   (`tracker/ingest/headlines.py`; `tracker ingest crawl --from-queue --screen`;
   `tracker queue screen` with `--measure`, `--drop` and `--undo`; migration 0049
   `ingest_url.screened_by`; `scripts/overnight.sh` `--screen`;
@@ -33,7 +33,11 @@ initial build of the v1 PRD.
   over 5,272 past reads, would have spared 42% of the useless reads but lost 5.6% of the
   useful ones (159), several naming a US county or state the prompt says to keep — so a
   headline naming a US place, a town or county the database holds, or "… County" is now
-  kept by the code without asking the model.
+  kept by the code without asking the model. Measured again, the kinds differed
+  sharply: pages about a place abroad spared 230 useless reads for 4 useful ones, while
+  "markets" filed "Hut 8 Shares Soar 34% on $9.8 Billion AI Data Center lease". So only
+  a page about a place abroad is set aside, and the nightly loop now runs the screen
+  (`--no-screen` turns it off).
 - **Every night now looks for the opening date and size of campuses being built or
   permitted, before anything else in its enrich pass** (`tracker enrich --pipeline`;
   `tracker/ingest/enrich.py` `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`,

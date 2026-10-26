@@ -667,6 +667,14 @@ def queue_screen(
             f"  found nothing    {len(spared):>6} would have been set aside ({saved:.0%})"
             + (f": {escape(headlines.summary(spared))}" if spared else "")
         )
+        acted = sorted(headlines.ACTED_ON)
+        acted_lost = sum(1 for *_, k, _ in lost if k in headlines.ACTED_ON)
+        acted_spared = sum(1 for k in spared if k in headlines.ACTED_ON)
+        console.print(
+            f"\n  acting on {escape(', '.join(acted))} only, as the crawl does: "
+            f"{acted_spared} of the {result.empty} useless reads set aside, "
+            f"{acted_lost} of the {result.found} useful ones lost"
+        )
         if lost:
             console.print("\n[bold]reads that found a campus and would have been lost[/bold]")
             for row_id, title, url, kind, cited in lost:
