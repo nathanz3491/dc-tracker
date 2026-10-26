@@ -757,8 +757,17 @@ ignored, so industry filtering is not available. CIKs must be **10-digit
 zero-padded** — `1326801` returns nothing where `0001326801` returns 105, with no
 error either way.
 
-Two things the module does that the news path does not need:
+Three things the module does that the news path does not need:
 
+- **Dates a filing from SEC's own record.** A filing's page states no publication
+  date, so the fetcher can never read one, and a citation with none is ranked as if it
+  had been published the day it was read. SEC's submissions API lists every filing a
+  company has made with its filing date, so `crawl.run` asks it once per company, after
+  the fetch and before the write, for each filing page no date reached; the date goes
+  to the prompt's `ARTICLE_DATE`, the queue row and the citation together, whichever
+  command found the URL (`edgar.FilingDates`). `tracker backfill dates --refetch` does
+  the same for citations already stored. A lookup that fails leaves the date empty and
+  never fails the read.
 - **Selects a section rather than truncating.** A Meta 10-Q is 369,000 characters
   against a 24,000-character model budget. `crawl.truncate` keeps the head and
   tail, which is right for an article and wrong here, because a filing's facts sit

@@ -14,7 +14,13 @@ and `crawl.run` then reads it through the ordinary path: same prompt, same
 evidence gate, same normalizer, same upsert. Nothing here re-implements any of
 that, so a filing is held to exactly the standard a news article is.
 
-Two things make it work, and both were measured rather than assumed.
+**A filing's date comes from SEC, never from its page.** A filing is an inline-XBRL
+document with no `datePublished`, no `<meta>` and no `<time>`, so the fetcher finds no
+date in it and never could: on 2026-10-26, 172 of the 173 citations of sec.gov had none.
+SEC's own record of when each filing was filed is dated and authoritative, and
+:class:`FilingDates` reads it — see the section of that name below.
+
+Two things make search work, and both were measured rather than assumed.
 
 **Scope by CIK, not by phrase.** Unfiltered, `"data center campus"` returns 1,066
 hits dominated by shell companies; scoped to one CIK it returns only that
@@ -39,9 +45,11 @@ import logging
 import re
 import time
 import tomllib
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -53,6 +61,7 @@ log = logging.getLogger(__name__)
 
 FULL_TEXT_SEARCH = "https://efts.sec.gov/LATEST/search-index"
 ARCHIVES = "https://www.sec.gov/Archives/edgar/data"
+SUBMISSIONS = "https://data.sec.gov/submissions"
 
 #: SEC asks for no more than 10 requests/second across their hosts, and enforces
 #: it. One tenth of a second between requests keeps a single-threaded run under
@@ -286,6 +295,317 @@ def search(
             )
         )
     return filings
+
+
+# --- Filing dates ------------------------------------------------------------
+#
+# SEC says when each filing was filed in one place: the submissions API, one JSON
+# document per company that lists the accession number and filing date of every
+# filing it is a party to (`filings.recent`, the newest thousand or so) and names
+# further documents for the rest (`filings.files`, each giving the span of dates it
+# covers). One request therefore dates every filing a company has made, which is why
+# a run asks once per company and remembers the answer rather than asking once per
+# page: the 172 undated citations measured on 2026-10-26 were pages of 90 filings
+# by 24 companies.
+
+
+@dataclass(frozen=True)
+class FilingRef:
+    """Which filing a URL is a page of, in the terms SEC's records use."""
+
+    cik: int
+    #: Accession number in its dashed form, as `Filing.adsh` holds it.
+    adsh: str
+
+
+#: Every page of a filing sits under `/Archives/edgar/data/<cik>/`: the primary
+#: document, an exhibit, an XBRL `R8.htm` page, the filing's own index. `<cik>` is the
+#: filer's or a co-registrant's, unpadded.
+_ARCHIVE_PATH: Final = re.compile(r"^/Archives/edgar/data/(\d{1,10})/(.+)$", re.IGNORECASE)
+
+#: The folder a filing's documents sit in: its accession number without the dashes.
+_FILING_FOLDER: Final = re.compile(r"^(\d{10})(\d{2})(\d{6})(?:/|$)")
+
+#: Two pages are named for the accession itself and sit beside the folder rather than
+#: in it: the older spelling of a filing's index, `0001326801-23-000067-index.htm`, and
+#: the whole submission as one text file, `0001326801-23-000067.txt`.
+_NAMED_PAGE: Final = re.compile(r"^(\d{10}-\d{2}-\d{6})(?:-index\.html?|\.txt)$", re.IGNORECASE)
+
+#: SEC's inline-XBRL viewer wraps an archive address in a query,
+#: `/ix?doc=/Archives/edgar/data/...`, which is the address a link from a news article
+#: or a search result often carries.
+_VIEWER_PATHS: Final = frozenset({"/ix", "/ixviewer/ix.html"})
+
+#: What a `filings.files` entry may be called. It goes into a request URL, so it is
+#: checked rather than trusted.
+_OLDER_PAGE: Final = re.compile(r"^CIK\d{10}-submissions-\d+\.json$")
+
+#: EDGAR's first electronic filings are from 1993; a date before it is not SEC's.
+_EDGAR_BEGINS: Final = dt.date(1993, 1, 1)
+
+
+def parse_filing_url(url: str) -> FilingRef | None:
+    """The filing a URL is a page of, or None when it is not an EDGAR archive address.
+
+    Reads the CIK and the accession number out of the path, whichever page of the
+    filing it is: the primary document, an exhibit, an XBRL `R` page, the filing's
+    folder or its `-index.htm`, the whole-submission `.txt`, or the inline viewer's
+    `?doc=` wrapper of any of those. A query string such as a tracking `?ref=` is
+    ignored. SEC's own pages that are not filings — its news, its rules, a company's
+    directory listing — come back None, so a caller can ask of every URL it holds.
+    """
+    try:
+        parts = urlsplit((url or "").strip())
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if host != "sec.gov" and not host.endswith(".sec.gov"):
+        return None
+    path = parts.path
+    if path.lower() in _VIEWER_PATHS:
+        wrapped = parse_qs(parts.query).get("doc")
+        path = urlsplit(wrapped[0]).path if wrapped else ""
+    match = _ARCHIVE_PATH.match(path)
+    if match is None:
+        return None
+    cik, rest = int(match.group(1)), match.group(2)
+    if cik <= 0:
+        return None
+    folder = _FILING_FOLDER.match(rest)
+    if folder is not None:
+        return FilingRef(cik, "-".join(folder.groups()))
+    named = _NAMED_PAGE.match(rest)
+    return FilingRef(cik, named.group(1)) if named is not None else None
+
+
+def _accession_year(adsh: str) -> int:
+    """The year an accession number was assigned, from its two-digit middle part."""
+    two = int(adsh[11:13])
+    return 1900 + two if two >= 93 else 2000 + two
+
+
+def _may_hold(page: Mapping[str, Any], year: int) -> bool:
+    """Whether an older-filings page covers filings from `year`, give or take one.
+
+    The span a page states is of filing dates, and an accession number carries the year
+    it was assigned, which can differ from the filing's by a day at a year's end — so a
+    year either side is allowed. A page that states no span might hold anything.
+    """
+    first, last = str(page.get("filingFrom") or "")[:4], str(page.get("filingTo") or "")[:4]
+    if not (first.isdigit() and last.isdigit()):
+        return True
+    return int(first) - 1 <= year <= int(last) + 1
+
+
+def _as_datetime(day: str | None) -> dt.datetime | None:
+    """SEC's `YYYY-MM-DD` as the naive midnight the schema stores publication dates in."""
+    if not day:
+        return None
+    try:
+        when = dt.date.fromisoformat(day[:10])
+    except ValueError:
+        return None
+    if not _EDGAR_BEGINS <= when <= dt.date.today() + dt.timedelta(days=2):
+        return None
+    return dt.datetime.combine(when, dt.time())
+
+
+@dataclass
+class _Company:
+    """What SEC's submissions record has said so far about one company."""
+
+    #: Dashed accession number -> the filing date as SEC states it, "2026-07-30".
+    dates: dict[str, str] = field(default_factory=dict)
+    #: The older-filings pages (`filings.files`) not yet read, newest first.
+    older: list[dict[str, Any]] = field(default_factory=list)
+
+    def take(self, block: Mapping[str, Any]) -> None:
+        """Remember every filing a block of the record lists. A malformed one adds nothing."""
+        accessions, filed = block.get("accessionNumber"), block.get("filingDate")
+        if not isinstance(accessions, list) or not isinstance(filed, list):
+            return
+        for adsh, day in zip(accessions, filed, strict=False):
+            if isinstance(adsh, str) and isinstance(day, str) and adsh and day:
+                self.dates[adsh] = day
+
+
+class FilingDates:
+    """SEC's own record of when each filing was filed, asked once per company.
+
+    :meth:`filed` answers for one filing and :meth:`of` for one URL. The company's whole
+    record is read on the first question about it and remembered for the life of this
+    object, so a run's cost is its number of companies, not its number of pages, and
+    SEC's limit of ten requests a second is kept by the same client the search uses.
+
+    **It never raises.** A date is metadata about a page that was read, so failing to
+    find one must not fail the read: every refusal, timeout, malformed answer or
+    unknown filing is logged and answers None, and a caller leaves the date empty.
+    A filing SEC has no record of is a None as well, never a guess.
+
+    **It stops asking when SEC stops answering.** Three failures in a row — a block, a
+    rate limit, a night when the host is down — end the questions for this object, with
+    one line saying so, rather than sending a request per page into a refusal. A 404
+    is not one of them: it is SEC saying it knows no such company, which is an answer.
+
+    `client` stands in for the HTTP client, for tests that serve the record without a
+    network. Anything with a `get(url)` returning a status code and `json()` will do.
+    Without one the first question builds the search's own rate-limited client, which
+    refuses a placeholder User-Agent — SEC blocks the whole run for sending it — and
+    that refusal is one more failure to log, not an exception.
+    """
+
+    #: Failures in a row after which SEC is taken to be refusing and nothing more is asked.
+    GIVE_UP_AFTER: Final = 3
+
+    def __init__(self, settings: Settings | None = None, *, client: Any = None) -> None:
+        self._settings = settings
+        self._client = client
+        self._owns_client = client is None
+        #: CIK -> its record, or None for one SEC does not know or did not answer for:
+        #: asked once either way, because asking again within a run changes nothing.
+        self._companies: dict[int, _Company | None] = {}
+        self._failures = 0
+        self._gave_up = False
+
+    def __enter__(self) -> FilingDates:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._owns_client and self._client is not None:
+            self._client.close()
+            self._client = None
+
+    def of(self, url: str) -> dt.datetime | None:
+        """The date SEC filed the filing this URL is a page of, or None."""
+        ref = parse_filing_url(url)
+        return self.filed(ref) if ref is not None else None
+
+    def filed(self, ref: FilingRef) -> dt.datetime | None:
+        """The date SEC filed this filing, as the day at midnight, or None."""
+        try:
+            return self._filed(ref)
+        except Exception:
+            log.warning("could not date SEC filing %s of CIK %d", ref.adsh, ref.cik, exc_info=True)
+            return None
+
+    def _filed(self, ref: FilingRef) -> dt.datetime | None:
+        company = self._company(ref.cik)
+        if company is None:
+            return None
+        day = company.dates.get(ref.adsh)
+        year = _accession_year(ref.adsh)
+        # The newest thousand filings come with the company; an older one is in a page
+        # of its own, and the span each page states says whether it is worth a request.
+        while day is None and not self._gave_up:
+            page = next((p for p in company.older if _may_hold(p, year)), None)
+            if page is None:
+                break
+            company.older.remove(page)
+            block = self._get(f"{SUBMISSIONS}/{page['name']}")
+            if block is not None:
+                company.take(block)
+                day = company.dates.get(ref.adsh)
+        if day is None:
+            log.info("SEC's record of CIK %d lists no filing %s", ref.cik, ref.adsh)
+        return _as_datetime(day)
+
+    def _company(self, cik: int) -> _Company | None:
+        if self._gave_up:
+            return None
+        if cik not in self._companies:
+            data = self._get(f"{SUBMISSIONS}/CIK{cik:010d}.json")
+            self._companies[cik] = _read_company(data) if data is not None else None
+        return self._companies[cik]
+
+    def _get(self, url: str) -> dict[str, Any] | None:
+        """One document from SEC as parsed JSON, or None after logging why not."""
+        if self._gave_up:
+            return None
+        try:
+            if self._client is None:
+                self._client = _Client(self._settings or get_settings())
+        except EdgarError as exc:
+            # The placeholder User-Agent: every request would be refused, so no more
+            # are tried. The message is multi-line operator advice; the first line says it.
+            log.warning("SEC filing dates not asked for: %s", str(exc).splitlines()[0])
+            self._gave_up = True
+            return None
+        try:
+            response = self._client.get(url)
+        except (httpx.HTTPError, httpx.InvalidURL, OSError) as exc:
+            return self._refused(url, f"{type(exc).__name__}: {exc}")
+        if response.status_code == 404:
+            log.info("SEC has no record at %s", url)
+            self._failures = 0
+            return None
+        if response.status_code != 200:
+            return self._refused(url, f"HTTP {response.status_code}")
+        try:
+            data = response.json()
+        except ValueError:
+            return self._refused(url, "an answer that is not JSON")
+        if not isinstance(data, dict):
+            return self._refused(url, "an answer that is not a JSON object")
+        self._failures = 0
+        return data
+
+    def _refused(self, url: str, why: str) -> None:
+        self._failures += 1
+        log.warning("SEC filing dates: %s gave %s", url, why)
+        if self._failures >= self.GIVE_UP_AFTER:
+            self._gave_up = True
+            log.warning(
+                "SEC filing dates: %d requests in a row failed; no more are asked this run",
+                self._failures,
+            )
+        return None
+
+
+def _read_company(data: Mapping[str, Any]) -> _Company:
+    """A company's record from the submissions document SEC serves for it."""
+    filings = data.get("filings")
+    filings = filings if isinstance(filings, dict) else {}
+    company = _Company()
+    recent = filings.get("recent")
+    if isinstance(recent, dict):
+        company.take(recent)
+    pages = filings.get("files")
+    company.older = [
+        page
+        for page in (pages if isinstance(pages, list) else [])
+        if isinstance(page, dict) and _OLDER_PAGE.match(str(page.get("name") or ""))
+    ]
+    return company
+
+
+def dates_of(
+    urls: Iterable[str], *, resolver: FilingDates | None = None, settings: Settings | None = None
+) -> dict[str, dt.datetime]:
+    """url -> the date SEC filed it, for each of `urls` that is a page of a filing SEC dates.
+
+    The one question both callers ask — `crawl.run` of the pages it has just read and
+    `dates.run` of the citations still undated — so it lives beside the thing it asks.
+    A URL that is not an EDGAR page, or that SEC does not date, is simply absent. With
+    no `resolver` one is made, and closed, for this call; a caller asking more than
+    once shares one so that a company is read once between them.
+    """
+    wanted = {url: ref for url in urls if (ref := parse_filing_url(url)) is not None}
+    if not wanted:
+        return {}
+    found: dict[str, dt.datetime] = {}
+    own = resolver if resolver is not None else FilingDates(settings)
+    try:
+        for url, ref in wanted.items():
+            when = own.filed(ref)
+            if when is not None:
+                found[url] = when
+    finally:
+        if resolver is None:
+            own.close()
+    return found
 
 
 # --- Section selection -------------------------------------------------------
@@ -569,8 +889,12 @@ __all__ = [
     "EdgarError",
     "EdgarReport",
     "Filing",
+    "FilingDates",
+    "FilingRef",
+    "dates_of",
     "extract_section",
     "load_companies",
+    "parse_filing_url",
     "prepare",
     "score_paragraph",
     "search",

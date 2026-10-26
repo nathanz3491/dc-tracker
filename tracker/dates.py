@@ -15,12 +15,19 @@ happened to visit second. Hyperion (#10) holds Meta's superseded $10B for exactl
 that reason, and both sides of it come from the same publisher, so no authority
 rule can separate them.
 
-**Two rungs, cheapest first**, the same shape as the fetcher's own ladder:
+**Three rungs, cheapest first**, the same shape as the fetcher's own ladder:
 
 1. **The URL path.** `/2026/07/13/slug`. Free, offline, deterministic, and it
    dates 422 queued URLs on the live database. A dated path is the publisher's
    own filing convention, not an inference.
-2. **The page.** One GET each, no LLM. 7 of 10 sampled live pages carry a
+2. **SEC's own record, for a filing.** A filing's page states no date — it is an
+   inline-XBRL document with no metadata — so the rung below cannot find one in it
+   however often it asks: on 2026-10-26, 172 of the 173 citations of sec.gov were
+   undated, and a 2019 10-K was ranked as this month's evidence. SEC does say when each
+   filing was filed, and one request to its submissions API dates every filing a company
+   has made, so the cost is a request per company, not per page (90 filings, 24
+   companies). A filing is therefore never fetched for its date. `edgar.FilingDates`.
+3. **The page.** One GET each, no LLM. 7 of 10 sampled live pages carry a
    machine-readable date.
 
 **One column, and only where it is NULL.** Nothing else on the row is touched —
@@ -42,6 +49,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -50,6 +58,9 @@ from tracker.config import Settings, get_settings
 from tracker.ingest.fetch import Fetcher, date_from_url, fetch_all
 from tracker.models import DateProbe, IngestUrl, Source, utcnow
 from tracker.vocab import PENDING_URL_STATUS
+
+if TYPE_CHECKING:
+    from tracker.ingest.edgar import FilingDates
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +91,12 @@ class DateReport:
     undated_queued: int = 0
     #: Dated by the free offline pass over the URL path.
     from_url: int = 0
+    #: Pages of SEC filings dated from SEC's own record of when they were filed.
+    from_filing: int = 0
+    #: Pages of SEC filings SEC gave no date for: a filing its record does not list, or
+    #: a night it did not answer. Left undated and not fetched, since a filing's page
+    #: states no date to be found.
+    unfiled: int = 0
     #: Pages actually requested.
     fetched: int = 0
     #: Dated from the page's own metadata.
@@ -103,7 +120,7 @@ class DateReport:
 
     @property
     def dated(self) -> int:
-        return self.from_url + self.from_page
+        return self.from_url + self.from_filing + self.from_page
 
     def as_rows(self) -> list[tuple[str, int]]:
         neither = self.undated - self.undated_cited - self.undated_queued
@@ -112,6 +129,8 @@ class DateReport:
             ("undated queued articles", self.undated_queued),
             *([("undated, neither (--all)", neither)] if neither else []),
             ("dated from the URL", self.from_url),
+            ("dated from SEC's filing record", self.from_filing),
+            *([("SEC filings it gave no date for", self.unfiled)] if self.unfiled else []),
             ("pages fetched", self.fetched),
             ("dated from the page", self.from_page),
             ("fetched, no date stated", self.unanswered),
@@ -231,6 +250,90 @@ def _store(session: Session, url: str, when: dt.datetime, *, apply: bool) -> boo
     return True
 
 
+#: Narrows the scan for citations on SEC's host; `parse_filing_url` decides what is one.
+_SEC_LIKE = "%sec.gov/%"
+
+
+def _undated_filings(session: Session, still_undated: list[str]) -> list[str]:
+    """The pages of SEC filings with no date, whether queued or only cited.
+
+    The queued ones are in `still_undated` already. A citation can also stand on a URL
+    no queue row holds — the agent's gap-fill cites what a search found without
+    crawling it, and 2 of the 98 SEC URLs cited on 2026-10-26 were of that kind — and
+    `undated_urls` reads the queue, so it never sees one. Where a queue row exists and
+    holds a date, `_propagate` copies it onto the citation, so only a citation with no
+    dated row behind it is listed here.
+    """
+    from tracker.ingest.edgar import parse_filing_url
+
+    urls = [url for url in still_undated if parse_filing_url(url) is not None]
+    listed = set(urls)
+    dated_in_queue = set(
+        session.scalars(
+            select(IngestUrl.url).where(
+                IngestUrl.published_at.is_not(None), IngestUrl.url.like(_SEC_LIKE)
+            )
+        )
+    )
+    cited = session.scalars(
+        select(Source.url)
+        .where(Source.published_at.is_(None), Source.url.like(_SEC_LIKE))
+        .distinct()
+    )
+    for url in cited:
+        if url in listed or url in dated_in_queue or parse_filing_url(url) is None:
+            continue
+        listed.add(url)
+        urls.append(url)
+    return urls
+
+
+def _ask_sec(
+    session: Session,
+    still_undated: list[str],
+    found: dict[str, dt.datetime],
+    report: DateReport,
+    *,
+    apply: bool,
+    settings: Settings,
+    filings: FilingDates | None,
+) -> list[str]:
+    """Date the pages of SEC filings from SEC's record, and return `still_undated` without them.
+
+    **Every filing page leaves the list, dated or not.** The next rung fetches a page and
+    reads its metadata, and a filing's page has none — so for a filing SEC has no date for
+    that rung can only spend a download of up to two megabytes to say so, and write a
+    `date_probe` row that would keep the *page* rung away for 90 days from a URL it was
+    never going to date.
+
+    **Not remembered, and not capped by `limit`.** The filing's date is not a page
+    request that failed; the question is a record SEC keeps, and one request answers it
+    for every filing a company has made. So a filing SEC did not answer for tonight is
+    asked again tomorrow, which costs one request per company, and the whole backlog is
+    asked at once: 172 citations were 24 companies. The rate limit is the client's, not
+    this function's.
+    """
+    from tracker.ingest import edgar
+
+    urls = _undated_filings(session, still_undated)
+    if not urls:
+        return still_undated
+    filed = edgar.dates_of(urls, resolver=filings, settings=settings)
+    for url in urls:
+        when = filed.get(url)
+        if when is None:
+            report.unfiled += 1
+            continue
+        report.from_filing += 1
+        found[url] = when
+        if _store(session, url, when, apply=apply):
+            report.written += 1
+        if len(report.examples) < 10:
+            report.examples.append((url, when, "sec"))
+    taken = set(urls)
+    return [url for url in still_undated if url not in taken]
+
+
 def _propagate(session: Session, found: dict[str, dt.datetime], *, apply: bool) -> int:
     """Copy each URL's publication date onto the citations that quote it.
 
@@ -284,16 +387,20 @@ def run(
     settings: Settings | None = None,
     fetcher: Fetcher | None = None,
     escalate: object | None = None,
+    filings: FilingDates | None = None,
 ) -> DateReport:
     """Date what can be dated. Report-only unless `apply`.
 
     `refetch` is the expensive half: without it only the free URL-path rung runs,
-    which is worth having on its own and costs nothing to try first.
+    which is worth having on its own and costs nothing to try first. With it SEC is
+    asked about the filings and the publishers about the rest. `filings` stands in
+    for SEC's record, for tests.
 
-    **`limit` bounds the fetching, not the run.** The URL-path rung always sweeps
+    **`limit` bounds the page fetching, not the run.** The URL-path rung always sweeps
     the whole backlog because it costs nothing — capping it the way
     `backfill blocks` caps LLM calls throttled a free pass to 25 of 5,552 rows and
-    reported "5 dated" where the true offline answer is 422.
+    reported "5 dated" where the true offline answer is 422. SEC's rung is not capped
+    either, for the reason `_ask_sec` gives: it is a request a company, not a page.
     """
     import asyncio
 
@@ -324,6 +431,22 @@ def run(
     if apply:
         session.flush()
 
+    # Rung 2: SEC's own record, for the pages of filings. A request a company, so it
+    # asks for the whole backlog; and it runs before the page rung so that no filing
+    # is downloaded to be told it states no date.
+    if refetch:
+        still_undated = _ask_sec(
+            session,
+            still_undated,
+            found,
+            report,
+            apply=apply,
+            settings=settings,
+            filings=filings,
+        )
+        if apply:
+            session.flush()
+
     if not refetch or not still_undated:
         report.remaining = len(still_undated)
         report.citations = _propagate(session, found, apply=apply)
@@ -334,7 +457,7 @@ def run(
         report.remaining = max(0, len(still_undated) - limit)
         still_undated = still_undated[:limit]
 
-    # Rung 2: ask the publisher. `fetch_all` rather than a bare loop, for the
+    # Rung 3: ask the publisher. `fetch_all` rather than a bare loop, for the
     # per-host gate, the politeness delay and the escalation ladder — this is
     # thousands of requests across a couple of thousand third-party hosts, and a
     # WAF that fingerprints TLS answers 403 to httpx and 200 to curl_cffi.

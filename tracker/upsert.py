@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from dataclasses import replace as _dataclass_replace
@@ -1626,10 +1626,21 @@ def upsert_record(
     route_to: int | None = None,
     arbiter: Any = None,
     reading: set[tuple[int, str]] | None = None,
+    read_dates: Mapping[str, _dt.datetime] | None = None,
 ) -> UpsertResult:
     """Insert or update one project and its citations.
 
     Args:
+        read_dates: url -> a publication date the caller learned for that URL while
+            reading it, for a date the discovery queue cannot yet hold. The queue row
+            of a URL read for the first time is written *after* its citations, so a
+            date learned in that very read would reach the citation only at the next
+            `backfill dates`, and in between every rule that weighs evidence by its date
+            would treat the citation as published the day it was read. It applies the
+            way the queue's date does: fills a citation with none, and moves one only
+            earlier — see the date step below. `crawl.run` passes SEC's filing date for
+            a filing's pages, which state none themselves.
+
         reading: the citations this *reading* of an article has already written, as
             `(project id, url)`, shared by a caller upserting several records from
             one read and added to here. A citation already in it belongs to another
@@ -1940,6 +1951,11 @@ def upsert_record(
         # date — DCK's 2017 Digital Realty piece read as 2026-10-12, which then won a
         # merge on recency (`stale_claims`).
         known = _published_at(session, sr.url)
+        # The reading's own date, where the caller learned one the queue has no row for
+        # yet: the earlier of the two, the same rule applied to both.
+        learned = (read_dates or {}).get(sr.url)
+        if learned is not None and (known is None or learned < known):
+            known = learned
         if known is not None and (row.published_at is None or known < row.published_at):
             row.published_at = known
     session.flush()

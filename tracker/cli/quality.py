@@ -1637,13 +1637,17 @@ def _backfill_dates(*, limit: int, refetch: bool, apply: bool, yes: bool, everyt
     engine, _ = init_db(_db_path())
 
     if refetch and not yes and not json_mode():
+        from tracker.ingest.edgar import parse_filing_url
         from tracker.ingest.fetch import date_from_url
 
         with session_scope(engine, commit=False) as session:
             pending = dates_mod.undated_urls(session, everything=everything)
-        # The free rung shrinks the fetch list, so quote what would actually be
-        # requested rather than the whole backlog.
-        would_fetch = sum(1 for url in pending if date_from_url(url) is None)
+        # The free rung shrinks the fetch list, and a filing is dated from SEC's record
+        # a company at a time rather than fetched, so quote what would actually be
+        # requested as a page rather than the whole backlog.
+        would_fetch = sum(
+            1 for url in pending if date_from_url(url) is None and parse_filing_url(url) is None
+        )
         if limit:
             would_fetch = min(would_fetch, limit)
         if would_fetch > 200:
@@ -1818,7 +1822,9 @@ def backfill(
       is derived**, because a value is a function of its sources and the function
       is only applied when something writes to the row.
     * `dates` — fill in when each article was actually published, so a merge tie
-      is broken by publication order rather than by crawl order.
+      is broken by publication order rather than by crawl order. A page on sec.gov
+      is dated from SEC's own record of when the filing was filed, which the page
+      itself never states.
     * `basis` — derive which KIND of megawatt each capacity figure is, out of the
       quote already stored beside it. Free.
     * `precision` — read how precisely each date's own sentence states it, so

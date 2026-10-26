@@ -2816,3 +2816,32 @@ def test_notify_preview_refuses_an_account_watching_everything(initialized: Path
     result = invoke(initialized, "notify", "preview", "--user", "all@example.com")
     assert result.exit_code == 2
     assert "watches the whole database" in result.output
+
+
+def test_backfill_dates_does_not_count_filings_among_the_pages_it_would_request(
+    initialized: Path,
+):
+    """A filing is dated from SEC's record a company at a time and never fetched, so 250
+    of them are not "250 pages across third-party hosts" and must not stop a run for
+    want of `--yes`. The shipped placeholder User-Agent keeps the lookup itself offline,
+    so this also runs the SEC rung through the command, as the nightly loop does."""
+    from tracker.db import init_db, session_scope
+    from tracker.models import IngestUrl
+
+    engine, _ = init_db(initialized)
+    with session_scope(engine) as session:
+        for n in range(250):
+            session.add(
+                IngestUrl(
+                    url=f"https://www.sec.gov/Archives/edgar/data/1326801/000162828026{n:06d}/x.htm",
+                    run_id="t",
+                    status="discovered",
+                )
+            )
+
+    result = invoke(initialized, "backfill", "dates", "--refetch", "--limit", "0")
+
+    assert result.exit_code == 0, result.output
+    assert "would be requested" not in result.output
+    assert "dated from SEC's filing record" in result.output
+    assert "SEC filings it gave no date for" in result.output

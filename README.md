@@ -239,11 +239,12 @@ email reports is days old rather than weeks; then articles naming no tracked cam
 Enrich reads for one row and creates none, so without this step nothing in the loop
 added a campus. The first round also asks publishers for the dates of up to 150
 undated articles (`--dates`; one plain request each, newest first, never the same page
-twice in 90 days), and re-reads up to 60 cached articles that an older extraction
-prompt last read (`--reread`, about ¥0.8), so a tightened gate reaches rows written
-before it. A change to the gate itself does not change the prompt, so it has its own
-re-read: up to 60 cached articles holding a value, milestone or party the gate refused
-before its last revision (`--recheck`, about ¥1.2), each taken once.
+twice in 90 days) and SEC for the filing date of every undated filing, which no page
+states (one request a company, outside that 150), and re-reads up to 60 cached articles
+that an older extraction prompt last read (`--reread`, about ¥0.8), so a tightened gate
+reaches rows written before it. A change to the gate itself does not change the prompt,
+so it has its own re-read: up to 60 cached articles holding a value, milestone or party
+the gate refused before its last revision (`--recheck`, about ¥1.2), each taken once.
 A round counts as progress only when a count falls below the lowest it has been that
 night, so counts that wobble up and back down end the night instead of prolonging
 it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the

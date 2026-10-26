@@ -746,10 +746,28 @@ A ladder, cheapest and most explicit first, mirroring the fetcher's own:
 | `article:published_time` / `og:published_time`, either attribute order | — |
 | `<time datetime="…">` | 2 of 10 |
 | the URL path — `/2026/07/13/slug` | 175 citations nothing else dates |
+| SEC's own record of when a filing was filed (below) | 172 of the 173 citations of sec.gov |
 
 7 of 10 sampled pages carry a machine-readable date, and both sides of the
 reference case resolve. The URL rung is free and offline and takes coverage to
 **18.2%** on its own (project #10 from 6 dated citations to 15).
+
+**A filing is dated by SEC, because its page states no date at all.** An EDGAR
+document is inline XBRL with no `datePublished`, no `<meta>` and no `<time>`, so no
+rung above finds anything in it however often it is fetched: on 2026-10-26, 172 of the
+173 citations of sec.gov were undated, and an undated citation is ranked as if it had
+been published the day it was read — a 2019 10-K passing for this month's evidence.
+SEC's submissions API (`data.sec.gov/submissions/CIK##########.json`) lists every
+filing a company has made with its filing date, so `edgar.FilingDates` asks once per
+company and remembers: the 172 citations were pages of 90 filings by 24 companies.
+The CIK and the accession number come out of the address (`edgar.parse_filing_url`),
+whichever page of the filing it is — the document, an exhibit, an XBRL `R8.htm`, the
+filing's `-index.htm`, the whole-submission `.txt`, or the inline viewer's `?doc=`
+wrapper. A filing SEC's record does not list, or a night it does not answer, leaves the
+date empty; a lookup never fails the read it belongs to. `crawl.run` asks after the
+fetch and before the write, so the date reaches the prompt's `ARTICLE_DATE`, the queue
+row and the citation together; `backfill dates --refetch` asks for the citations
+already stored, and never fetches a filing's page for a date it cannot hold.
 
 **It returns `None` rather than guessing**, and refuses a date before 2000 or more
 than two days ahead — a copyright year and a scheduled-content placeholder are
@@ -767,7 +785,7 @@ that discarded the metadata:
 ```bash
 tracker backfill dates                      # what the URL paths alone would date
 tracker backfill dates --apply              # write those
-tracker backfill dates --refetch --apply    # ask the publishers too
+tracker backfill dates --refetch --apply    # ask the publishers too, and SEC for filings
 ```
 
 `--refetch` remembers what it asked (migration 0035, `date_probe`): a page that
@@ -795,8 +813,11 @@ the database losing dates, while the undated citations went from 924 to 951.
 Report-only until `--apply`. It deliberately does **not** go through `crawl.run`:
 that path consults `_split_cached` first, so a backfill routed through it would
 read the local text file, find no metadata in it, and conclude the publisher states
-no date. `--limit` bounds the fetching, not the run — capping the free pass the way
-`backfill blocks` caps LLM calls throttled it to 25 of 5,552 rows.
+no date. `--limit` bounds the page fetching, not the run — capping the free pass the way
+`backfill blocks` caps LLM calls throttled it to 25 of 5,552 rows. SEC's rung is not
+capped either: it is a request a company and not a page, so it takes the whole backlog
+at once, and what SEC did not answer for tonight is asked again tomorrow rather than
+remembered against the page (`date_probe` is for pages that stated no date).
 
 ```bash
 TRACKER_MERGE_BY_PUBLICATION_DATE=1 python scripts/measure_extraction.py

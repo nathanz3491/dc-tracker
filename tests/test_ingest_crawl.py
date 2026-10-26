@@ -3522,6 +3522,174 @@ def test_a_url_with_no_recorded_date_says_unknown_rather_than_guessing(session):
     assert "ARTICLE_DATE: unknown" in user
 
 
+# --- a filing is dated by SEC, because its page cannot be ---------------------
+#
+# A filing is an inline-XBRL document with no `datePublished`, `<meta>` or `<time>`,
+# so the fetcher dates none of them: 172 of the 173 citations of sec.gov were
+# undated on 2026-10-26, and an undated citation is ranked as if published the day
+# it was read. SEC's submissions record says when each was filed.
+
+FILING_URL = "https://www.sec.gov/Archives/edgar/data/1326801/000162828026050705/meta-20260630.htm"
+FILED = dt.datetime(2026, 7, 30)
+
+
+class FakeSEC:
+    """SEC's submissions record for Meta, counting what is asked of it."""
+
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
+        self.urls: list[str] = []
+
+    def get(self, url: str, **_params):
+        import httpx
+
+        self.urls.append(url)
+        if self.status != 200:
+            return httpx.Response(self.status)
+        recent = {"accessionNumber": ["0001628280-26-050705"], "filingDate": ["2026-07-30"]}
+        return httpx.Response(200, json={"filings": {"recent": recent, "files": []}})
+
+    def close(self) -> None:
+        pass
+
+
+def read_filing(session, sec, *, page=None, **kwargs):
+    """Crawl the filing's page with SEC's record standing in, and return the prompt."""
+    from tracker.ingest.edgar import FilingDates
+
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    report = crawl.run(
+        session,
+        [FILING_URL],
+        fetcher=FakeFetcher({FILING_URL: page or fetched(FILING_URL)}),
+        extractor=llm,
+        run_id="t1",
+        filing_dates=FilingDates(client=sec),
+        **kwargs,
+    )
+    return report, llm.seen[0][1]
+
+
+def queue_row(session) -> IngestUrl:
+    return session.scalar(select(IngestUrl).where(IngestUrl.url == FILING_URL))
+
+
+def test_a_filing_is_dated_by_sec_in_the_prompt_the_queue_and_the_citation(session):
+    """All three in the one read. The citation is written *before* the queue row, so
+    leaving it to the queue meant a filing was undated for every rule that weighs
+    evidence by its date until the next `backfill dates`."""
+    sec = FakeSEC()
+    report, user = read_filing(session, sec)
+
+    assert report.inserted == 1
+    assert "ARTICLE_DATE: 2026-07-30" in user
+    assert queue_row(session).published_at == FILED
+    assert session.scalar(select(Source.published_at)) == FILED
+    assert len(sec.urls) == 1
+
+
+def test_a_filing_served_from_the_cache_is_dated_too(session, tmp_path):
+    """`ingest edgar` hands the crawl a section of the filing it cached, and a cached
+    body has had its metadata stripped, so this is the ordinary way a filing arrives."""
+    from tracker.ingest.fetch import cache_path
+
+    cache_path(FILING_URL, tmp_path).write_text(article(), encoding="utf-8")
+    sec = FakeSEC()
+    from tracker.ingest.edgar import FilingDates
+
+    report = crawl.run(
+        session,
+        [FILING_URL],
+        fetcher=FakeFetcher({}),
+        extractor=FakeLLM([canned("llm_response_microsoft_wi.json")]),
+        cache_dir=tmp_path,
+        run_id="t1",
+        filing_dates=FilingDates(client=sec),
+    )
+    assert report.inserted == 1
+    assert queue_row(session).published_at == FILED
+    assert session.scalar(select(Source.published_at)) == FILED
+
+
+def test_a_page_that_states_its_own_date_is_not_asked_about(session):
+    """Filled, never overwritten: SEC is asked only where nothing dated the page."""
+    sec = FakeSEC()
+    page = fetched(FILING_URL, published_at=dt.datetime(2026, 7, 13))
+    _, user = read_filing(session, sec, page=page)
+
+    assert sec.urls == []
+    assert "ARTICLE_DATE: 2026-07-13" in user
+    assert queue_row(session).published_at == dt.datetime(2026, 7, 13)
+
+
+def test_a_page_that_is_not_a_filing_is_not_asked_about(session):
+    from tracker.ingest.edgar import FilingDates
+
+    sec = FakeSEC()
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")])
+    crawl.run(
+        session,
+        [URL],
+        fetcher=FakeFetcher({URL: fetched()}),
+        extractor=llm,
+        run_id="t1",
+        filing_dates=FilingDates(client=sec),
+    )
+    assert sec.urls == []
+    assert "ARTICLE_DATE: unknown" in llm.seen[0][1]
+
+
+def test_a_lookup_that_fails_costs_the_date_and_nothing_else(session):
+    """A date is metadata about a page that was read: SEC being down must not turn a
+    read into a failure, or leave the filing unread."""
+    sec = FakeSEC(status=503)
+    report, user = read_filing(session, sec)
+
+    assert report.inserted == 1 and report.fetch_error == 0
+    assert "ARTICLE_DATE: unknown" in user
+    assert queue_row(session).status == "ok"
+    assert queue_row(session).published_at is None
+    assert session.scalar(select(Source.published_at)) is None
+
+
+def test_a_news_watch_estimate_gives_way_to_the_date_sec_gives(session):
+    """A search found this filing on 2026-10-12 and the watch dated it by that; the
+    estimate can be years later than the filing, and is no better a date for the
+    prompt or the citation than it is for the queue."""
+    session.add(
+        IngestUrl(
+            url=FILING_URL,
+            run_id="w",
+            status="discovered",
+            feed="watch:#1",
+            published_at=dt.datetime(2026, 10, 12),
+        )
+    )
+    session.flush()
+    _, user = read_filing(session, FakeSEC())
+
+    assert "ARTICLE_DATE: 2026-07-30" in user
+    assert queue_row(session).published_at == FILED
+    assert session.scalar(select(Source.published_at)) == FILED
+
+
+def test_a_date_the_queue_already_holds_is_not_overwritten_by_sec(session):
+    """`record_url` fills and never overwrites, for a filing as for any page."""
+    session.add(
+        IngestUrl(
+            url=FILING_URL,
+            run_id="q",
+            status="discovered",
+            feed="feeds",
+            published_at=dt.datetime(2026, 8, 1),
+        )
+    )
+    session.flush()
+    read_filing(session, FakeSEC())
+
+    assert queue_row(session).published_at == dt.datetime(2026, 8, 1)
+
+
 # --- the escalation ladder --------------------------------------------------
 
 

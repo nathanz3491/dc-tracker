@@ -41,6 +41,10 @@ contains a link and asks for a name and an email instead. Requests there send
 - **A publication-date check**: one request each for pages that recorded no
   date, at most 150 a night. A page that still gives no date is not asked again
   for 90 days.
+- **SEC's filing record**: a filing's page states no publication date, so for each
+  SEC filing it cites it asks `data.sec.gov` when the filing was filed — one request
+  per company, not per page, so a few dozen the first night and a handful after. It
+  stays well inside SEC's published limit of ten requests a second.
 - **Nothing from a site that has closed itself to crawlers.** For the two trade
   publishers that challenge every request, DatacenterDynamics and Data Center
   Frontier, it learns their headlines from a news-search API it pays for, then

@@ -2520,3 +2520,54 @@ def test_two_seed_records_citing_one_url_for_one_site_keep_both_readings(session
 
     manual.run(session, seed)
     assert json.loads(project.sources[0].claims) == claims, "a re-ingest is not exact"
+
+
+# --- a date the reading learned ---------------------------------------------------
+
+FILING_URL = "https://www.sec.gov/Archives/edgar/data/1326801/000162828026050705/meta-20260630.htm"
+FILED = dt.datetime(2026, 7, 30)
+
+
+def _cite_filing(session, **kwargs) -> Source:
+    upsert_record(session, rec(sources=[manual_source(url=FILING_URL)]), **kwargs)
+    return session.scalar(select(Source).where(Source.url == FILING_URL))
+
+
+def _queued(session, when, status="discovered"):
+    from tracker.models import IngestUrl
+
+    session.add(IngestUrl(url=FILING_URL, run_id="t", status=status, published_at=when))
+    session.flush()
+
+
+def test_a_citation_nothing_dates_stays_undated(session):
+    assert _cite_filing(session).published_at is None
+
+
+def test_a_date_the_reading_learned_dates_the_citation_in_the_same_write(session):
+    """The queue row of a URL read for the first time is written *after* its
+    citations, so a date learned in that read reached the citation only at the next
+    `backfill dates`. Until then every rule that weighs evidence by its date saw a
+    filing as published the day it was read — a 2019 10-K as this month's evidence."""
+    assert _cite_filing(session, read_dates={FILING_URL: FILED}).published_at == FILED
+
+
+def test_a_date_learned_for_another_url_is_not_this_citations(session):
+    source = _cite_filing(session, read_dates={"https://x.test/other": FILED})
+    assert source.published_at is None
+
+
+def test_the_queues_later_date_gives_way_to_the_one_the_reading_learned(session):
+    """The news watch dates a URL by when its search found it, which is never earlier
+    than the page was published."""
+    _queued(session, dt.datetime(2026, 10, 12))
+    assert _cite_filing(session, read_dates={FILING_URL: FILED}).published_at == FILED
+
+
+def test_a_reading_never_moves_a_date_later(session):
+    _queued(session, dt.datetime(2026, 1, 1))
+    source = _cite_filing(session, read_dates={FILING_URL: FILED})
+    assert source.published_at == dt.datetime(2026, 1, 1)
+
+    source = _cite_filing(session, read_dates={FILING_URL: dt.datetime(2026, 9, 1)})
+    assert source.published_at == dt.datetime(2026, 1, 1), "a re-read does not make it newer"

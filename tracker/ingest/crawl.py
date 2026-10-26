@@ -29,7 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Final, NamedTuple
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -96,6 +96,9 @@ from tracker.vocab import (
     part_from_quote,
     risk_precedence,
 )
+
+if TYPE_CHECKING:
+    from tracker.ingest.edgar import FilingDates
 
 log = logging.getLogger(__name__)
 
@@ -3534,7 +3537,8 @@ def record_url(
     # metadata already stripped, so they always report None, and without this a
     # re-extraction run would erase every date the original fetch found.
     # Except a news-watch row's: its date is a search result's estimate ("3 days
-    # ago"), and the page's own is better.
+    # ago"), and the page's own is better. For a filing, whose page states none, the
+    # page's own is the date SEC filed it, which `run` puts on the result.
     if outcome.published_at is not None and (
         row.published_at is None or (row.feed or "").startswith("watch:")
     ):
@@ -3567,6 +3571,30 @@ def published_dates(session: Session, urls: list[str]) -> dict[str, str]:
         )
     )
     return {url: when.date().isoformat() for url, when in rows if when}
+
+
+def _filing_dates(
+    urls: list[str], resolver: FilingDates | None, settings: Settings
+) -> dict[str, dt.datetime]:
+    """url -> the date SEC filed it, for the SEC filings among `urls`. Never raises.
+
+    `edgar` is imported here because it imports this module for its patterns, so the
+    reverse at the top would be a cycle; by the time a run asks, both are loaded.
+    """
+    from tracker.ingest import edgar
+
+    return edgar.dates_of(urls, resolver=resolver, settings=settings)
+
+
+def _dated(result: FetchResult, filed: dict[str, dt.datetime]) -> FetchResult:
+    """`result` carrying the date SEC gave its URL, when SEC gave one.
+
+    `FetchResult` is frozen, so this is a copy; a page that already carried a date is
+    never in `filed`, which is what makes replacing the field here safe.
+    """
+    from dataclasses import replace
+
+    return replace(result, published_at=filed[result.url]) if result.url in filed else result
 
 
 def already_done(session: Session, urls: list[str]) -> set[str]:
@@ -3953,11 +3981,21 @@ def run(
     skip_unchanged: bool = False,
     focus: str | None = None,
     origins: dict[str, str] | None = None,
+    filing_dates: FilingDates | None = None,
 ) -> IngestReport:
     """Fetch, extract and upsert a list of article URLs.
 
     `origins` maps a URL to how it was found, for the queue's record of a URL it did
     not hold (:func:`record_url`).
+
+    **A filing is dated by SEC, because its page cannot be.** An EDGAR document states
+    no publication date, so a page of one that no date reached is dated from SEC's own
+    record of when it was filed (`edgar.FilingDates`, one request per company), after
+    the fetch and before anything is written. The date reaches the prompt as
+    `ARTICLE_DATE`, the queue row (:func:`record_url`'s fill-never-overwrite rule) and
+    the citation in the same write, so no rule weighing evidence by its date ever sees
+    the filing as published the day it was read. A lookup that fails costs the date and
+    nothing else. `filing_dates` stands in for the lookup, for tests.
 
     `focus` asks the model about one named project only — see :func:`focus_note`.
     For a caller reading on behalf of one row; a crawl reads for every row there is.
@@ -4068,6 +4106,21 @@ def run(
     # already paying for an LLM call each time round, and one query is easier to
     # reason about than N.
     published = published_dates(session, [r.url for r in [*cached, *fetched] if r.ok])
+    # Asked of every filing page no date reached, queue row or not: a news-watch row's
+    # date is an estimate that the page's own replaces (`record_url`), and a filing's
+    # own is SEC's. Network, so before the loop's writes rather than inside one.
+    filed = _filing_dates(
+        [r.url for r in [*cached, *fetched] if r.ok and r.published_at is None],
+        filing_dates,
+        settings,
+    )
+    if filed:
+        log.info("dated %d SEC filing page(s) from SEC's record of when each was filed", len(filed))
+        cached = [_dated(r, filed) for r in cached]
+        fetched = [_dated(r, filed) for r in fetched]
+        # The date the prompt resolves "next year" against: SEC's, over a news-watch
+        # row's estimate, which can be years later than a filing found by a search.
+        published.update({url: when.date().isoformat() for url, when in filed.items()})
     # Read here, on this thread, for the same reason as `published`: the workers
     # below must not touch the session.
     last_good = (
@@ -4203,6 +4256,7 @@ def run(
                     # not make the duplicate. See `gatekeeper`.
                     arbiter=record_arbiter,
                     reading=reading,
+                    read_dates=filed,
                 )
             except HeldBroken as exc:
                 # A bug, not a fact: the write would publish figures that break a

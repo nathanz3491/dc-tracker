@@ -405,3 +405,226 @@ def test_a_preview_remembers_nothing(session):
     cited(session, "https://y.test/opaque")
     dates.run(session, refetch=True, apply=False, fetcher=FakeFetcher({}))
     assert session.scalars(select(DateProbe)).all() == []
+
+
+# --- SEC filings: dated from SEC's record, never fetched for it --------------------
+#
+# A filing's page states no date, so the page rung cannot find one however often it
+# asks, and 172 of the 173 citations of sec.gov were undated on 2026-10-26. SEC's own
+# record of when each was filed does have it, one request a company.
+
+COMPANY = "https://www.sec.gov/Archives/edgar/data/1326801"
+Q2 = f"{COMPANY}/000162828026050705/meta-20260630.htm"  # 0001628280-26-050705
+Q1 = f"{COMPANY}/000162828026000012/meta-20260331.htm"  # 0001628280-26-000012
+FILED = dt.datetime(2026, 7, 30)
+
+
+class FakeSEC:
+    """SEC's submissions record for Meta, counting what is asked of it."""
+
+    def __init__(self, *, down: bool = False) -> None:
+        self.down = down
+        self.urls: list[str] = []
+
+    def get(self, url: str, **_params):
+        import httpx
+
+        self.urls.append(url)
+        if self.down:
+            return httpx.Response(503)
+        if not url.endswith("/CIK0001326801.json"):
+            return httpx.Response(404)
+        filed = {"0001628280-26-050705": "2026-07-30", "0001628280-26-000012": "2026-04-30"}
+        recent = {"accessionNumber": list(filed), "filingDate": list(filed.values())}
+        return httpx.Response(200, json={"filings": {"recent": recent, "files": []}})
+
+    def close(self) -> None:
+        pass
+
+
+def sec_run(session, sec=None, **kwargs):
+    """`dates.run` as the nightly loop calls it, with SEC's record standing in."""
+    from tracker.ingest.edgar import FilingDates
+
+    kwargs = {"refetch": True, "apply": True, "fetcher": FakeFetcher({}), **kwargs}
+    return dates.run(session, filings=FilingDates(client=sec or FakeSEC()), **kwargs)
+
+
+def citation(session, url) -> Source:
+    return session.scalar(select(Source).where(Source.url == url))
+
+
+def queue_row(session, url) -> IngestUrl:
+    return session.scalar(select(IngestUrl).where(IngestUrl.url == url))
+
+
+def test_a_filing_is_dated_from_secs_record_and_never_fetched(session):
+    cited(session, Q2)
+    cited(session, "https://y.test/opaque")
+    fetcher = FakeFetcher({})
+
+    report = sec_run(session, fetcher=fetcher)
+
+    assert (report.from_filing, report.unfiled, report.written, report.citations) == (1, 0, 1, 1)
+    assert set(fetcher.calls) == {"https://y.test/opaque"}, (
+        "a filing is not downloaded to be told it states no date"
+    )
+    assert queue_row(session, Q2).published_at == FILED
+    assert citation(session, Q2).published_at == FILED
+    assert citation(session, "https://y.test/opaque").published_at is None
+    assert (report.fetched, report.failed) == (1, 1), "the page rung still serves everything else"
+
+
+def test_only_the_filings_that_lack_a_date_are_asked_about(session):
+    """Fill-only, like every rung: a filing the queue already dates is not asked
+    about, and what it holds is not touched."""
+    dated = "https://www.sec.gov/Archives/edgar/data/1494877/000155837025009991/R13.htm"
+    cited(session, dated)
+    queue_row(session, dated).published_at = dt.datetime(2020, 1, 1)
+    cited(session, Q1)
+    cited(session, "https://y.test/2026/07/13/dated-in-path")
+    sec = FakeSEC()
+
+    report = sec_run(session, sec)
+
+    assert report.from_filing == 1
+    assert queue_row(session, dated).published_at == dt.datetime(2020, 1, 1)
+    assert queue_row(session, Q1).published_at == dt.datetime(2026, 4, 30)
+    assert [u.rsplit("/", 1)[1] for u in sec.urls] == ["CIK0001326801.json"], (
+        "the company with nothing undated is not asked about"
+    )
+
+
+def test_a_filing_sec_does_not_list_is_left_undated_and_is_not_fetched(session):
+    """The page rung's only answer for it would be a download and a `date_probe` row
+    keeping the *page* rung away for 90 days — from a URL it was never going to date."""
+    from tracker.models import DateProbe
+
+    cited(session, f"{COMPANY}/000162828026099999/meta-20261231.htm")
+    fetcher = FakeFetcher({})
+
+    report = sec_run(session, fetcher=fetcher)
+
+    assert (report.from_filing, report.unfiled, report.fetched) == (0, 1, 0)
+    assert fetcher.calls == []
+    assert session.scalars(select(DateProbe)).all() == []
+    assert dict(report.as_rows())["SEC filings it gave no date for"] == 1
+    assert session.scalar(select(Source)).published_at is None
+
+
+def test_the_report_says_nothing_of_filings_unless_some_were_left_undated(session):
+    cited(session, Q2)
+    assert "SEC filings it gave no date for" not in dict(sec_run(session).as_rows())
+
+
+def test_sec_being_down_leaves_the_filings_for_the_next_night(session):
+    """The date is a record SEC keeps, not a page that failed: nothing is remembered
+    against it, so tomorrow asks again at the cost of a request a company."""
+    cited(session, Q2)
+
+    report = sec_run(session, FakeSEC(down=True))
+    assert (report.from_filing, report.unfiled) == (0, 1)
+    assert citation(session, Q2).published_at is None
+
+    report = sec_run(session)
+    assert report.from_filing == 1
+    assert citation(session, Q2).published_at == FILED
+
+
+def test_without_a_contact_in_the_user_agent_nothing_is_asked_and_nothing_fails(session):
+    """The shipped placeholder is refused by SEC for the whole run, so the lookup says
+    so once and the run goes on. No resolver is injected, which is the nightly's path;
+    the suite's network guard fails this test if a request goes out."""
+    cited(session, Q2)
+
+    report = dates.run(session, refetch=True, apply=True, fetcher=FakeFetcher({}))
+
+    assert (report.from_filing, report.unfiled) == (0, 1)
+    assert citation(session, Q2).published_at is None
+
+
+def test_without_refetch_sec_is_not_asked(session):
+    """The request is the expensive half, here as for a page."""
+    cited(session, Q2)
+    sec = FakeSEC()
+
+    report = sec_run(session, sec, refetch=False)
+
+    assert sec.urls == []
+    assert (report.from_filing, report.remaining) == (0, 1)
+
+
+def test_a_preview_reports_the_filing_dates_and_writes_none(session):
+    cited(session, Q2)
+
+    report = sec_run(session, apply=False)
+
+    assert (report.from_filing, report.written, report.citations) == (1, 0, 1)
+    assert queue_row(session, Q2).published_at is None
+    assert citation(session, Q2).published_at is None
+    assert report.dated == 1
+    assert report.examples == [(Q2, FILED, "sec")]
+
+
+def test_a_citation_no_queue_row_holds_is_dated_too(session):
+    """2 of the 98 SEC pages cited on 2026-10-26 had no queue row — the agent's
+    gap-fill cites what a search found without crawling it — and `undated_urls` reads
+    the queue, so it never saw them."""
+    cited(session, "https://y.test/anything")
+    session.add(
+        Source(
+            project_id=session.scalar(select(Project)).id,
+            url=Q2,
+            source_type="company_filing",
+            fetched_at=NOW,
+        )
+    )
+    session.flush()
+
+    report = sec_run(session)
+
+    assert (report.from_filing, report.written, report.citations) == (1, 0, 1)
+    assert citation(session, Q2).published_at == FILED
+    assert queue_row(session, Q2) is None, "no queue row is made to hold it"
+
+
+def test_limit_does_not_cap_the_filings(session):
+    """It bounds the page fetching. SEC's record is a request a company, not a page."""
+    cited(session, Q2)
+    cited(session, Q1)
+    cited(session, "https://y.test/opaque-1")
+    cited(session, "https://y.test/opaque-2")
+
+    report = sec_run(session, limit=1)
+
+    assert report.from_filing == 2
+    assert report.fetched == 1
+
+
+def test_a_second_run_asks_sec_nothing(session):
+    cited(session, Q2)
+    sec_run(session)
+    sec = FakeSEC()
+
+    second = sec_run(session, sec)
+
+    assert sec.urls == []
+    assert (second.undated, second.from_filing) == (0, 0)
+
+
+def test_the_dated_total_counts_every_rung(session):
+    cited(session, "https://x.test/2026/07/13/dated-in-path")
+    cited(session, Q2)
+    cited(session, "https://y.test/opaque")
+    fetcher = FakeFetcher(
+        {
+            "https://y.test/opaque": FetchResult(
+                "https://y.test/opaque", True, markdown="t", published_at=dt.datetime(2025, 5, 5)
+            )
+        }
+    )
+
+    report = sec_run(session, fetcher=fetcher)
+
+    assert (report.from_url, report.from_filing, report.from_page) == (1, 1, 1)
+    assert report.dated == 3 and report.written == 3

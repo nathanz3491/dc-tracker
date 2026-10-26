@@ -1021,6 +1021,31 @@ initial build of the v1 PRD.
     enough that only a page already cited for the campus is read. One listed DC
     Blox's first Conyers building as running in 2025, while the county said in May
     2026 it was being built.
+- **A filing is dated by the day SEC filed it** (`tracker/ingest/edgar.py` `FilingDates`,
+  `dates_of`, `parse_filing_url`; `tracker/ingest/crawl.py` `run`; `tracker/upsert.py`
+  `upsert_record` `read_dates`; `tracker/dates.py` `_ask_sec`; `tracker backfill dates`;
+  `docs/workflows/sync.md`; `docs/data-quality.md`; `tests/test_edgar.py`,
+  `tests/test_dates.py`, `tests/test_ingest_crawl.py`, `tests/test_upsert.py`). A filing's
+  page states no publication date, so none was ever found: on the 10-26 copy of
+  production 172 of the 173 citations of sec.gov had none, and a citation with none is
+  ranked as if it were published the day it was read. A 2019 10-K passed for this
+  month's evidence in every rule that weighs evidence by its date — a claim a year older
+  than a rival of the same standing losing on weight, "newly named" parties, the Updates
+  page, the merge tiebreak if it is ever switched on. SEC does say when each was filed, and
+  one request to it covers every filing a company has made, so the 172 (90 filings by 24
+  companies) are 24 requests and a few more for older filings. The crawl now asks after
+  the fetch and before the write, so the model's `ARTICLE_DATE`, the queue row and the
+  citation carry the date from the first read; `tracker backfill dates --refetch` asks for
+  the citations already stored, and never downloads a filing to look for a date it cannot
+  hold. That is how the 172 are dated on the first night after this ships, and a value
+  that rested on an old filing counting as current can move when it is re-derived. A page
+  that states its own date, or a queue row that already holds one, is left alone, and a
+  news-watch estimate gives way to SEC's. A lookup that fails, a filing SEC does not list
+  or SEC being down leaves the date empty and the read unharmed; three failures in a row
+  stop that run's asking, and the dates job asks again the next night. Checked live on
+  five of the 172: Meta's 10-Q 2026-07-30, Digital Realty's 2005 exhibit 2005-06-08 and
+  its operating partnership's 10-Q 2025-08-01, Switch's 2017 10-K 2018-04-02 and a Riot
+  8-K exhibit 2024-07-31.
 - **Savvis and Csquare are known as Centersquare** (`tracker/seed/operators.toml`;
   `tests/test_news_watch.py`). Savvis's data centers went to CenturyLink, then
   Cyxtera, then Centersquare, whose site now reads Csquare. Savvis MP2 in Shakopee

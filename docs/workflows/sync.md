@@ -603,6 +603,20 @@ DCK's 2017 Digital Realty article read as 2026-10-12 and won a capacity field on
 recency. A citation now takes the earliest date known for its URL, never a later one,
 on every write and in `backfill dates`.
 
+**A filing is dated by SEC, because its page states no date.** An EDGAR document has no
+publication metadata for the fetcher to read, so on 2026-10-26 172 of the 173 citations
+of sec.gov were undated and ranked as if read that day — a 2019 10-K passing for this
+month's evidence. SEC's submissions record lists every filing a company has made with
+its filing date, one request to a company, so the 172 (90 filings, 24 companies) cost
+24 company records and the few older-filings pages some of them need. The crawl asks
+after the fetch and before the write, for each filing page no date reached, so the date
+arrives at the model's `ARTICLE_DATE`, the queue row and the citation in the same read;
+it is passed to the write because the citation is written before the queue row. In
+`backfill dates --refetch` SEC is asked for the citations already stored, ahead of the
+page rung, and a filing's page is never fetched for a date it cannot hold. A lookup that
+fails, a filing SEC does not list or a night SEC does not answer leaves the date empty
+and the read unharmed, and the dates job asks again the next night.
+
 ## The identity arbiter
 
 `--verify-identity` is on by default. Before a phase creates a row that has a
@@ -820,6 +834,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
 | Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
+| A filing's date: SEC's record, never its page | `tracker/ingest/edgar.py` — `parse_filing_url`, `FilingDates`, `dates_of`; `tracker/ingest/crawl.py` — `run` (`filing_dates=`), `_filing_dates`, `_dated`; `tracker/upsert.py` — `upsert_record` (`read_dates=`); `tracker/dates.py` — `_ask_sec`, `_undated_filings`; `tracker/cli/quality.py` — `_backfill_dates` |
 | A month the model wrote as 1 January | `tracker/normalize.py` — `month_named_in_quote`, `_MONTH_THEN_YEAR`; `tracker/ingest/crawl.py` — after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |
 | Whether a figure is one building's | `tracker/ingest/crawl.py` — `axis_gate`; `tracker/vocab.py` — `part_from_quote`, `PART_FIELDS`, `PART_WINDOW`, `INITIAL_WINDOW`; `tracker/backfill.py` — `regate_scope`; `tracker/upsert.py` — `contenders`; `tracker/gapfill.py` — `_fact_axes` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |
