@@ -229,9 +229,11 @@ Before it, a smaller enrich pass looks for the opening date and planned capacity
 campuses being built or permitted that lack one (`--pipeline`, default 30 campuses
 and 120 articles), largest first: without a date a campus is missing from the
 supply chart and can never be flagged as late.
-The first round also reads the news and adds campuses (`--discover`, default 40): it
+The first round also reads the news and adds campuses (`--discover`, default 900): it
 polls the feeds, which costs nothing, and reads that many queued articles through
-the crawl's identity check (`ingest crawl --from-queue --new-first`). Everything
+the crawl's identity check (`ingest crawl --from-queue --new-first`). With `--screen`
+a model reads their headlines first and sets aside what cannot be campus news; it is
+off until `tracker queue screen --measure` shows it loses next to no campus. Everything
 published within the email's two-month window goes first, newest first, so what the
 email reports is days old rather than weeks; then articles naming no tracked campus.
 Enrich reads for one row and creates none, so without this step nothing in the loop

@@ -12,6 +12,24 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A model can read the queued headlines before the night pays to read the pages,
+  and set aside the ones that cannot be campus news — off until it is measured**
+  (`tracker/ingest/headlines.py`; `tracker ingest crawl --from-queue --screen`;
+  `tracker queue screen` with `--measure`, `--drop` and `--undo`; migration 0049
+  `ingest_url.screened_by`; `scripts/overnight.sh` `--screen`;
+  `docs/workflows/sync.md` and its diagram; `tests/test_headlines.py`,
+  `tests/test_overnight.py`). About half of all reads find no campus — 2,235 of the
+  4,642 with a headline settled by 2026-10-26 — and many headlines said so: a hire in
+  Madrid, an award, a webinar, a VPS price list, Microsoft leaving a UK site. Each cost
+  a full extraction. A call with no reasoning now reads fifty headlines at a time and
+  names those that are plainly a place abroad, a hire or award, an event, market
+  commentary, a product, or unrelated; anything else is read, and a page is kept when
+  the model is unsure or the call fails. The crawl still reads its full limit, taking
+  the next pages in the queue in place of those set aside, and go-live results are read
+  whatever they say. A page set aside is marked with the reason, not deleted, and
+  `--undo` puts them all back. **The loop does not use it yet**: `tracker queue screen
+  --measure` first runs the headlines of the pages already read through it and lists
+  every read that found a campus it would have set aside.
 - **Every night now looks for the opening date and size of campuses being built or
   permitted, before anything else in its enrich pass** (`tracker enrich --pipeline`;
   `tracker/ingest/enrich.py` `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`,

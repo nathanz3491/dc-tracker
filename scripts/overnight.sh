@@ -215,6 +215,10 @@ ENRICH_ROUNDS=1
 PIPELINE=30
 PIPELINE_BUDGET=120
 DISCOVER=900
+# Have a model read the queued headlines first and set aside what cannot be campus
+# news (`ingest crawl --screen`). Off until `tracker queue screen --measure` shows,
+# on the pages already read, that it loses next to no campus.
+SCREEN=0
 BASELINES=300
 SEARCH_CAP=2000
 DATES=150
@@ -267,6 +271,9 @@ started in tmux and left.
   --enrich-rounds N  enrich in the first N rounds only (default 1)
   --discover N       queued articles to read, the news first (default 900); 0 to skip
                      discovery, the news watch and the read altogether
+  --screen           have a model read their headlines first and set aside what
+                     cannot be campus news (default off)
+  --no-screen        read the queue unscreened
   --baselines N      campuses the news watch gives their first, year-long look each
                      night (default 300); 0 for follow-ups only
   --search-cap N     web searches the whole night may send (default 2000); the news
@@ -315,6 +322,8 @@ while [ $# -gt 0 ]; do
     --pipeline-budget) shift; PIPELINE_BUDGET="${1:?}" ;;
     --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
     --discover)       shift; DISCOVER="${1:?}" ;;
+    --screen)         SCREEN=1 ;;
+    --no-screen)      SCREEN=0 ;;
     --baselines)      shift; BASELINES="${1:?}" ;;
     --search-cap)     shift; SEARCH_CAP="${1:?}" ;;
     --dates)          shift; DATES="${1:?}" ;;
@@ -608,7 +617,8 @@ printf '    per round %s findings, %s audit, %s risks, %s pairs\n' \
   "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS"
 printf '    enrich    %s campus(es) with no date or capacity on %s articles, then %s row(s) below T2 on %s, first %s round(s)\n' \
   "$PIPELINE" "$PIPELINE_BUDGET" "$ENRICH" "$ENRICH_BUDGET" "$ENRICH_ROUNDS"
-printf '    merge=%s  enrich=%s  min-confidence %s\n' "$DO_MERGE" "$DO_ENRICH" "$MIN_CONF"
+printf '    merge=%s  enrich=%s  screen=%s  min-confidence %s\n' \
+  "$DO_MERGE" "$DO_ENRICH" "$SCREEN" "$MIN_CONF"
 if [ "$LOCAL_JUDGEMENT" -eq 1 ]; then WHERE=', on the local model'; else WHERE=''; fi
 printf '    judgement %s effort%s\n' "$JUDGEMENT_EFFORT" "$WHERE"
 printf '    spend     %s\n' "$TRACKER_SPEND_LEDGER"
@@ -660,7 +670,10 @@ for round in $(seq 1 "$ROUNDS"); do
     tracker news --baselines "$BASELINES" \
       --max-queries "$((SEARCH_CAP > 500 ? SEARCH_CAP - 500 : SEARCH_CAP))" < /dev/null || true
     if capped news; then break; fi
-    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" < /dev/null || true
+    if [ "$SCREEN" -eq 1 ]; then SCREEN_FLAG=--screen; else SCREEN_FLAG=; fi
+    # Unquoted on purpose: when off, the flag must vanish rather than pass "".
+    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" $SCREEN_FLAG \
+      < /dev/null || true
 
     # Where the new rows are, before asking what they duplicate. The twin pass
     # pairs a row with an existing one through a shared town or county, or a

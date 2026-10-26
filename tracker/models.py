@@ -299,6 +299,9 @@ class IngestUrl(Base):
     #: the reader (0038). `crawl.stale_by_prompt` skips a URL the current prompt has
     #: read, whether or not that read wrote a citation.
     read_by: Mapped[str | None] = mapped_column(Text)
+    #: The headline-screen prompt that last kept this page (0049), so it is not asked
+    #: again under the same one (`tracker.ingest.headlines.STAMP`).
+    screened_by: Mapped[str | None] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint("url", name="uq_ingest_url_url"),

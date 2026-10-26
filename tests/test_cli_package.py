@@ -95,6 +95,7 @@ COMMANDS = {
     "queue stats",
     "queue duplicates",
     "queue aside",
+    "queue screen",
     "queue unreadable",
     "rename",
     "review",

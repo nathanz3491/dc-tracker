@@ -134,6 +134,14 @@ def ingest_crawl(
             help="With --from-queue, read articles naming no tracked campus first, newest first.",
         ),
     ] = False,
+    screen_headlines: Annotated[
+        bool,
+        typer.Option(
+            "--screen",
+            help="With --from-queue, have a model read the headlines first and set aside what "
+            "cannot be campus news (`tracker queue screen`).",
+        ),
+    ] = False,
     prompt_name: Annotated[
         str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")
     ] = "extract-v1",
@@ -339,13 +347,16 @@ def ingest_crawl(
                 "discarded: on publishers marked closed in seed/feeds.toml, with nothing "
                 "cached[/dim]"
             )
-        with session_scope(engine, commit=False) as session:
-            url_list = [
-                row.url
-                for row in disc.pending(
-                    session, limit=limit, new_first=new_first, unreadable=unreadable
-                )
-            ]
+        with session_scope(engine, commit=screen_headlines and not dry_run) as session:
+            queued = disc.pending(
+                session,
+                limit=None if screen_headlines else limit,
+                new_first=new_first,
+                unreadable=unreadable,
+            )
+            if screen_headlines:
+                queued = _screen_headlines(session, queued, want=limit, apply=not dry_run)
+            url_list = [row.url for row in queued]
         if not url_list:
             console.print(
                 "[green]queue is empty[/green] — run `tracker discover` to look for articles"
@@ -757,6 +768,37 @@ def ingest_geo(
         )
         for name in report.unmatched_places:
             console.print(f"  [dim]{name}[/dim]")
+
+
+def _screen_headlines(session, queued: list, *, want: int | None, apply: bool) -> list:
+    """The first `want` queued pages the headline screen keeps, setting aside the rest.
+
+    A provider that cannot answer at all leaves the queue as it was: the crawl reads
+    the first `want` unscreened, which is what it did before the screen existed.
+    """
+    from tracker.ingest import discover as disc
+    from tracker.ingest import headlines
+    from tracker.llm import LLMUnavailable, build_extractor
+
+    try:
+        result = headlines.screen_queue(
+            build_extractor(get_settings()),
+            queued,
+            want=want,
+            exempt={row.id for row in disc.deciding(session)},
+            apply=apply,
+        )
+    except LLMUnavailable as exc:
+        console.print(f"[yellow]headline screen skipped: {escape(str(exc))}[/yellow]")
+        return queued[:want] if want is not None else queued
+    if result.aside:
+        console.print(
+            f"[dim]{len(result.aside)} of {result.asked} headline(s) read "
+            f"{'would be' if not apply else 'were'} set aside as no campus news: "
+            f"{escape(headlines.summary(kind for _, kind in result.aside))} "
+            "(`tracker queue screen --undo` puts them back)[/dim]"
+        )
+    return result.kept
 
 
 def _identity_arbiter(enabled: bool, *, label: str):

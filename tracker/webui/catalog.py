@@ -88,6 +88,7 @@ DESTRUCTIVE: dict[str, str] = {
     "queue check": "deletes queued candidates whose URL is gone, with --drop.",
     "queue duplicates": "sets aside queued articles that are another copy of a story, with --drop.",
     "queue aside": "sets aside queued pages no campus story can be in, with --drop.",
+    "queue screen": "sets aside queued pages whose headline a model rules out, with --drop.",
     "queue unreadable": "takes queued pages on closed publishers out of the queue, with --drop.",
 }
 
@@ -312,6 +313,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "queue prune",
             "queue duplicates",
             "queue aside",
+            "queue screen",
             "queue unreadable",
             # Under Repair rather than Inspect: it is the only command in the
             # palette that writes a file the pipeline then obeys.
