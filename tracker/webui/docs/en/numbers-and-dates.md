@@ -58,13 +58,15 @@ A date is kept at the precision its source gave:
 | --- | --- | --- |
 | "on March 14, 2027" | 14 March 2027, to the day | 2027-03-14 |
 | "in March 2027" | March 2027, to the month | 2027-03 |
-| "Q3 2027", "late 2027" | the quarter starting July or October 2027 | 2027 |
-| "the second half of 2026" | the half-year starting July 2026 | 2026 |
+| "Q3 2027", "3Q 2027", "the third quarter of 2027", "late 2027" | the quarter starting July or October 2027 | 2027 |
+| "the second half of 2026", "H2 2026", "2H 2026" | the half-year starting July 2026 | 2026 |
 | "in 2028", "by 2028" | the year 2028 | 2028 |
 | "next spring", "soon", "before 2028" | nothing: no usable date | — |
 
 > [!TIP]
 > A date shown as just a year means the source gave only a year. It does not mean 1 January. In tables, quarter and half-year dates are shortened to the year as well; hover for the full statement.
+
+A quarter or half is kept as one however the source words it: if the date was first read as the whole year, the sentence beside it is read again, so "the second quarter of 2027" is due at the end of June, not at the end of December. A season, or "early" or "mid" a year, is not narrowed by that second reading: where it ends is not stated, and a guess could call a campus late too soon.
 
 A promise of a period is not overdue until the period is over: a campus "expected online in 2026" is not late until 2027.
 

@@ -95,8 +95,12 @@ year as `YYYY-01-01`, so the parser saw a day and recorded none. The precision i
 now read from the sentence stored beside the date (`normalize.precision_in_quote`,
 at extraction and by `tracker backfill precision` for what is already stored):
 on a production copy 444 of 661 quoted date claims gained one — 248 year, 130
-month, 43 quarter, 27 half. What is still missing is a pipeline view that buckets
-by stated precision rather than by the normalised day.
+month, 43 quarter, 27 half. A month, quarter or half the sentence names but the
+date was stored as 1 January now moves to that period's first day
+(`normalize.period_named_in_quote`): on the 2026-10-26 copy 37 claims, taking 5,231
+MW of the quarter view out of first quarters it was never promised for. What is
+still missing is a pipeline view that buckets by stated precision rather than by
+the normalised day.
 
 ### 6 — Corroboration counts syndication as independence
 

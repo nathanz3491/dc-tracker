@@ -810,6 +810,39 @@ _HALF_THEN_YEAR = re.compile(
     r"(?:\bh[12]|\b[12]h|\b(?:first|second|1st|2nd)\s+half)(?:\s+of)?[\s,]*$"
 )
 
+#: The ordinal words `_QUARTER_THEN_YEAR` and `_HALF_THEN_YEAR` accept, as numbers.
+_ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
+
+
+def _nth(phrase: str) -> int:
+    """Which quarter or half a matched phrase names: "q2 ", "2q ", "2nd quarter of ",
+    "second half of " all name the second."""
+    digit = re.search(r"[1-4]", phrase)
+    return int(digit.group()) if digit else _ORDINALS[phrase.split()[0]]
+
+
+def _named_before(text: str, hit: re.Match[str]) -> tuple[str, int] | None:
+    """What the words directly before one mention of a year name, and its first month.
+
+    `("day", 0)` for a day, written either way round or as an ISO date; `("month",
+    m)`, `("quarter", m)` or `("half", m)` with `m` the month the period named starts
+    in; None when nothing narrower than the year is named. "Early 2027" and "fall of
+    2027" are None as well — `period_named_in_quote` says why.
+
+    The one reading both `precision_in_quote` and `period_named_in_quote` make, so
+    the value one moves and the precision the other then reports cannot disagree.
+    """
+    before = text[max(0, hit.start() - 40) : hit.start()]
+    if re.match(r"-\d{2}-\d{2}", text[hit.end() : hit.end() + 6]) or _DAY_THEN_YEAR.search(before):
+        return "day", 0
+    if named := _MONTH_THEN_YEAR.search(before):
+        return "month", _MONTHS[named.group(1).rstrip(".")]
+    if quarter := _QUARTER_THEN_YEAR.search(before):
+        return "quarter", _QUARTER_MONTH[_nth(quarter.group(0))]
+    if half := _HALF_THEN_YEAR.search(before):
+        return "half", 1 if _nth(half.group(0)) == 1 else 7
+    return None
+
 
 def precision_in_quote(value: Any, quote: str | None) -> str | None:
     """How precisely `quote` states the date `value` — or None for a day, or unknown.
@@ -822,13 +855,19 @@ def precision_in_quote(value: Any, quote: str | None) -> str | None:
     "online in 2027" rendered as though somebody had named New Year's Day.
 
     The quote stored beside the date still says what the article said, so this reads
-    it: the words directly before the year. A day before the year is a day; a month
-    is a month when it is the value's month; a quarter or a half is one when the
-    value starts it; nothing at all is a year when the value is 1 January. Anything
-    else — the year absent from the sentence, a month the value does not start —
-    returns None and changes nothing. That is the only honest failure: a precision
-    is a statement about the article, and this never makes one the sentence does
-    not support.
+    it: the words directly before the year. A day before the year is a day; a month,
+    a quarter or a half is one when the value starts the one named; nothing at all is
+    a year when the value is 1 January. Anything else — the year absent from the
+    sentence, a period the value does not start — returns None and changes nothing.
+    That is the only honest failure: a precision is a statement about the article,
+    and this never makes one the sentence does not support.
+
+    A quarter or half used to need only to start *a* quarter or half, so 1 January
+    beside "the second quarter of 2027" read as a quarter: the first, which the
+    sentence never named and which ends three to nine months before the one it did.
+    `period_named_in_quote` moves such a value to the period named before this runs;
+    where it cannot, because the year appears twice, this records nothing and the
+    date is read as its year.
     """
     if value is None or not quote:
         return None
@@ -843,22 +882,13 @@ def precision_in_quote(value: Any, quote: str | None) -> str | None:
 
     readings: list[str] = []
     for hit in re.finditer(rf"(?<!\d){year}(?!\d)", text):
-        before = text[max(0, hit.start() - 40) : hit.start()]
-        if re.match(r"-\d{2}-\d{2}", text[hit.end() : hit.end() + 6]) or _DAY_THEN_YEAR.search(
-            before
-        ):
-            readings.append("day")
-            continue
-        named = _MONTH_THEN_YEAR.search(before)
-        if named:
-            stated = _MONTHS.get(named.group(1).rstrip("."))
-            readings.append("month" if stated == month else "other")
-        elif _QUARTER_THEN_YEAR.search(before):
-            readings.append("quarter" if month in _QUARTER_MONTH.values() else "other")
-        elif _HALF_THEN_YEAR.search(before):
-            readings.append("half" if month in (1, 7) else "other")
-        else:
+        named = _named_before(text, hit)
+        if named is None:
             readings.append("year" if month == 1 else "other")
+        elif named[0] == "day":
+            readings.append("day")
+        else:
+            readings.append(named[0] if named[1] == month else "other")
 
     if not readings or "day" in readings:
         return None
@@ -868,16 +898,35 @@ def precision_in_quote(value: Any, quote: str | None) -> str | None:
     return None
 
 
-def month_named_in_quote(value: Any, quote: str | None) -> dt.date | None:
-    """The month a sentence names for a date the model wrote as 1 January, or None.
+def period_named_in_quote(value: Any, quote: str | None) -> ParsedDate | None:
+    """The month, quarter or half a sentence names for a date stored as 1 January.
 
     The extraction prompt has the model write a bare year as `YYYY-01-01`, and it
-    sometimes does so for a month too: "completion projected in December of 2021"
-    came back as 2021-01-01. The sentence beside it is the evidence, so this reads
-    it: the value must be 1 January, its year must appear exactly once in the
-    sentence, and directly after one month name — "December 2021", "December of
-    2021" — that is not January. Anything else (two mentions of the year, a day, a
-    quarter, no month) returns None and changes nothing.
+    writes a narrower period that way too: Aligned SLC02's "completion projected in
+    December of 2021" came back as 2021-01-01, DataBank ATL3's "start operations in
+    the second quarter of 2027" as 2027-01-01, both year-precise. The evidence gate
+    does the same to a quarter the model got right, because it reads "Q2 2027" but
+    not "second quarter of 2027" and keeps the bare year it does read. Read as a
+    year, a quarter is due on 31 December: a slip is flagged up to nine months late,
+    and the quarter view files the capacity under the first quarter.
+
+    The sentence beside the value is the evidence, so this reads it. The value must
+    be 1 January, its year must appear exactly once in the sentence, and the words
+    directly before it must name a month ("December 2021", "December of 2021"), a
+    quarter ("Q2 2027", "2Q 2027", "second quarter of 2027", "2nd quarter 2027") or
+    a half ("H2 2026", "2H 2026", "second half of 2026"). The answer is that
+    period's first day at its precision — for January, the first quarter and the
+    first half the same day, with only the precision narrowed. The year twice (which
+    mention the value came from is not knowable), a day before it, or no period at
+    all return None and change nothing.
+
+    **Seasons and hedges stay the year, on purpose.** "Fall of 2023", "early 2026",
+    "mid-2025", "late 2027" and "the end of 2021" name no calendar period: where
+    autumn ends, or how early "early" is, would be our reading rather than the
+    source's statement. A reading narrower than the source meant calls a campus late
+    while the period it was promised for is still running — the costly error
+    `delays.read_as` is built to avoid — so those dates keep the year they were
+    stored at, which can flag a slip late but never early.
     """
     if value is None or not quote:
         return None
@@ -890,16 +939,11 @@ def month_named_in_quote(value: Any, quote: str | None) -> dt.date | None:
     hits = list(re.finditer(rf"(?<!\d){year}(?!\d)", text))
     if len(hits) != 1:
         return None
-    before = text[max(0, hits[0].start() - 40) : hits[0].start()]
-    if _DAY_THEN_YEAR.search(before):
+    named = _named_before(text, hits[0])
+    if named is None or named[0] == "day":
         return None
-    named = _MONTH_THEN_YEAR.search(before)
-    if not named:
-        return None
-    month = _MONTHS.get(named.group(1).rstrip("."))
-    if not month or month == 1:
-        return None
-    return dt.date(int(year), month, 1)
+    precision, month = named
+    return ParsedDate(dt.date(int(year), month, 1), precision)
 
 
 # --- Closed vocabularies ----------------------------------------------------

@@ -1046,6 +1046,35 @@ initial build of the v1 PRD.
   five of the 172: Meta's 10-Q 2026-07-30, Digital Realty's 2005 exhibit 2005-06-08 and
   its operating partnership's 10-Q 2025-08-01, Switch's 2017 10-K 2018-04-02 and a Riot
   8-K exhibit 2024-07-31.
+- **A quarter or half the source names is no longer stored as the whole year**
+  (`tracker/normalize.py` `period_named_in_quote`, `precision_in_quote`;
+  `tracker/ingest/crawl.py` `build_records`; `tracker/backfill.py`
+  `derive_date_precision`; reader docs *Numbers and dates* en/zh;
+  `docs/workflows/sync.md`; `tests/test_date_precision.py`). NTT Gainesville's first
+  building was due "in the second quarter of 2024" and was stored as 1 January 2024 at
+  year precision, so it counted as late only from 2025 instead of from July 2024;
+  DataBank's ATL3 ("the second quarter of 2027") and DC Blox Conyers ("4Q 2025") were
+  stored the same way. Read as a year, a quarter is due on 31 December, so a slip is
+  flagged up to nine months late, and the Capex quarter view files the capacity under
+  the first quarter. The model writes a bare year as 1 January and does the same to a
+  quarter, and the quote check did it to quarters the model got right: it reads
+  "Q2 2027" but not "the second quarter of 2027", so it kept the bare year. As for a
+  month already, the sentence beside the date now decides. When the year appears once
+  and the words before it name a quarter ("Q2 2027", "2Q 2027", "the second quarter of
+  2027") or a half ("H2 2026", "2H 2026", "the second half of 2026"), the date moves to
+  that period's first day at that precision, at extraction and, for stored claims, in
+  `tracker backfill precision --apply`. Seasons and "early", "mid", "late" or "end of"
+  a year stay the year: they name no calendar period, and a narrower guess could call
+  a campus late while the period it was promised is still running. Where the year
+  appears twice and the date cannot move, 1 January no longer reads as "a quarter" —
+  the first, due in March — but as the year. On the 10-26 copy 37 claims move, and with
+  them 14 campuses' online dates and one announcement date. NTT Gainesville stays a
+  suspected delay, now due 30 June 2024; DFW3 Expansion ("the third quarter of 2026")
+  is past its date and gets its go-live search; 5,231 MW of planned capacity leaves the
+  first quarter of its year in the Capex quarter view. Nebius Independence moves from
+  October 2027 to the second quarter: the source the merge ranks first says the second
+  quarter, and read as the whole year it had let a lower-ranked source's October stand
+  in.
 - **Savvis and Csquare are known as Centersquare** (`tracker/seed/operators.toml`;
   `tests/test_news_watch.py`). Savvis's data centers went to CenturyLink, then
   Cyxtera, then Centersquare, whose site now reads Csquare. Savvis MP2 in Shakopee

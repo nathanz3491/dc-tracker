@@ -685,18 +685,21 @@ class PrecisionReport:
     #: precision -> claims that ended there; `day` includes every date the quote
     #: does not narrow, which is stored as no precision at all.
     found: dict[str, int] = field(default_factory=dict)
-    #: Projects whose cached `*_precision` columns moved.
+    #: Projects whose dates or cached `*_precision` columns moved.
     projects_touched: int = 0
-    #: Dates the model wrote as 1 January whose sentence names the month
-    #: (`normalize.month_named_in_quote`); the stored claim takes the month.
-    months_corrected: int = 0
+    #: Dates stored as 1 January whose sentence names a month, a quarter or a half
+    #: (`normalize.period_named_in_quote`), by that period: the stored claim takes
+    #: the period's first day and its precision.
+    corrected: dict[str, int] = field(default_factory=dict)
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("quoted date claims read", self.claims),
             ("claims given a precision", self.changed),
-            ("months stored as January, corrected", self.months_corrected),
-            ("projects whose cache moved", self.projects_touched),
+            ("months stored as January, corrected", self.corrected.get("month", 0)),
+            ("quarters stored as January, corrected", self.corrected.get("quarter", 0)),
+            ("halves stored as January, corrected", self.corrected.get("half", 0)),
+            ("projects whose dates moved", self.projects_touched),
         ]
 
 
@@ -712,17 +715,21 @@ def derive_date_precision(session: Session, *, apply: bool = False) -> Precision
     keeps no precision rather than a guessed one.
 
     A precision the *parser* recorded is never overwritten — it saw the model's own
-    date string, and "Q3 2025" parsed as a quarter is already the right answer.
+    date string, and "Q3 2025" parsed as a quarter is already the right answer. The
+    one exception is a date stored as 1 January whose sentence names a narrower
+    period (`normalize.period_named_in_quote`): "the second quarter of 2027" kept as
+    2027-01-01 at `year` is the extraction's mistake, not the article's, so the
+    claim takes the period's first day and precision, and the row is re-derived.
     """
     import json
 
-    from tracker.normalize import month_named_in_quote, precision_in_quote
+    from tracker.normalize import period_named_in_quote, precision_in_quote
     from tracker.upsert import apply_date_precision, claims_by_field
 
     report = PrecisionReport()
     for project in session.scalars(select(Project)).all():
         touched_project = False
-        months_before = report.months_corrected
+        corrected_project = False
         for source in project.sources:
             if not source.quotes:
                 continue
@@ -741,21 +748,25 @@ def derive_date_precision(session: Session, *, apply: bool = False) -> Precision
                     continue
                 report.claims += 1
                 entry = meta.get(name) if isinstance(meta.get(name), dict) else {}
-                # Before the precision: a month the model wrote as 1 January was
-                # recorded `year`-precise, which the check below would keep.
-                named = month_named_in_quote(value, quote)
-                if named is not None:
-                    claims[name] = named.isoformat()
-                    meta[name] = {**entry, "date_precision": "month"}
-                    report.months_corrected += 1
+                # Before the precision: a period written as 1 January was recorded
+                # `year`-precise, which the check below would keep. Q1, H1 and January
+                # keep the day and change only a precision recorded otherwise; with
+                # none recorded, the check below reads the same one.
+                named = period_named_in_quote(value, quote)
+                recorded = entry.get("date_precision")
+                if named is not None and (
+                    named.value.isoformat() != str(value).strip()[:10]
+                    or (recorded and recorded != named.precision)
+                ):
+                    claims[name] = named.value.isoformat()
+                    meta[name] = {**entry, "date_precision": named.precision}
+                    report.corrected[named.precision] = report.corrected.get(named.precision, 0) + 1
                     report.changed += 1
-                    report.found["month"] = report.found.get("month", 0) + 1
-                    touched = True
+                    report.found[named.precision] = report.found.get(named.precision, 0) + 1
+                    touched = corrected_project = True
                     continue
-                if entry.get("date_precision"):
-                    report.found[entry["date_precision"]] = (
-                        report.found.get(entry["date_precision"], 0) + 1
-                    )
+                if recorded:
+                    report.found[recorded] = report.found.get(recorded, 0) + 1
                     continue
                 stated = precision_in_quote(value, quote)
                 report.found[stated or "day"] = report.found.get(stated or "day", 0) + 1
@@ -769,19 +780,32 @@ def derive_date_precision(session: Session, *, apply: bool = False) -> Precision
                 source.claims = json.dumps(claims, sort_keys=True, ensure_ascii=False)
                 touched_project = True
         if touched_project and apply:
-            before = (project.first_announced_precision, project.expected_online_precision)
-            if report.months_corrected > months_before:
-                # A claim's value moved, not only its precision: re-derive the row.
+            before = _dates_of(project)
+            if corrected_project:
+                # A claim's period moved, not only a precision filled in: re-derive the
+                # row. A narrower precision alone can move its value too — a coarse
+                # winner is refined to a finer date inside it (`upsert._refine_date`),
+                # and the first quarter no longer contains a June date the year did.
                 from tracker.upsert import recompute_from_sources
 
                 recompute_from_sources(session, project)
             else:
                 apply_date_precision(project, claims_by_field(list(project.sources)))
-            if (project.first_announced_precision, project.expected_online_precision) != before:
+            if _dates_of(project) != before:
                 report.projects_touched += 1
     if apply:
         session.flush()
     return report
+
+
+def _dates_of(project: Project) -> tuple[Any, ...]:
+    """A row's two dates and their precisions, to tell whether a backfill moved them."""
+    return (
+        project.first_announced,
+        project.first_announced_precision,
+        project.expected_online,
+        project.expected_online_precision,
+    )
 
 
 def derive_basis(session: Session, *, apply: bool = False) -> BasisReport:

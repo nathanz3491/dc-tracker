@@ -1462,7 +1462,8 @@ def _backfill_precision(*, apply: bool, dry_run: bool) -> None:
 
     Free, like `basis`: the precision comes out of the quote already stored beside
     the date. Until this ran, "online in 2027" was a claim for 1 January 2027 with
-    no record that the article said only a year.
+    no record that the article said only a year. A claim stored as 1 January whose
+    sentence names a month, quarter or half moves to that period's first day.
     """
     from tracker.backfill import derive_date_precision
 
@@ -1477,6 +1478,7 @@ def _backfill_precision(*, apply: bool, dry_run: bool) -> None:
                 "claims": report.claims,
                 "changed": report.changed,
                 "found": report.found,
+                "corrected": report.corrected,
                 "projects_touched": report.projects_touched,
                 "applied": writing,
             }
@@ -1828,7 +1830,9 @@ def backfill(
     * `basis` — derive which KIND of megawatt each capacity figure is, out of the
       quote already stored beside it. Free.
     * `precision` — read how precisely each date's own sentence states it, so
-      "online in 2027" stops rendering as 1 January 2027. Free.
+      "online in 2027" stops rendering as 1 January 2027, and move a month, quarter
+      or half stored as 1 January ("the second quarter of 2027") to its first day.
+      Free.
     * `urls` — fold a row's second citation of one article under another spelling
       of its URL, and take articles already read out of the retry pool. Free.
     * `events` — file as forecasts the stored milestones that only say they are

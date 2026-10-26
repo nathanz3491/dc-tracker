@@ -589,12 +589,17 @@ programme total. "Could reach" and "could top" are not enough — that is how or
 planned budgets are reported — and the hedge must be on the figure claimed. The same
 rule re-runs over stored claims every night in `backfill scope`.
 
-**A month the model wrote as 1 January takes the sentence's month.** The prompt asks
-for a bare year as `YYYY-01-01`, and the model sometimes does that for a month too:
-"completion projected in December of 2021" came back 2021-01-01 and was labelled
-year-precise. `normalize.month_named_in_quote` corrects it after the evidence gate,
-and `backfill precision` corrects stored claims; "December of 2021" now also reads as
-a month.
+**A month, quarter or half written as 1 January takes the sentence's period.** The
+prompt asks for a bare year as `YYYY-01-01`, and the model does that for narrower
+periods too: "completion projected in December of 2021" came back 2021-01-01 and was
+labelled year-precise, and so did "the second quarter of 2027". The evidence gate does
+it to a quarter the model got right, because it reads "Q2 2027" but not "the second
+quarter of 2027" and keeps the bare year. `normalize.period_named_in_quote` corrects
+the date after the gate — when its year appears once and the words before it name a
+month, a quarter ("2Q 2027", "the second quarter of 2027") or a half ("2H 2026", "the
+second half of 2026") — and `backfill precision` corrects stored claims. Seasons and
+"early", "mid", "late" or "end of" a year stay the year: none names a calendar period,
+and a narrower guess could call a campus late before its promised period is over.
 
 **A citation is dated by its article, not by when the watch found it.** The news
 watch dates a URL by its search hit, and the page's own date, learned on reading it,
@@ -835,7 +840,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
 | A filing's date: SEC's record, never its page | `tracker/ingest/edgar.py` — `parse_filing_url`, `FilingDates`, `dates_of`; `tracker/ingest/crawl.py` — `run` (`filing_dates=`), `_filing_dates`, `_dated`; `tracker/upsert.py` — `upsert_record` (`read_dates=`); `tracker/dates.py` — `_ask_sec`, `_undated_filings`; `tracker/cli/quality.py` — `_backfill_dates` |
-| A month the model wrote as 1 January | `tracker/normalize.py` — `month_named_in_quote`, `_MONTH_THEN_YEAR`; `tracker/ingest/crawl.py` — after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |
+| A month, quarter or half written as 1 January | `tracker/normalize.py` — `period_named_in_quote`, `_named_before`, `_MONTH_THEN_YEAR`, `_QUARTER_THEN_YEAR`, `_HALF_THEN_YEAR`, `precision_in_quote`; `tracker/ingest/crawl.py` — `build_records`, after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |
 | Whether a figure is one building's | `tracker/ingest/crawl.py` — `axis_gate`; `tracker/vocab.py` — `part_from_quote`, `PART_FIELDS`, `PART_WINDOW`, `INITIAL_WINDOW`; `tracker/backfill.py` — `regate_scope`; `tracker/upsert.py` — `contenders`; `tracker/gapfill.py` — `_fact_axes` |
 | Source ignore list | `tracker/policy.py` — `load`, `partition` |
 | The database mover | `scripts/sync_db.py` — `pull`, `push`, `snapshot`, `verify`, `_COUNTED` |

@@ -361,7 +361,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
 | Not asking twice | `tracker/attempts.py` — `exhausted`, `record`, `evidence_count` |
-| Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis, whether a figure is one building's, and how precisely a date was stated, itself (`gapfill._fact_axes`, `normalize.precision_in_quote`); its parties come from `parties._inferred_parties`, which reads any citation's own claims |
+| Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis, whether a figure is one building's, and how precisely a date was stated, itself (`gapfill._fact_axes`, `normalize.precision_in_quote`) — but unlike the crawl reader it does not move a month, quarter or half written as 1 January to its first day (`normalize.period_named_in_quote`); such a date reads as its year until `backfill precision` moves it; its parties come from `parties._inferred_parties`, which reads any citation's own claims |
 | Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport` (`remeasure`, `harvested`, `agent_gained`), `BatchReport` (`agent_filled`); `tracker/cli/enrich.py` — `_render_enrich`, `_render_batch` |
 
 See also: [sync](sync.md), whose phase 5 is this command with `--enrich-budget` in

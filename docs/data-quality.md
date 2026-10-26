@@ -590,7 +590,10 @@ tracker backfill precision --apply
 ```
 
 A sentence that does not narrow the date, or names a period the stored date does
-not start, records nothing rather than a guess.
+not start, records nothing rather than a guess. One exception moves the date: a
+month, quarter or half named directly before a year the sentence gives once, beside
+a date stored as 1 January — "the second quarter of 2027" held as 2027-01-01 — puts
+the date on that period's first day (`normalize.period_named_in_quote`).
 
 ## Three kinds of megawatt in one column
 

@@ -63,7 +63,6 @@ from tracker.normalize import (
     canonical_url,
     is_blank,
     looks_english,
-    month_named_in_quote,
     norm_country,
     norm_date_detail,
     norm_excerpt,
@@ -74,6 +73,7 @@ from tracker.normalize import (
     norm_risk_severity,
     norm_state,
     norm_text,
+    period_named_in_quote,
     precision_in_quote,
     soft,
 )
@@ -2857,14 +2857,16 @@ def build_records(
         values, coercion_notes, precisions = _coerce(raw)
         evidence = raw.get("evidence") if isinstance(raw.get("evidence"), list) else []
         kept, quotes, dropped = evidence_gate(values, evidence, result.markdown, precisions)
-        # A month the model wrote as 1 January: "December of 2021" came back as
-        # 2021-01-01. The verified sentence names the month, so the value takes it.
+        # A month, quarter or half written as 1 January: "December of 2021" came
+        # back as 2021-01-01, "the second quarter of 2027" as 2027-01-01 — by the
+        # model, or by the gate above keeping the bare year of a quarter it does not
+        # read. The verified sentence names the period, so the value takes it.
         for name in ("first_announced", "expected_online"):
-            named = month_named_in_quote(kept.get(name), quotes.get(name))
+            named = period_named_in_quote(kept.get(name), quotes.get(name))
             if named is not None:
-                kept[name] = named.isoformat() if isinstance(kept[name], str) else named
+                kept[name] = named.value.isoformat() if isinstance(kept[name], str) else named.value
                 if precisions is not None:
-                    precisions[name] = "month"
+                    precisions[name] = named.precision
 
         # Identity: without a company and a locality there is nothing to dedup on,
         # so the "project" is a passing mention rather than a record.
