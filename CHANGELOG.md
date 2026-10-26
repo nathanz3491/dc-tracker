@@ -515,6 +515,16 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Every model call is recorded, the console's and hand-run commands' included, and
+  the month's share counts them** (`tracker/cli/_shared.py` `_daytime_ledger`;
+  `tracker/spend.py` `monthly_budget`; README; `scripts/overnight.sh`;
+  `tests/test_cost_controls.py`). Only the nightly loop kept a spend ledger. A command
+  run by hand and the console's AI panels recorded nothing, so the tracker's 85% of
+  the OpenCode Go month held back ¥1 a day for them on a guess. Each such process now
+  appends to `data/runs/daytime-YYYYMM.spend` beside the nights' ledgers, never over
+  a ledger the loop has named, and the nightly allowance reads them all. A busy day
+  comes out of the next nights, and the guess is gone: ¥482.80 a rolling month,
+  ¥16.09 a night.
 - **The nightly loop spends a fixed share of the month, and reads more to fill it**
   (`tracker/spend.py` `allowance`, `monthly_budget`, `read_all`, `allowance` command;
   `scripts/overnight.sh`; README; `tests/test_cost_controls.py`,

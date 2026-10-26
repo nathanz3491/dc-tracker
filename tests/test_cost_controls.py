@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import pathlib
 import time
 
 import pytest
@@ -326,8 +327,36 @@ def _night(day: dt.datetime, cny: float) -> str:
     return f"{day:%Y-%m-%dT%H:%M:%SZ}\t1\tenrich\tdeepseek-v4.1-flash\t0\t{reply}\t0\t0\textract\n"
 
 
-def test_the_tracker_keeps_to_85_percent_of_the_month_less_the_daytime_calls():
-    assert spend.monthly_budget() == pytest.approx(80 * 7.1 * 0.85 - 30 * 1.0)  # ¥452.80
+def test_the_tracker_keeps_to_85_percent_of_the_month():
+    assert spend.monthly_budget() == pytest.approx(80 * 7.1 * 0.85)  # ¥482.80
+
+
+def test_a_command_run_by_hand_records_its_calls_in_the_daytime_ledger(tmp_path, monkeypatch):
+    """The console's AI panels and hand-run commands recorded nothing, so the month's
+    share had to guess at them. Every CLI process now writes a ledger: the night's
+    when the loop names one, else the month's daytime ledger beside the database."""
+    from typer.testing import CliRunner
+
+    from tracker.cli import app
+    from tracker.config import get_settings
+
+    (tmp_path / "runs").mkdir()
+    db = tmp_path / "tracker.db"
+    CliRunner().invoke(app, ["--db", str(db), "version"])
+    ledger = os.environ.get("TRACKER_SPEND_LEDGER", "")
+    assert ledger.startswith(str(tmp_path / "runs" / "daytime-")) and ledger.endswith(".spend")
+    assert get_settings().spend_ledger == pathlib.Path(ledger)
+
+    monkeypatch.setenv("TRACKER_SPEND_LEDGER", str(tmp_path / "night.spend"))
+    CliRunner().invoke(app, ["--db", str(db), "version"])
+    assert os.environ["TRACKER_SPEND_LEDGER"] == str(tmp_path / "night.spend"), "the loop's wins"
+
+    monkeypatch.delenv("TRACKER_SPEND_LEDGER")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    CliRunner().invoke(app, ["--db", str(elsewhere / "tracker.db"), "version"])
+    assert "TRACKER_SPEND_LEDGER" not in os.environ, "no runs directory, no ledger"
+    get_settings.cache_clear()
 
 
 def test_a_month_spent_at_its_share_leaves_tonight_its_share():

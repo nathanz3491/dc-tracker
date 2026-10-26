@@ -93,8 +93,8 @@
 # `tracker.spend` at OpenCode Go's rates for the hour each call was made. By default it
 # is tonight's share of a month (`tracker.spend allowance`, from 2026-10-25). OpenCode
 # Go's flash allowance is $80 a month, and other work runs on the same plan, so the
-# tracker keeps to 85% of it, less ¥1 a day for the console and hand-run commands,
-# which no ledger records: ¥452.80 over a rolling 30 days, ¥15.09 a night, less a
+# tracker keeps to 85% of it: ¥482.80 over a rolling 30 days, counting the console's
+# and hand-run commands' daytime ledgers with the nights' (from 10-26), ¥16.09 a night, less a
 # seventh of whatever the last 29 days spent over their share. Unspent money is not
 # carried over: tried on the 10-25 ledgers, it ran four weeks above the share on
 # October's savings and then left two nights with nothing. Before that it was a flat ¥15 that no
@@ -126,7 +126,7 @@
 # Raised again on 2026-10-25, to spend the month's share: 80 rows on 320 articles
 # (69% of rows still lacked a basic field), 900 queued articles, and 120 each to
 # re-read and re-check. About ¥16-17 a night at the 10-25 rates, which the night's
-# ¥15.09 trims; enrich runs after the duplicate, audit,
+# ¥16.09 trims; enrich runs after the duplicate, audit,
 # obstacle, contradiction and tranche passes in a round, so a ceiling reached early
 # cuts reading, never settling. An overshoot is one
 # enrich pass (about ¥6), and the next nights' allowance pays it back.

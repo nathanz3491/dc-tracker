@@ -328,6 +328,29 @@ def _writable(command: str):
     return engine
 
 
+def _daytime_ledger() -> None:
+    """Record this process's paid calls in the month's daytime ledger, unless one is set.
+
+    The nightly loop names a ledger per night (`TRACKER_SPEND_LEDGER`) and every
+    command it runs writes there. Everything else -- a command run by hand, the
+    console's AI panels (`tracker serve`) -- recorded nothing, so the loop's share
+    of the OpenCode Go month (`tracker.spend.allowance`) had to guess at them: ¥1 a
+    day, held back unmeasured. Now each such process appends to
+    `runs/daytime-YYYYMM.spend` beside the database, which `allowance` reads with the
+    nights'. Only where that `runs` directory already exists -- the installation's,
+    never a test's temporary database -- and never over a ledger already named.
+    """
+    if os.environ.get("TRACKER_SPEND_LEDGER") or get_settings().spend_ledger is not None:
+        return
+    runs = _db_path().parent / "runs"
+    if not runs.is_dir():
+        return
+    import datetime as dt
+
+    os.environ["TRACKER_SPEND_LEDGER"] = str(runs / f"daytime-{dt.date.today():%Y%m}.spend")
+    get_settings.cache_clear()
+
+
 @app.callback()
 def main_callback(
     db: Annotated[
@@ -347,6 +370,7 @@ def main_callback(
 ) -> None:
     _state["db"] = db
     _state["json"] = as_json
+    _daytime_ledger()
     logging.basicConfig(
         # Logs go to stderr, so `tracker --json list | jq` stays clean even at
         # --verbose. Warnings are raised to ERROR in JSON mode because an

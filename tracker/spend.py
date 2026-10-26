@@ -115,13 +115,6 @@ GO_MONTHLY_USD: Final = 80.0
 #: user set the tracker at about 85% of it (2026-10-25).
 TRACKER_SHARE: Final = 0.85
 
-#: What the tracker spends on an ordinary day outside the nightly loop -- the
-#: console's AI panels, hand-run commands -- in yuan. No ledger records those calls;
-#: the hand-run reads and lookups of 10-22 and 10-24 came to under ¥2 together, and
-#: most days have none. Held back from every night's share so the month still
-#: closes near the tracker's share.
-DAYTIME_CNY: Final = 1.0
-
 #: The days the allowance is spread over: a rolling month, which keeps a calendar
 #: month inside the share as well.
 WINDOW_DAYS: Final = 30
@@ -139,18 +132,21 @@ CATCH_UP_DAYS: Final = 7
 
 
 def monthly_budget() -> float:
-    """What the nightly loop may spend in a rolling month, in yuan.
+    """What the tracker may spend in a rolling month, in yuan: $80 x ¥7.1 x 85% = ¥482.80.
 
-    The tracker's share of OpenCode Go's monthly allowance, less the daytime spend
-    no ledger sees: $80 x ¥7.1 x 85% - 30 x ¥1 = ¥452.80.
+    The nights and the daytime together: since 2026-10-26 a command run by hand and
+    the console's AI panels write `daytime-YYYYMM.spend` beside the nights' ledgers
+    (`tracker.cli._shared._daytime_ledger`), and :func:`allowance` reads them all, so
+    a busy day comes out of the next nights. Until then the daytime spend was
+    unrecorded and ¥1 a day was held back for it on a guess.
     """
-    return GO_MONTHLY_USD * CNY_PER_USD * TRACKER_SHARE - WINDOW_DAYS * DAYTIME_CNY
+    return GO_MONTHLY_USD * CNY_PER_USD * TRACKER_SHARE
 
 
 def allowance(calls: Iterable[Call], *, now: dt.datetime, budget: float | None = None) -> float:
     """Tonight's money ceiling, in yuan, from what the last 29 days spent.
 
-    A night's share of the month (:func:`monthly_budget` / 30, ¥15.09), less a
+    A night's share of the month (:func:`monthly_budget` / 30, ¥16.09), less a
     seventh of whatever the previous 29 days spent over their share; never below
     nothing or above :data:`NIGHT_MAX_CNY`. Nights that spend their allowance close a
     month at the budget, and a dear stretch is paid back over the next week.
@@ -416,7 +412,6 @@ __all__ = [
     "BEIJING",
     "CATCH_UP_DAYS",
     "CNY_PER_USD",
-    "DAYTIME_CNY",
     "FETCH_CNY",
     "FETCH_MODEL",
     "GO_MONTHLY_USD",
