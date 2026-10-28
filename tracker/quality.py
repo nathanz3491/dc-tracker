@@ -274,8 +274,17 @@ def recency_inversions(
     is the same disease and is deliberately *not* counted here, because it is the
     weighting policy working as designed rather than a tiebreak accident — so this
     number is a floor, not a total.
+
+    **Nor is a field the merge never decides.** `blocker` is the most severe open
+    obstacle (`upsert._derive_blocker`, from the risk rows) and `notes` is assembled;
+    citations still record a `blocker` claim, but that value is written and never
+    read, so no tiebreak chose the stored one. Reading those claims as a contest
+    reported 199 of the 259 inversions on the 2026-10-28 copy of production, and
+    failed `clean`'s `no_inversions` on 173 rows for a value crawl order had not
+    decided. `conflicts.disputes` has skipped both fields for the same reason all
+    along.
     """
-    from tracker.upsert import FIELD_POLICY, Policy, claims_by_field
+    from tracker.upsert import DERIVED_FIELDS, FIELD_POLICY, Policy, claims_by_field
 
     published = _published_index(session)
     query = select(Project)
@@ -286,6 +295,8 @@ def recency_inversions(
     for project in session.scalars(query).all():
         by_field = claims_by_field(list(project.sources or ()))
         for name, claims in by_field.items():
+            if name in DERIVED_FIELDS:
+                continue
             # Only PREFER_WEIGHT consults the tiebreak at all. MAX/MIN/PHASE scan
             # every claim and FILL_ONLY takes arrival order, so a "loser" under
             # those policies was never in a tiebreak to lose.

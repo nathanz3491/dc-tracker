@@ -101,7 +101,10 @@ REMEDIES: Final[dict[str, str]] = {
     "no_silent_defect": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
     "no_errors": "tracker logic resolve --project {id}",
     "audit_clear": "tracker audit resolve --project {id} --llm",
-    "no_inversions": "tracker logic resolve --auto --apply",
+    # Not `logic resolve --auto`: that re-derives a value that differs from its own
+    # sources' winner, and an inverted value IS the winner — the tiebreak picked it.
+    # Only a ruling on which claim is superseded moves it.
+    "no_inversions": "tracker logic conflicts {id} --apply",
     "duplicates_answered": "tracker duplicates  # then merge or park",
     "fields_present": "tracker enrich {id} --target 0",
     "values_backed": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
@@ -126,7 +129,7 @@ CONDITION_LABELS: Final[dict[str, str]] = {
     "no_silent_defect": "a value presented as fact with no sentence behind it",
     "no_errors": "a contradiction the row fails on",
     "audit_clear": "a figure that cannot be true",
-    "no_inversions": "a value that has drifted from its own sources",
+    "no_inversions": "a value crawl order chose over a newer article",
     "duplicates_answered": "a possible duplicate nobody has ruled on",
     "fields_present": "tracked fields still empty",
     "values_backed": "a stored value with no quote",

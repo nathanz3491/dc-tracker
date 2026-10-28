@@ -349,6 +349,38 @@ def test_a_stronger_source_winning_is_not_an_inversion(session):
     assert quality.recency_inversions(session) == []
 
 
+def test_a_field_the_merge_never_decides_has_no_inversion(session):
+    """`blocker` comes from the open obstacles, not from a tiebreak between claims.
+
+    Citations still record a `blocker` claim, and the shape below — the older one
+    crawled last — is exactly the investment case above. But no claim's order sets
+    the stored value, so calling it "decided by crawl order" was false, and it was
+    199 of the 259 inversions on the 2026-10-28 copy of production.
+    """
+    project = _project(session, blocker="Residents oppose the rezoning")
+    old = _source(
+        session,
+        project,
+        {"blocker": "Residents oppose the rezoning"},
+        quotes={"blocker": "Residents oppose the rezoning of the farmland for the campus"},
+        url="https://example.test/older",
+        fetched_at=dt.datetime(2026, 8, 1, 21, 54),  # crawled LAST
+    )
+    new = _source(
+        session,
+        project,
+        {"blocker": "The county paused every data center permit"},
+        quotes={"blocker": "The county paused every data center permit for six months"},
+        url="https://example.test/newer",
+        fetched_at=dt.datetime(2026, 7, 30, 21, 25),  # crawled FIRST
+    )
+    _published(session, old.url, dt.datetime(2025, 8, 22))
+    _published(session, new.url, dt.datetime(2025, 11, 5))
+    session.refresh(project)
+
+    assert quality.recency_inversions(session) == []
+
+
 # --- the publication-date tiebreak (migration 0014, off by default) ----------
 
 

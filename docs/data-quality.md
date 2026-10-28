@@ -853,6 +853,13 @@ is the distinction the sort cannot make. Run the line above to see the current
 list before deciding; the flag changes the policy, so stored values move as each
 row is next written.
 
+**What counts as an inversion is a field the tiebreak decides.** `blocker` and
+`notes` are not merged from claims at all — the obstacle is the most severe open
+risk on the row — so a newer article's obstacle claim losing to an older one's
+decides nothing, and `quality.recency_inversions` skips both, as `conflicts.disputes`
+does. Counting them made 199 of the 259 inversions on the 2026-10-28 copy, and
+`tracker clean`'s `no_inversions` failed 173 rows for them.
+
 The same fact fixes a second bug. The prompt's `ARTICLE_DATE` was always
 `unknown`: `extract_one`'s `published_date` parameter existed, the prompt
 interpolated it, and no caller ever passed it. RULE 5 resolves relative timing

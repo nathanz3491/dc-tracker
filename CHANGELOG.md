@@ -1082,6 +1082,22 @@ initial build of the v1 PRD.
   - **Part of a plan running under a lagging stage** is deliberately not asked about.
     It was 14 of 20 such rows (Microsoft Cheyenne, Goodyear, Red Oak), and offering
     their running figures to a model to strike would remove correct data.
+- **173 rows were held below the "sound" tier for a contest that never happened, and
+  68 of them are complete** (`tracker/quality.py` `recency_inversions`;
+  `tracker/clean.py` `REMEDIES`, `CONDITION_LABELS`; `tests/test_quality.py`).
+  `tracker clean` fails a row when a value was chosen by the order the crawler read
+  two articles rather than the order they were published. It read the `blocker`
+  claims on citations as such a contest, but a row's obstacle is never chosen between
+  claims: it is the most severe open obstacle on the row, and those claims are written
+  and never read. That was 199 of the 259 cases on the 2026-10-28 copy of production.
+  The check now skips `blocker` and `notes`, as the settle step always has. On that
+  copy, rows at or above T1 go from 799 to 962 and rows at or above T2 from 251 to
+  319, with no stored value moved. Each obstacle article the news watch attached could
+  start one: over the three nights to 10-28 these false contests alone pushed 16 rows
+  out of T2. The check's advice was wrong too: it named `logic resolve --auto`, which
+  only re-derives a value its own sources no longer support, while an inverted value
+  is exactly what they support. It now names `logic conflicts <id> --apply`, where a
+  model rules which claim is the superseded one.
 - **A go-live check reads a late campus's listing pages again**
   (`tracker/ingest/watch.py` `relist`, `LISTING_STALE`; `tracker/ingest/discover.py`
   `deciding`; `docs/workflows/sync.md` + `sync.svg`; `tests/test_news_watch.py`).
