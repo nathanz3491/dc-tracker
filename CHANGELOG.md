@@ -1040,6 +1040,22 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A season or a hedged year — "summer of 2025", "late 2028", "mid-2026" — is read
+  as the whole year on every path, so a campus is never called late before that year
+  is out** (`tracker/normalize.py` `_named_before`, `_HEDGE_THEN_YEAR`,
+  `precision_in_quote`; `tracker/delays.py` `period_end`; reader docs *Numbers and
+  dates* en/zh; `docs/workflows/sync.md`; `tests/test_date_precision.py`). A model
+  writes such a date as one day inside the year: ECL TerraSite-TX1's "Phase 1 … will
+  be complete by summer of 2025" came back from the overnight research agent as 1
+  June 2025 with no precision recorded, which reads as June and is late on 1 July.
+  The sentence beside the date now decides: a season or "early", "mid", "late",
+  "the end of" before the year records the year, on the article reader's path and
+  the agent's alike. A year now always ends on 31 December, wherever inside it the
+  date sits; it used to run twelve months from the stored day, which for 1 October
+  would have meant the next September. On the 10-28 copy `tracker backfill precision
+  --apply` corrects 15 stored claims and 8 campuses' dates. The suspected delays stay
+  the same three, and one campus whose "mid-2026" was read as July no longer awaits a
+  go-live search before the year is out.
 - **A campus no longer reads "delayed" because its date was stated more precisely, and
   a campus that has not opened can no longer read as fully running unchallenged**
   (`tracker/upsert.py` `_record_slippage`; `tracker/delays.py` `restates`;

@@ -66,7 +66,7 @@ A date is kept at the precision its source gave:
 > [!TIP]
 > A date shown as just a year means the source gave only a year. It does not mean 1 January. In tables, quarter and half-year dates are shortened to the year as well; hover for the full statement.
 
-A quarter or half is kept as one however the source words it: if the date was first read as the whole year, the sentence beside it is read again, so "the second quarter of 2027" is due at the end of June, not at the end of December. A season, or "early" or "mid" a year, is not narrowed by that second reading: where it ends is not stated, and a guess could call a campus late too soon.
+A quarter or half is kept as one however the source words it: if the date was first read as the whole year, the sentence beside it is read again, so "the second quarter of 2027" is due at the end of June, not at the end of December. A season, or "early" or "mid" a year, is not narrowed by that second reading: where it ends is not stated, and a guess could call a campus late too soon. The same holds when a model wrote such a date down as a single month — "summer of 2025" as June: it is read as the whole year, and is due at the end of December, not at the end of June.
 
 A promise of a period is not overdue until the period is over: a campus "expected online in 2026" is not late until 2027.
 

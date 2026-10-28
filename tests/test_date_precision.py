@@ -41,10 +41,45 @@ from tracker.normalize import precision_in_quote
         # The sentence does not contain the year at all.
         ("2026-01-01", "construction continues", None),
         ("2026-01-15", "January 15, 2026", None),
+        # A season or a hedge is the year, wherever inside it the value was put.
+        # ECL TerraSite-TX1's "summer of 2025" was written as 1 June and flagged
+        # late on 1 July; Hyperion's "late 2028" sits on 1 October.
+        (
+            "2025-06-01",
+            "Phase 1 of TerraSite-TX1 will be complete by summer of 2025 with a cost",
+            "year",
+        ),
+        ("2028-10-01", "Hyperion is expected to be online in late 2028.", "year"),
+        ("2025-07-01", "operations are set to begin mid-2025", "year"),
+        ("2021-01-01", "finished by the end of 2021", "year"),
+        ("2023-09-01", "it aims to complete it by fall of 2023", "year"),
     ],
 )
 def test_the_words_before_the_year_decide(value, quote, expected):
     assert precision_in_quote(value, quote) == expected
+
+
+def test_a_hedged_date_is_due_at_the_end_of_its_year():
+    """Read as the year, a date inside it is due on 31 December: the calendar year,
+    not twelve months counted from the stored day."""
+    from tracker import delays
+
+    assert delays.period_end(dt.date(2025, 6, 1), "year") == dt.date(2025, 12, 31)
+    assert delays.period_end(dt.date(2028, 10, 1), "year") == dt.date(2028, 12, 31)
+    assert delays.period_end(dt.date(2027, 5, 1), "quarter") == dt.date(2027, 6, 30)
+    assert delays.period_end(dt.date(2027, 3, 1), "half") == dt.date(2027, 6, 30)
+    assert delays.period_end(dt.date(2027, 4, 1), "quarter") == dt.date(2027, 6, 30)
+    assert delays.period_end(dt.date(2027, 2, 1), "month") == dt.date(2027, 2, 28)
+
+
+def test_the_research_agent_records_a_hedge_as_the_year():
+    """The agent pass writes its own dates; ECL TerraSite-TX1's "summer of 2025"
+    came back as 1 June with no precision, read as June."""
+    from tracker.gapfill import _fact_axes
+
+    quote = "Phase 1 of TerraSite-TX1 will be complete by summer of 2025."
+    axes = _fact_axes({"expected_online": ("2025-06-01", quote)})
+    assert axes == {"expected_online": {"date_precision": "year"}}
 
 
 def test_a_date_object_is_read_like_its_iso_string():

@@ -132,12 +132,18 @@ def period_end(value: dt.date, precision: str | None) -> dt.date:
     On 2026-10-13 that is what `past_its_own_date` did to Vantage Frontier and Novva
     Mesa, and the resolver then cleared two correct dates. A source promising a
     period has not missed it until the period is over.
+
+    **The calendar period the date falls in**, not a span counted from the stored day.
+    A hedge is stored inside its year — "late 2028" as 2028-10-01, "summer of 2025" as
+    2025-06-01 — and read as the year (`normalize.precision_in_quote`). Counted from
+    the day, that year would have run to 30 September 2029.
     """
-    months = PRECISION_MONTHS.get(read_as(value, precision))
+    how = read_as(value, precision)
+    months = PRECISION_MONTHS.get(how)
     if not months:
         return value
-    after = value.month - 1 + months
-    return dt.date(value.year + after // 12, after % 12 + 1, 1) - dt.timedelta(days=1)
+    last = ((value.month - 1) // months + 1) * months
+    return dt.date(value.year + last // 12, last % 12 + 1, 1) - dt.timedelta(days=1)
 
 
 _MOVED: Final = re.compile(r"moved from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})")

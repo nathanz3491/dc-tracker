@@ -809,6 +809,13 @@ _QUARTER_THEN_YEAR = re.compile(
 _HALF_THEN_YEAR = re.compile(
     r"(?:\bh[12]|\b[12]h|\b(?:first|second|1st|2nd)\s+half)(?:\s+of)?[\s,]*$"
 )
+#: "early 2027", "mid-2025", "late 2028", "the end of 2021", "fall of 2023",
+#: "summer of 2025": words that place a date inside its year without naming a
+#: calendar period, which `precision_in_quote` therefore reads as the year.
+_HEDGE_THEN_YEAR = re.compile(
+    r"\b(?:early|mid|middle|late|end|beginning|start|spring|summer|fall|autumn|winter)"
+    r"(?:\s+of)?(?:\s+the)?[\s,\-–]*$"
+)
 
 #: The ordinal words `_QUARTER_THEN_YEAR` and `_HALF_THEN_YEAR` accept, as numbers.
 _ORDINALS = {"first": 1, "second": 2, "third": 3, "fourth": 4}
@@ -826,8 +833,9 @@ def _named_before(text: str, hit: re.Match[str]) -> tuple[str, int] | None:
 
     `("day", 0)` for a day, written either way round or as an ISO date; `("month",
     m)`, `("quarter", m)` or `("half", m)` with `m` the month the period named starts
-    in; None when nothing narrower than the year is named. "Early 2027" and "fall of
-    2027" are None as well — `period_named_in_quote` says why.
+    in; `("hedge", 0)` for "early 2027", "fall of 2027" and the like, which name no
+    calendar period (`period_named_in_quote` says why); None when nothing at all
+    narrower than the year is said.
 
     The one reading both `precision_in_quote` and `period_named_in_quote` make, so
     the value one moves and the precision the other then reports cannot disagree.
@@ -841,6 +849,8 @@ def _named_before(text: str, hit: re.Match[str]) -> tuple[str, int] | None:
         return "quarter", _QUARTER_MONTH[_nth(quarter.group(0))]
     if half := _HALF_THEN_YEAR.search(before):
         return "half", 1 if _nth(half.group(0)) == 1 else 7
+    if _HEDGE_THEN_YEAR.search(before):
+        return "hedge", 0
     return None
 
 
@@ -887,6 +897,11 @@ def precision_in_quote(value: Any, quote: str | None) -> str | None:
             readings.append("year" if month == 1 else "other")
         elif named[0] == "day":
             readings.append("day")
+        elif named[0] == "hedge":
+            # Wherever in the year the value was put — "late 2028" lands on 1
+            # October, a model writes "summer of 2025" as 1 June — the sentence
+            # promises no narrower period than the year.
+            readings.append("year")
         else:
             readings.append(named[0] if named[1] == month else "other")
 
@@ -940,7 +955,7 @@ def period_named_in_quote(value: Any, quote: str | None) -> ParsedDate | None:
     if len(hits) != 1:
         return None
     named = _named_before(text, hits[0])
-    if named is None or named[0] == "day":
+    if named is None or named[0] in ("day", "hedge"):
         return None
     precision, month = named
     return ParsedDate(dt.date(int(year), month, 1), precision)
