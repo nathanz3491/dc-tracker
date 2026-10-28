@@ -1517,14 +1517,12 @@ def test_a_slip_sets_delay_days_on_the_worst_open_risk(session, dated):
     assert rows["water"] is None
 
 
-def test_a_move_within_one_year_is_logged_but_not_counted(session, dated):
-    """`norm_date_detail` coarsens hedged dates, so a bare "2027" lands on
-    2027-01-01 and "late 2027" on 2027-10-01. A source restating the same year more
-    precisely is indistinguishable from a 273-day delay, and the column stores no
-    precision to tell them apart.
-    """
-    # The normalized forms of a bare "2027" and of "late 2027" respectively —
-    # claims reach the write path already coerced.
+def test_a_move_inside_the_promised_period_is_no_delay(session, dated):
+    """ "2027" promises any day of 2027, so "October 2027" narrows it rather than
+    breaking it. Microsoft SAT82 (#1533) showed "delayed" on 2026-10-28 for "2028"
+    becoming "June 2028" — the page, the table filter, Capex and the email all read
+    such a move as a delay."""
+    # The normalized form of a bare "2027": the first of January, read as the year.
     upsert_record(session, rec(sources=[manual_source(expected_online="2027-01-01")]))
     upsert_record(
         session,
@@ -1534,10 +1532,26 @@ def test_a_move_within_one_year_is_logged_but_not_counted(session, dated):
         ),
     )
 
+    assert session.scalar(select(Event).where(Event.event_type == "delayed")) is None
+    assert session.scalar(select(Risk)).delay_days is None
+
+
+def test_a_month_moving_later_in_the_same_year_is_a_delay(session, dated):
+    """March to September of one year is half a year late; the year boundary was
+    never what made a move a slip, the end of the promised period is."""
+    upsert_record(session, rec(sources=[manual_source(expected_online="2027-03-01")]))
+    upsert_record(
+        session,
+        rec(
+            sources=[manual_source(url="https://www.dcd.com/a", expected_online="2027-09-01")],
+            risks=[risk(severity="blocking")],
+        ),
+    )
+
     event = session.scalar(select(Event).where(Event.event_type == "delayed"))
-    assert event is not None, "the tracked value did move, and that is worth logging"
-    assert "may be a more precise restatement" in event.description
-    assert session.scalar(select(Risk)).delay_days is None, "no number on an ambiguous move"
+    assert event is not None
+    assert "2027-03-01 to 2027-09-01 (+184 days)" in event.description
+    assert session.scalar(select(Risk)).delay_days == 184
 
 
 def test_an_older_report_winning_the_merge_is_not_a_delay(session, dated):

@@ -31,7 +31,7 @@ first `--audit`-only run silently started reading every row in the database.
 
 Paying an LLM to notice that `mw_built > mw_planned` is paying for arithmetic, and
 a rule states its reasoning in a way anybody can check without reading code.
-Twenty-two codes are in circulation and **only 6 carry an action** — the rest name
+Twenty-four codes are in circulation and **only 8 carry an action** — the rest name
 something only a person can settle, or a contradiction between a phase enum and a
 campus that is two things at once.
 
@@ -99,6 +99,40 @@ an unrecorded project date is. It used to compare the stored day, so a tranche d
 disagreed with it both ways — the page flagged paused and cancelled tranches, this
 flagged ones with an energisation date. On that copy the change took the tranche
 findings from 116 to 93.
+
+**A date restated more precisely is not a delay, and the whole plan cannot run on a
+campus that has not opened** (2026-10-28). Microsoft SAT82 (#1533), whose own sources
+put construction in 2026 and completion in June 2028, read on the console as both
+fully running and delayed:
+
+* **"Delayed"** came from the milestone writer, `upsert._record_slippage`. It recorded
+  a sourceless `delayed` milestone whenever the stored date moved later, including
+  "2028" becoming "June 2028" — a narrowing, worded "this may be a more precise
+  restatement rather than a delay". Only the delay-risk reader skipped such a
+  milestone, by matching that wording. The page, the table's delayed filter, Capex
+  and the email showed a delay.
+
+  The writer now reads the old date at its recorded precision and writes nothing
+  unless the new date lies past the end of the period the old one promised. March
+  becoming September of one year is still a slip. The year boundary never was the
+  test; the end of the promised period is.
+
+  `restatement_recorded_as_delay` finds the 16 left on the 10-28 copy
+  (`delays.restates`), and its free answer removes them. The delay-risk reader asks
+  the same function.
+* **"Running"** came from a directory page's "IT Load 51.54 MW", taken as built
+  capacity: `mw_built` takes the largest figure any source states.
+  `built_without_running_evidence` (an error) reports a row with every planned
+  megawatt recorded as running, while the campus is still due online or only
+  announced or permitted, and with no running tranche and no energisation.
+
+  On the 10-28 copy that was 6 rows, SAT82 among them. The model reads the source
+  behind the figure and may rule it out; the finding is never answered for free.
+
+  It deliberately ignores part of a plan running under a lagging phase. 14 of the 20
+  rows with running capacity and no running phase, tranche or energisation were that:
+  Microsoft Cheyenne, Goodyear, Red Oak — campuses that run and grow. Offering a model
+  their running figure to strike would have removed correct data.
 
 ### Collisions report the policy's answer; they do not re-decide it
 
@@ -261,6 +295,11 @@ Three stages before anything is put to a model:
    Bluffs "delayed +1827 days" by a shuttle company's blog. The writer no longer
    derives a delay on an operating campus, or from a report older than the one it
    replaces; this clears the ones from before it learned.
+
+   A fifth since 2026-10-28, `restatement_recorded_as_delay`: a derived `delayed`
+   milestone whose new date lies inside the period the old one promised ("2028" to
+   "June 2028"). A date comparison on a milestone no report stands behind; 16 on the
+   10-28 copy.
 
    A past free answer never settles its code (`logic.FREE_CODES`). The condition it
    repairs comes back on its own — a new article adds another obstacle, a re-crawl
@@ -489,7 +528,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Suspected delays, and tranches past their date | `tracker/delays.py` — `assess`, `suspected_delay`, `suspected`, `tranche_state`, `period_end`, `read_as` |
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field`, `claims_by_field` (the order), `stale_claims`, `STALE_AFTER` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
-| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news` |
+| Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `_drop_restated_delays`, `_clear_built`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news`; `tracker/delays.py` — `restates`, `period_end` |
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |

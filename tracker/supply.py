@@ -102,16 +102,17 @@ def _plural(n: int, one: str, many: str | None = None) -> str:
 def slips(events: Iterable[Any]) -> list[Any]:
     """The recorded slips of a campus's online date, oldest first.
 
-    A `delayed` milestone, quoted or derived, unless it is a forecast or the move
-    stayed inside one year — `upsert._record_slippage` writes those too, and says
-    in the description that they may be a more precise restatement of the same date.
+    A `delayed` milestone, quoted or derived, unless it is a forecast or only
+    narrowed the date inside the period it already promised (`delays.restates`) —
+    the same test the logic check removes those by, so this reader and the page
+    cannot disagree about which moves were late.
     """
     out = [
         e
         for e in events
         if getattr(e, "event_type", None) == "delayed"
         and getattr(e, "unconfirmed", None) != "forecast"
-        and "more precise restatement" not in (getattr(e, "description", "") or "")
+        and not delays.restates(e)
     ]
     return sorted(out, key=lambda e: _as_date(getattr(e, "event_date", None)) or dt.date.min)
 

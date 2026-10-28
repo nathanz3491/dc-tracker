@@ -1040,6 +1040,32 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus no longer reads "delayed" because its date was stated more precisely, and
+  a campus that has not opened can no longer read as fully running unchallenged**
+  (`tracker/upsert.py` `_record_slippage`; `tracker/delays.py` `restates`;
+  `tracker/logic.py` rules `restatement_recorded_as_delay` and
+  `built_without_running_evidence`, `_drop_restated_delays`; `tracker/supply.py`
+  `slips`; `docs/workflows/logic.md` and its diagram; `tests/test_upsert.py`,
+  `tests/test_logic.py`). Microsoft SAT82 in Castroville (#1533) showed as both
+  delayed and fully running on 2026-10-28; its own sources put construction in 2026
+  and completion in June 2028.
+  - **The delay** was a date moving from "2028" to "June 2028": a narrowing, which the
+    milestone writer recorded as a delay worded "may be a more precise restatement".
+    Only the delay-risk reader skipped it, by its wording; the project page, the
+    table's delayed filter, Capex and the email all showed a delay. The writer now
+    reads the old date at its recorded precision and records a delay only when the new
+    date falls after the period the old one promised. March becoming September of one
+    year still counts.
+  - **The 16 such milestones** left on the 10-28 copy are found by a new check and
+    removed for free in the nightly logic pass.
+  - **The "running" capacity** was a directory page's "IT Load 51.54 MW", taken as
+    built. A new check (an error) reports every planned megawatt recorded as running
+    on a campus still due online, or only announced or permitted, with nothing else
+    saying it runs; the nightly model reads the source and rules a misread figure out.
+    On the 10-28 copy that was 6 campuses, SAT82 among them.
+  - **Part of a plan running under a lagging stage** is deliberately not asked about.
+    It was 14 of 20 such rows (Microsoft Cheyenne, Goodyear, Red Oak), and offering
+    their running figures to a model to strike would remove correct data.
 - **A go-live check reads a late campus's listing pages again**
   (`tracker/ingest/watch.py` `relist`, `LISTING_STALE`; `tracker/ingest/discover.py`
   `deciding`; `docs/workflows/sync.md` + `sync.svg`; `tests/test_news_watch.py`).

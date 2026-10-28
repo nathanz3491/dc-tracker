@@ -600,6 +600,23 @@ def check_rules(project: Project) -> list[Finding]:
             subjects=tuple(f"event:delayed:{when}" for when in derived_delays),
         )
 
+    # A derived delay that only narrowed the date. The writer recorded one whenever
+    # the stored date moved later, even inside the period the old date promised:
+    # Microsoft SAT82 (#1533), due June 2028 and not yet built, read "delayed" on
+    # 2026-10-28 because "2028" had become "June 2028". It no longer does
+    # (`upsert._record_slippage`); these are the ones it left.
+    restated = sorted({e.event_date for e in events if delays.restates(e) and e.event_date})
+    if restated and phase not in _LIVE_PHASES:
+        add(
+            "restatement_recorded_as_delay",
+            WARNING,
+            f"{len(restated)} derived delay(s) only narrow the online date inside the "
+            "period it already promised",
+            ("expected_online",),
+            "a date restated more precisely is not late; remove the derived delay",
+            subjects=tuple(f"event:delayed:{when}" for when in restated),
+        )
+
     if phase in _LIVE_PHASES and project.mw_built is None and project.mw_planned:
         if live_blocks:
             # Not a contradiction. Something *does* say part of it is running — the
@@ -624,6 +641,50 @@ def check_rules(project: Project) -> list[Finding]:
                 ("phase", "mw_built"),
                 "a live campus has energised capacity; find it or step the phase back",
             )
+
+    # The whole plan running on a campus that has not opened. `mw_built` takes the
+    # largest figure any source states, so one directory page's "IT Load 51.54 MW" made
+    # Microsoft SAT82 (#1533) read as fully running on 2026-10-28 — a campus whose own
+    # sources put construction in 2026 and completion in June 2028.
+    #
+    # Only that shape, and only when nothing else says it runs. Part of a plan running
+    # under a lagging phase is the ordinary state of a campus that is running and
+    # growing: on the 10-28 copy 14 of the 20 rows with running capacity and no running
+    # phase, tranche or energisation were that (Microsoft Cheyenne, Goodyear, Red Oak),
+    # and offering a model their running figure to strike would remove correct data.
+    # Every planned megawatt running while the campus is still due, or only announced
+    # or permitted, cannot be true; that is the six that were left, SAT82 among them.
+    energised_by_now = any(
+        e.event_type == "energized" and e.event_date and e.event_date <= today_ for e in events
+    )
+    due = project.expected_online
+    still_due = (
+        due is not None and delays.period_end(due, project.expected_online_precision) >= today_
+    )
+    if (
+        project.mw_built
+        and project.mw_planned is not None
+        and project.mw_built >= project.mw_planned
+        and phase not in _LIVE_PHASES
+        and phase not in PHASE_TERMINAL
+        and (still_due or phase in ("announced", "permitting"))
+        and not live_blocks
+        and not energised_by_now
+    ):
+        when = (
+            f"it is not due online until {delays.stated(due, project.expected_online_precision)}"
+            if still_due
+            else f"the phase is still {phase}"
+        )
+        add(
+            "built_without_running_evidence",
+            ERROR,
+            f"all {project.mw_planned:g} MW planned is recorded as running, but {when}, "
+            "no tranche is running and no energisation is recorded",
+            ("mw_built",),
+            "read the source behind the running figure: a plan or an IT load quoted as "
+            "built is ruled out; a campus that really is live wants its phase or tranche",
+        )
 
     # The sibling gap, observed live on Fairwater (#1): `mw_built` IS set, so the
     # branch above stays silent — but every running tranche carries either no
@@ -1597,6 +1658,15 @@ def _drop_derived_delays(session: Session, project: Project, _f: Finding) -> str
     return f"removed {len(doomed)} derived delay(s) from an operating campus"
 
 
+def _drop_restated_delays(session: Session, project: Project, _f: Finding) -> str:
+    """Remove the derived `delayed` milestones that only narrowed the date."""
+    doomed = [e for e in list(project.events) if delays.restates(e)]
+    for event in doomed:
+        project.events.remove(event)
+        session.delete(event)
+    return f"removed {len(doomed)} derived delay(s) that only restated the online date"
+
+
 def _move_city_to_county(_s: Session, project: Project, _f: Finding) -> str:
     """Put a parish name where it belongs, without moving the dedup key.
 
@@ -1777,6 +1847,7 @@ FREE_CODES: Final[frozenset[str]] = frozenset(
         "milestone_in_the_future",
         "city_holds_a_county_name",
         "delay_on_an_operating_campus",
+        "restatement_recorded_as_delay",
     }
 )
 
@@ -1790,12 +1861,15 @@ def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
     manufacturing facts, which is the failure the whole evidence model exists to
     prevent.
 
-    Four codes clear it, and between them they are most of the resolvable findings
+    Five codes clear it, and between them they are most of the resolvable findings
     in the database — which is what makes a whole-corpus pass affordable rather
-    than a model call per finding. The fourth, `delay_on_an_operating_campus`,
-    removes milestones no source wrote: it overrules nobody.
+    than a model call per finding. The last two, `delay_on_an_operating_campus` and
+    `restatement_recorded_as_delay`, remove milestones no source wrote: they
+    overrule nobody.
 
-    Deliberately not extended further. Every other resolvable code asks which
+    Deliberately not extended further — `built_without_running_evidence` included,
+    because whether a running figure is a misread plan or a tranche nobody recorded
+    is only answered by reading its source. Every other resolvable code asks which
     source to trust, and `audit.free_answer`'s own comment makes the same point
     about its three cases.
     """
@@ -1819,6 +1893,13 @@ def free_answer(project: Project, finding: Finding) -> tuple[str, str] | None:
         return "d", (
             "a delay no source reported, derived on a campus the row says is operating, "
             "is a forecast changing hands rather than lateness"
+        )
+    if finding.code == "restatement_recorded_as_delay":
+        # A date comparison on a milestone no source wrote: the new date lies inside
+        # the period the old one promised, so nothing was missed.
+        return "d", (
+            "a derived delay whose new date lies inside the period the old date already "
+            "promised is the date read more precisely, not lateness"
         )
     if finding.code == "city_holds_a_county_name":
         # A string test — does the name end in County, Parish, Borough — and a
@@ -1873,6 +1954,14 @@ ACTIONS: Final[dict[str, tuple[Action, ...]]] = {
     ),
     "delay_on_an_operating_campus": (
         Action("d", "no source reported them — remove the derived delays", _drop_derived_delays),
+    ),
+    "restatement_recorded_as_delay": (
+        Action("d", "only the date narrowed — remove the derived delays", _drop_restated_delays),
+    ),
+    # Read by a model, never applied unattended: a campus can be partly live before
+    # its phase or its tranches say so, and only the source shows which.
+    "built_without_running_evidence": (
+        Action("c", "the running figure is wrong — rule out the claims stating it", _clear_built),
     ),
     "phase_without_construction": (),  # nothing to edit; accept or skip
     # The block rules are all report-only, and stay that way. Each names something
@@ -2241,7 +2330,7 @@ def dedupe(findings: list[Finding]) -> list[Finding]:
 def resolvable(finding: Finding) -> bool:
     """Whether any edit exists that answers this finding.
 
-    Sixteen of the twenty-two codes in circulation offer no action — each names
+    Sixteen of the twenty-four codes in circulation offer no action — each names
     something only a person can settle, or a contradiction between a phase enum and
     a campus that is two things at once. Those are worth a reader's eye and are not
     worth an LLM call: `decide` can only ever return "nothing to choose between" for

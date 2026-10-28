@@ -59,6 +59,7 @@ value.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Final
@@ -137,6 +138,28 @@ def period_end(value: dt.date, precision: str | None) -> dt.date:
         return value
     after = value.month - 1 + months
     return dt.date(value.year + after // 12, after % 12 + 1, 1) - dt.timedelta(days=1)
+
+
+_MOVED: Final = re.compile(r"moved from (\d{4}-\d{2}-\d{2}) to (\d{4}-\d{2}-\d{2})")
+
+
+def restates(event: Any) -> bool:
+    """Whether a derived `delayed` milestone only narrowed the date it moved.
+
+    `upsert._record_slippage` once wrote one whenever the stored date moved later,
+    even inside the period the old date promised — "2028" becoming "June 2028" —
+    worded "this may be a more precise restatement rather than a delay". Every reader
+    but one showed it as a delay. A milestone a source wrote (`source_id`) is never
+    read this way: only the derived ones carry the "moved from … to …" sentence, and
+    the old date is read the way an unrecorded one is (:func:`read_as`).
+    """
+    if getattr(event, "event_type", None) != "delayed" or getattr(event, "source_id", None):
+        return False
+    found = _MOVED.search(getattr(event, "description", "") or "")
+    if not found:
+        return False
+    before, after = (dt.date.fromisoformat(day) for day in found.groups())
+    return after <= period_end(before, None)
 
 
 def stated(value: dt.date, precision: str | None) -> str:
@@ -514,6 +537,7 @@ __all__ = [
     "listed_running",
     "period_end",
     "read_as",
+    "restates",
     "searched_since_due",
     "stated",
     "suspected",

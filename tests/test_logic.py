@@ -72,6 +72,92 @@ def test_built_capacity_cannot_exceed_planned(session):
     assert "built_exceeds_planned" not in _codes(ok)
 
 
+def test_running_capacity_nothing_else_supports_is_reported(session):
+    """Microsoft SAT82 (#1533) on 2026-10-28: a directory's "IT Load 51.54 MW" read
+    as built, on a campus whose phase is construction and which is due in June 2028.
+    The page showed it fully running."""
+    sat82 = _project(
+        session,
+        name="SAT82",
+        mw_planned=51.54,
+        mw_built=51.54,
+        expected_online=dt.date(2028, 6, 1),
+        expected_online_precision="month",
+    )
+    found = {f.code: f for f in logic.check_rules(sat82)}["built_without_running_evidence"]
+    assert found.severity == logic.ERROR
+    assert "all 51.54 MW planned is recorded as running" in found.summary
+    assert "Jun 2028" in found.summary
+    assert logic.resolvable(found), "the nightly model reads its source"
+    assert logic.free_answer(sat82, found) is None, "never applied unattended"
+
+    announced = _project(session, name="K", phase="announced", mw_planned=2000, mw_built=2000)
+    assert "built_without_running_evidence" in _codes(announced)
+
+
+def test_a_campus_running_and_growing_is_not_asked_about(session):
+    """Part of a plan running under a lagging phase is the ordinary shape of a
+    campus that runs and grows — Microsoft Cheyenne, 150 of 2,700 MW. So is a whole
+    plan running past its date, and anything the power track or the phase supports."""
+    partly = _project(
+        session, name="P", mw_planned=300, mw_built=100, expected_online=dt.date(2027, 1, 1)
+    )
+    assert "built_without_running_evidence" not in _codes(partly)
+
+    overdue = _project(
+        session, name="R", mw_planned=360, mw_built=360, expected_online=dt.date(2020, 4, 1)
+    )
+    assert "built_without_running_evidence" not in _codes(overdue)
+
+    energised = _project(
+        session, name="E", mw_planned=200, mw_built=200, expected_online=dt.date(2027, 1, 1)
+    )
+    _event(session, energised, "energized", dt.date(2026, 3, 1))
+    assert "built_without_running_evidence" not in _codes(energised)
+
+    operating = _project(
+        session,
+        name="O",
+        phase="operational",
+        mw_planned=200,
+        mw_built=200,
+        expected_online=dt.date(2027, 1, 1),
+    )
+    assert "built_without_running_evidence" not in _codes(operating)
+
+
+def test_a_derived_delay_that_only_narrowed_the_date_is_removed_for_free(session):
+    """ "2028" becoming "June 2028" was written as a delay, worded "may be a more
+    precise restatement"; the page showed SAT82 as delayed. March becoming
+    September of one year is a real slip and stays."""
+    sat82 = _project(
+        session,
+        name="SAT82",
+        expected_online=dt.date(2028, 6, 1),
+        expected_online_precision="month",
+    )
+    for when, before in ((dt.date(2028, 6, 1), "2028-01-01"), (dt.date(2027, 9, 1), "2027-03-01")):
+        session.add(
+            Event(
+                project_id=sat82.id,
+                event_type="delayed",
+                event_date=when,
+                description=f"expected_online moved from {before} to {when} within "
+                f"{when.year}; this may be a more precise restatement rather than a delay",
+            )
+        )
+    session.flush()
+
+    (finding,) = [f for f in logic.check_rules(sat82) if f.code == "restatement_recorded_as_delay"]
+    assert finding.subjects == ("event:delayed:2028-06-01",)
+    assert logic.free_answer(sat82, finding)[0] == "d"
+    (action,) = logic.ACTIONS[finding.code]
+    assert "removed 1" in action.apply(session, sat82, finding)
+    assert [e.event_date for e in sat82.events if e.event_type == "delayed"] == [
+        dt.date(2027, 9, 1)
+    ]
+
+
 def test_a_date_cannot_precede_the_announcement(session):
     backwards = _project(
         session,

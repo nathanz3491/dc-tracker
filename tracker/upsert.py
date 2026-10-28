@@ -1840,8 +1840,10 @@ def upsert_record(
         duplicate_of = candidate.id
 
     before = _snapshot(project)
-    # Captured before the recompute so a slip can be measured against it.
+    # Captured before the recompute so a slip can be measured against it — with the
+    # precision, because "2028" moving to "June 2028" is no slip at all.
     expected_online_before = project.expected_online
+    expected_online_precision_before = project.expected_online_precision
 
     # --- Write the citations ------------------------------------------------
     # By identity, not by exact string: the same article under another spelling of
@@ -2070,7 +2072,9 @@ def upsert_record(
     # After the risks exist, so a measured slip can attach to the obstacle that
     # best explains it; before the blocker is derived, since neither depends on
     # the other but the ordering should read in the direction the data flows.
-    events_written += _record_slippage(session, project, expected_online_before)
+    events_written += _record_slippage(
+        session, project, expected_online_before, expected_online_precision_before
+    )
     project.blocker = _derive_blocker(session, project)
 
     # --- Confidence, LAST ----------------------------------------------------
@@ -2323,7 +2327,12 @@ def _upsert_risks(session: Session, project: Project, rec: IngestRecord) -> int:
     return inserted
 
 
-def _record_slippage(session: Session, project: Project, previous: _dt.date | None) -> int:
+def _record_slippage(
+    session: Session,
+    project: Project,
+    previous: _dt.date | None,
+    previous_precision: str | None = None,
+) -> int:
     """Record `expected_online` moving later. Returns events written.
 
     Why an event and not a changed merge policy: `expected_online` stays on
@@ -2331,14 +2340,15 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
     newest-wins to make slips visible would throw away the source-quality ordering
     everywhere else. Recording the movement as history keeps both.
 
-    **`delay_days` is only attributed across a year boundary.** The column stores no
-    precision, and `norm_date_detail` coarsens hedged dates into it: a bare "2027"
-    lands on 2027-01-01 and "late 2027" on 2027-10-01, so a source merely restating
-    the same year more precisely is indistinguishable from a 273-day delay. Every
-    coarsening stays inside the stated year, so a move into a later year cannot be a
-    precision artefact and a move within one year might be. The event is written
-    either way — the tracked value did move, and that is a fact worth logging — but
-    a number is only attached when it means something.
+    **A move inside the period the old date promised is not a slip, and writes
+    nothing.** "2028" is a promise for any day of 2028, so a source saying "June
+    2028" narrows it; it does not break it. The old date is read at its recorded
+    precision (`delays.period_end`, the reading the delay flags use), and only a new
+    date past the end of that period is a delay. This used to write the event anyway,
+    worded "this may be a more precise restatement rather than a delay": one reader
+    knew to skip it by its wording, and the project page, the table's delayed filter,
+    Capex and the email all showed a delay. Microsoft SAT82 (#1533), due June 2028
+    and not yet built, showed "delayed" on 2026-10-28 for exactly that.
 
     No risk is invented when none is open. A date moving is not a report of *why*,
     and manufacturing an obstacle from it would put an uncited guess into the field
@@ -2355,8 +2365,12 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
     earlier one — the newer report says later — and never on an operating campus,
     whose forecast moving is not lateness.
     """
+    from tracker.delays import period_end
+
     current = project.expected_online
     if previous is None or current is None or current <= previous:
+        return 0
+    if current <= period_end(previous, previous_precision):
         return 0
     if (project.phase or "") in _OPERATING_PHASES:
         return 0
@@ -2364,15 +2378,7 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
         return 0
 
     slipped_days = (current - previous).days
-    across_years = current.year > previous.year
-    detail = (
-        f"expected_online moved from {previous} to {current} (+{slipped_days} days)"
-        if across_years
-        else (
-            f"expected_online moved from {previous} to {current} within {previous.year}; "
-            "this may be a more precise restatement rather than a delay"
-        )
-    )
+    detail = f"expected_online moved from {previous} to {current} (+{slipped_days} days)"
 
     written = 0
     # Keyed on the NEW target date, so the (project, type, date) unique constraint
@@ -2401,17 +2407,16 @@ def _record_slippage(session: Session, project: Project, previous: _dt.date | No
     else:
         existing.description = detail
 
-    if across_years:
-        open_risks = session.scalars(
-            select(Risk)
-            .where(Risk.project_id == project.id, Risk.status == OPEN_RISK_STATUS)
-            .order_by(Risk.id.asc())
-        ).all()
-        if open_risks:
-            # The most severe open obstacle is the one already presented as this
-            # project's blocker, so it is where a measured slip belongs.
-            worst = max(open_risks, key=risk_precedence)
-            worst.delay_days = slipped_days
+    open_risks = session.scalars(
+        select(Risk)
+        .where(Risk.project_id == project.id, Risk.status == OPEN_RISK_STATUS)
+        .order_by(Risk.id.asc())
+    ).all()
+    if open_risks:
+        # The most severe open obstacle is the one already presented as this
+        # project's blocker, so it is where a measured slip belongs.
+        worst = max(open_risks, key=risk_precedence)
+        worst.delay_days = slipped_days
 
     session.flush()
     return written
