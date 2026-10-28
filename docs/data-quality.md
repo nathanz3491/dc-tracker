@@ -860,6 +860,13 @@ decides nothing, and `quality.recency_inversions` skips both, as `conflicts.disp
 does. Counting them made 199 of the 259 inversions on the 2026-10-28 copy, and
 `tracker clean`'s `no_inversions` failed 173 rows for them.
 
+**And a field whose two figures genuinely disagree.** 260 MW kept over 262 MW is
+crawl order choosing between two tellings of one figure, which `confidence.
+values_conflict` — the 20% tolerance behind the row's own conflict notes and
+`conflicts.disputes` — treats as agreement. Counting it failed a row that `logic
+conflicts`, the condition's remedy, could never clear, because it finds no dispute
+there: 23 of the 60 inversions left on the same copy.
+
 The same fact fixes a second bug. The prompt's `ARTICLE_DATE` was always
 `unknown`: `extract_one`'s `published_date` parameter existed, the prompt
 interpolated it, and no caller ever passed it. RULE 5 resolves relative timing

@@ -381,6 +381,37 @@ def test_a_field_the_merge_never_decides_has_no_inversion(session):
     assert quality.recency_inversions(session) == []
 
 
+def test_two_tellings_of_one_figure_are_not_an_inversion(session):
+    """260 MW against 262 MW is the same story told twice, not a contest.
+
+    `confidence.values_conflict` is the tolerance the row's own conflict notes and
+    `conflicts.disputes` use, so `logic conflicts` — the remedy `clean` names — finds
+    nothing to settle here. Reporting it held the row below T1 with no way out.
+    """
+    project = _project(session, mw_planned=260.0)
+    old = _source(
+        session,
+        project,
+        {"mw_planned": 260.0},
+        quotes={"mw_planned": "a 260-megawatt campus on the former mill site"},
+        url="https://example.test/older",
+        fetched_at=dt.datetime(2026, 8, 1, 21, 54),  # crawled LAST
+    )
+    new = _source(
+        session,
+        project,
+        {"mw_planned": 262.0},
+        quotes={"mw_planned": "the 262 MW campus on the former mill site"},
+        url="https://example.test/newer",
+        fetched_at=dt.datetime(2026, 7, 30, 21, 25),  # crawled FIRST
+    )
+    _published(session, old.url, dt.datetime(2025, 8, 22))
+    _published(session, new.url, dt.datetime(2025, 11, 5))
+    session.refresh(project)
+
+    assert quality.recency_inversions(session) == []
+
+
 # --- the publication-date tiebreak (migration 0014, off by default) ----------
 
 

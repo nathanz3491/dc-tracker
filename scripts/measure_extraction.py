@@ -194,7 +194,9 @@ def report_inversions(session) -> None:
     print(
         "\nThis is a floor, not a total. Only ties are counted; an old high-weight "
         "source\nbeating a new low-weight one is the same disease but is the "
-        "weighting policy\nworking as designed, so it is deliberately not counted here."
+        "weighting policy\nworking as designed, so it is deliberately not counted here. "
+        "Nor are two figures\nwithin the conflict tolerance of each other "
+        "(`confidence.values_conflict`), which\nthe flag would still move."
     )
 
 

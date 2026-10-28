@@ -1082,6 +1082,16 @@ initial build of the v1 PRD.
   - **Part of a plan running under a lagging stage** is deliberately not asked about.
     It was 14 of 20 such rows (Microsoft Cheyenne, Goodyear, Red Oak), and offering
     their running figures to a model to strike would remove correct data.
+- **A row is no longer held below the "sound" tier for two tellings of one figure,
+  which no command could ever clear** (`tracker/quality.py` `recency_inversions`;
+  `docs/data-quality.md`; `tests/test_quality.py`). The same check as below also
+  failed a row when an older article's 260 MW was kept over a newer one's 262 MW.
+  Everywhere else the tool treats figures within 20% of each other as one figure
+  told twice — the row's own conflict notes do, and so does the step that settles
+  disagreements — so the check's remedy, `logic conflicts`, found nothing to settle and
+  the row stayed failed for good. It now asks the same question they do. On the
+  2026-10-28 copy that was 23 of the 60 remaining cases; rows at or above T2 go from
+  343 to 359 and rows failing the check from 56 to 33, with no stored value moved.
 - **A field nobody has published stays answered when the news watch attaches an old
   article, so the row keeps its T2 and the night stops paying to search for it again**
   (`tracker/attempts.py` `exhausted`, `published_since`, `Attempt.day`;

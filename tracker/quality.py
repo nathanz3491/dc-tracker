@@ -283,7 +283,15 @@ def recency_inversions(
     failed `clean`'s `no_inversions` on 173 rows for a value crawl order had not
     decided. `conflicts.disputes` has skipped both fields for the same reason all
     along.
+
+    **Nor two tellings of one figure.** 260 MW passed over for 262 MW is crawl order
+    choosing between the same story told twice, which `confidence.values_conflict`
+    — the tolerance the row's own conflict notes and `conflicts.disputes` use — does
+    not call a disagreement. Reporting it failed a row for something no total gets
+    wrong and nothing could answer: the remedy, `logic conflicts`, finds no dispute
+    to settle there. 23 of the 60 inversions left on that copy were this shape.
     """
+    from tracker.confidence import values_conflict
     from tracker.upsert import DERIVED_FIELDS, FIELD_POLICY, Policy, claims_by_field
 
     published = _published_index(session)
@@ -317,7 +325,7 @@ def recency_inversions(
                 ):
                     break  # sorted, so everything after this is weaker still
                 other_at = published.get(other.url)
-                if other_at and other_at > won_at and other.value != winner.value:
+                if other_at and other_at > won_at and values_conflict(other.value, winner.value):
                     out.append(
                         Inversion(
                             project_id=project.id,
