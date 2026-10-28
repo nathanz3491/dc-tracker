@@ -200,8 +200,10 @@ def test_a_field_searched_twice_with_nothing_published_counts_as_answered(sessio
     """439 rows sat at T1 short of a field on 2026-10-05, most of them facts nobody
     publishes: asking for those kept rows below T2 however often they were sought.
 
-    It is reported rather than hidden, and the field reopens on new evidence."""
+    It is reported rather than hidden, and the field reopens on new evidence — an
+    article published since the search, not an old one the crawler attached later."""
     from tracker import attempts
+    from tracker.models import utcnow
 
     project = _project(session, name="Unpriced", investment_usd=None)
     _source(session, project, fields="mw_planned,mw_built,phase,customer")
@@ -214,7 +216,18 @@ def test_a_field_searched_twice_with_nothing_published_counts_as_answered(sessio
     assert got.by_key["fields_published"].ok is False
     assert "investment_usd" in got.by_key["fields_published"].detail
 
-    _source(session, project, url="https://ref.test/new", fields="mw_planned")
+    _source(
+        session,
+        project,
+        url="https://ref.test/last-year",
+        fields="mw_planned",
+        published_at=dt.datetime(2025, 6, 1),
+    )
+    assert _card(session, project).tier >= 2, "an article older than the search is not news"
+
+    _source(
+        session, project, url="https://ref.test/new", fields="mw_planned", published_at=utcnow()
+    )
     got = _card(session, project)
     assert got.by_key["fields_present"].ok is False, "a new citation reopens the question"
     assert got.tier == 1

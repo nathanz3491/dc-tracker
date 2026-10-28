@@ -1082,6 +1082,26 @@ initial build of the v1 PRD.
   - **Part of a plan running under a lagging stage** is deliberately not asked about.
     It was 14 of 20 such rows (Microsoft Cheyenne, Goodyear, Red Oak), and offering
     their running figures to a model to strike would remove correct data.
+- **A field nobody has published stays answered when the news watch attaches an old
+  article, so the row keeps its T2 and the night stops paying to search for it again**
+  (`tracker/attempts.py` `exhausted`, `published_since`, `Attempt.day`;
+  `tracker/gaps.py` `unpublished`; `tracker/ingest/enrich.py`; `tracker/clean.py`;
+  `docs/workflows/enrich.md` + `enrich.svg`; `docs/design-decisions.md`;
+  `tests/test_attempts.py`, `tests/test_clean.py`, `tests/test_enrich.py`). A field the
+  agent has looked for twice and not found counts as answered, until the row has
+  something new — and "new" meant any citation the row gained. The news watch attaches
+  articles every night, a year of them on its first look at a campus, so on the
+  2026-10-28 copy of production 85 such fields had been reopened: 46 by articles
+  published before the search that gave up on them, 13 by citations fetched no later
+  than that search. The extractor had read every one and found the figure in none. Each
+  reopened row fell out of T2, and because it was then a field or two short, the next
+  night's T2 pass chose it first and paid for the same search: 18 of the 50 rows it
+  would have chosen. A field now reopens only on an article published on or after the
+  day of the last search, or an undated page fetched after it, which still covers the
+  17 and 9 of the 85 that this kept open. On that copy, rows at or above T2 go from 319
+  to 343, the re-asks among the night's 50 fall from 18 to 6, and their places go to
+  rows nobody has asked about — 22 of the 50 are a week old or less, against 18.
+  No model is asked anything to get there.
 - **173 rows were held below the "sound" tier for a contest that never happened, and
   68 of them are complete** (`tracker/quality.py` `recency_inversions`;
   `tracker/clean.py` `REMEDIES`, `CONDITION_LABELS`; `tests/test_quality.py`).

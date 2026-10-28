@@ -38,9 +38,9 @@ every round: the ones a field or two short whose missing fields nobody has
 published. The agent pass stopped asking about those (`tracker.attempts`), but the
 harvest ran first and re-read their own citations at full extraction cost to find
 the same nothing. A row whose every empty fillable field is exhausted — asked
-`--max-attempts` times with no citation gained since — is now passed over and the
-limit goes to the next one; a new citation brings it back, exactly as it reopens its
-fields.
+`--max-attempts` times with nothing published since — is now passed over and the
+limit goes to the next one; a citation published since the last search brings it
+back, exactly as it reopens its fields.
 
 **So is a row with no fillable field empty at all.** The rule above only fired when
 at least one of the agent's fields was empty, so a row short of the twelve by
@@ -63,7 +63,21 @@ spent its nights on rows already past the bar while 514 below T2 went untouched.
 definition. Before 2026-10-05 the loop chose the same near-T2 rows night after night
 and found nothing — 0 of 15 on 10-04 — because what they lacked was an investment
 figure or a built capacity nobody had printed. Such a field reopens as soon as the row
-gains a citation, and `tracker clean` still names it (`fields_published`).
+gains a citation published on or after the day of the last search, and `tracker
+clean` still names it (`fields_published`).
+
+**An old article attached later does not reopen it.** The news watch reaches a year
+back on its first look at a campus, and until 2026-10-28 any citation the row gained
+reopened every field it had given up on. On that day's copy of production 85
+searched-out fields stood reopened — 46 by articles published before the search that
+gave up, 13 by citations fetched no later than that search's day, 17 by an article
+published since and 9 by undated pages fetched since — and 18 of the 50 rows `--t2`
+would choose that night were those re-asks, picked first for being a field or two
+short. The extractor has read every one of those articles and found the figure in
+none. Now the 59 stay answered: 24 more rows are at T2 on that copy, and the re-asks
+among the 50 fall to 6. An undated page counts by the day it was fetched, after the
+search's day, so it still reopens a field rather than being ignored
+(`attempts.published_since`).
 
 **`--pipeline` points the work at campuses the forward views cannot place**, with
 `--select` or `--all`: rows under construction or in permitting that have no expected
@@ -291,7 +305,8 @@ the only evidence for. It is folded the way a second project from one article is
 * **Fields already looked for.** `tracker.attempts` records a fruitless asking in
   `project.notes`, the prose channel re-ingesting never erases, and `enrich` stops
   asking after `--max-attempts`. It is a cap, not a verdict: the record carries the
-  citation count at the time, so a row that gains evidence reopens every field.
+  day and the citation count at the time, so a row that gains a citation published
+  since reopens every field.
   `audit.settled_codes` documents what a decision that never expires costs.
 * **`--token-budget`, between rows only.** Aborting a run in flight would spend the
   tokens and store nothing, which is the waste it exists to prevent rather than a
@@ -360,7 +375,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, its landed/unlanded check and the fields it returns per row; `tracker/gapfill.py` — `apply_facts`, `_fact_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
-| Not asking twice | `tracker/attempts.py` — `exhausted`, `record`, `evidence_count` |
+| Not asking twice | `tracker/attempts.py` — `exhausted`, `published_since`, `record`, `evidence_count` |
 | Parties and the megawatt basis | inherited: the harvesters run the crawl reader, so a citation from this command carries both. The agent pass builds its own citation and derives the basis, whether a figure is one building's, and how precisely a date was stated, itself (`gapfill._fact_axes`, `normalize.precision_in_quote`) — but unlike the crawl reader it does not move a month, quarter or half written as 1 January to its first day (`normalize.period_named_in_quote`); such a date reads as its year until `backfill precision` moves it; its parties come from `parties._inferred_parties`, which reads any citation's own claims |
 | Scoring and reporting | `tracker/ingest/enrich.py` — `report_score`, `EnrichReport` (`remeasure`, `harvested`, `agent_gained`), `BatchReport` (`agent_filled`); `tracker/cli/enrich.py` — `_render_enrich`, `_render_batch` |
 

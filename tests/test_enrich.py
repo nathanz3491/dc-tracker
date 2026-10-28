@@ -865,7 +865,15 @@ def test_select_passes_over_a_row_with_nothing_left_to_ask(session):
         "0 asks every time, and must select it too"
     )
 
-    add_source(session, stuck.id, "https://example.test/new-evidence")
+    add_source(
+        session, stuck.id, "https://example.test/old-news", published_at=dt.datetime(2025, 6, 1)
+    )
+    session.refresh(stuck)
+    assert stuck.id not in enrich.select_projects(session, 5, target=12), (
+        "an article published before the search gave up is not a reason to search again"
+    )
+
+    add_source(session, stuck.id, "https://example.test/new-evidence", published_at=utcnow())
     session.refresh(stuck)
     assert stuck.id in enrich.select_projects(session, 5, target=12), (
         "a new citation reopens the row, exactly as it reopens its fields"

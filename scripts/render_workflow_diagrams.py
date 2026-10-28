@@ -444,7 +444,7 @@ def enrich() -> Canvas:
     # not making a call, which is the only saving worth the name at this price.
     c.box(
         802, 826, 208, 166, "and what it is not asked",
-        ["rows the budget never harvested", "fields already looked for twice", "without success, until a new", "citation reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early;", "--t2: only the gaps T2 counts;", "--pipeline: only date and MW;", "a struck fact counts as tried"],
+        ["rows the budget never harvested", "fields already looked for twice", "without success, until an article", "published since reopens them", "--token-budget stops BETWEEN rows", "eight reads, four searches a row;", "told to answer two turns early;", "--t2: only the gaps T2 counts;", "--pipeline: only date and MW;", "a struck fact counts as tried"],
         role="red", title_size=11.5, sub_size=9,
     )
     c.arrow([agent.bottom(), (agent.cx, 826)], colour=RED)

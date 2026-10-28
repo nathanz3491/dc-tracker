@@ -633,12 +633,13 @@ def _measured_gaps(project: Project) -> set[str]:
 
 
 def unpublished(project: Project) -> set[str]:
-    """Gaps already looked for twice with nothing found, and no new citation since.
+    """Gaps already looked for twice with nothing found, and nothing published since.
 
-    `tracker.attempts` records each search; two empty ones on an unchanged row mean
-    nobody has published the fact. The field reopens by itself the moment the row
-    gains a citation, so this is a statement about the evidence so far, not a
-    permanent pass.
+    `tracker.attempts` records each search; two empty ones mean nobody has published
+    the fact. The field reopens by itself the moment the row gains a citation
+    published on or after the last search (`attempts.published_since`), so this is a
+    statement about the evidence so far, not a permanent pass — but an older article
+    the crawler attaches later does not reopen it, having been out there to find.
     """
     from tracker import attempts
 

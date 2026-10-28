@@ -1032,8 +1032,9 @@ def select_projects(
     (`tracker.attempts`), but the harvest ran first, every round, re-reading the
     row's own citations at full extraction cost to find the same nothing. A row
     whose every empty fillable field is exhausted — asked `max_attempts` times with
-    no citation gained since — is skipped, and the limit goes to the next row. It
-    comes back the moment it gains a citation, which is also what reopens its fields.
+    nothing published since — is skipped, and the limit goes to the next row. It
+    comes back the moment it gains a citation published since the last search, which
+    is also what reopens its fields (`attempts.published_since`).
 
     **And so are rows with no fillable field empty at all.** The check above used to
     fire only when at least one fillable field was empty, so a row short of the
@@ -1104,8 +1105,9 @@ def select_pipeline(
 
     The largest first, then those whose size is unknown: a gigawatt campus missing
     its date moves the forward views more than a 20 MW one. A campus is skipped when
-    both of its missing fields have been asked about to the limit with no citation
-    gained since (`pursuable`), and comes back the moment it gains one.
+    both of its missing fields have been asked about to the limit with nothing
+    published since (`pursuable`), and comes back the moment it gains a citation that
+    was.
     """
     from sqlalchemy import desc, or_
 
@@ -1146,7 +1148,8 @@ def pursuable(
 
     `fields` narrows the question (the T2 gaps, say); by default it is every gap.
     Empty means there is nothing left worth a harvest or an agent call until the row
-    gains a citation, which is what reopens a field `tracker.attempts` retired.
+    gains a citation published since the last search, which is what reopens a field
+    `tracker.attempts` retired.
     """
     from tracker import attempts
     from tracker.gapfill import FILLABLE_FIELDS

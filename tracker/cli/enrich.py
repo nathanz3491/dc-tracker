@@ -135,7 +135,8 @@ def enrich(
             "--max-attempts",
             help=(
                 "Stop asking about a field after this many fruitless attempts, "
-                "until the row gains a citation. 0 asks every time."
+                "until the row gains a citation published since the last one. "
+                "0 asks every time."
             ),
         ),
     ] = attempts_mod.DEFAULT_MAX_ATTEMPTS,

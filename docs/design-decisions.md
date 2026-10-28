@@ -426,11 +426,19 @@ because the facts missing were ones nobody publishes:
   Requiring one held 24 rows below T2.
 * **A field searched twice with nothing published counts as answered**
   (`gaps.unpublished`, from the `tracker.attempts` ledger). It reopens the moment the
-  row gains a citation, so it records the evidence so far rather than granting a
-  permanent pass, and the reported condition `fields_published` keeps naming it on
-  every card. With both, 58 rows moved to T2 on a copy of production. T2 therefore
-  means *complete as far as anything has been published*, and the unknowns are listed
-  rather than hidden.
+  row gains a citation published since the last search, so it records the evidence so
+  far rather than granting a permanent pass, and the reported condition
+  `fields_published` keeps naming it on every card. With both, 58 rows moved to T2 on
+  a copy of production. T2 therefore means *complete as far as anything has been
+  published*, and the unknowns are listed rather than hidden.
+
+  "Published since", not "attached since", from 2026-10-28. The news watch attaches
+  articles every night, a year of them on its first look at a campus, and any of them
+  used to reopen every searched-out field on the row: 85 fields stood reopened on that
+  day's copy of production, 59 of them by articles older than the search or citations
+  fetched no later than it. Each such row fell out of T2 and was the next night's
+  first pick for the same search. An article that was there to be found, and that the
+  extractor has since read without finding the figure, is not new evidence about it.
 
 The definition is calibrated rather than asserted: a test says that if a
 fully-answered row cannot score T3, the definition is wrong and `clean.py` changes —

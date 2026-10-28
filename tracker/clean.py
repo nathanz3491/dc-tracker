@@ -109,7 +109,7 @@ REMEDIES: Final[dict[str, str]] = {
     "fields_present": "tracker enrich {id} --target 0",
     "values_backed": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
     "basics_defined": "tracker enrich {id} --basics",
-    "fields_published": "tracker point '<name>'  # a new citation reopens the field",
+    "fields_published": "tracker point '<name>' --url <page>  # a page stating it fills it",
     "warnings_settled": "tracker logic resolve --project {id}",
     "blocks_settled": "tracker blocks {id}",
     "risks_confirmed": "tracker risks confirm --project {id}",
@@ -436,8 +436,8 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
     # as broken — a target nothing could reach, which is a target nobody uses.
     #
     # A field searched twice with nothing published counts as answered
-    # (`gaps.unpublished`); it reopens when the row gains a citation, and
-    # `fields_published` below keeps it visible.
+    # (`gaps.unpublished`); it reopens when the row gains a citation published since
+    # the last search, and `fields_published` below keeps it visible.
     gapped = sorted(gaps.t2_gaps(project))
     add("fields_present", not gapped, f"missing {', '.join(gapped)}" if gapped else "")
 
