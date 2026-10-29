@@ -2293,7 +2293,9 @@ def resolve_drift(session: Session, *, apply: bool = False) -> list[Repair]:
     from tracker.upsert import recompute_from_sources
 
     repairs: list[Repair] = []
-    for project in session.scalars(select(Project)).all():
+    # Collections up front, as `review` loads them: a repair re-derives only its own
+    # row, so no row's collections change before they would have been lazy-loaded.
+    for project in session.scalars(select(Project).options(*preload_options())).all():
         drifted = [c for c in check_collisions(project) if c.stored_disagrees]
         if not drifted:
             continue
