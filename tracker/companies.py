@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from tracker import dedup
 from tracker.models import (
@@ -349,7 +349,16 @@ def sync(session: Session) -> SyncReport:
             report.aliases_dropped += 1
     session.flush()
 
-    for project in session.scalars(select(Project)):
+    # Every key's row is in hand and flushed, so `ensure` need not look any of them
+    # up again: 2,000 SELECTs by key in a whole-table derive. It answers from this
+    # exactly what the lookup would have found, since `key` is unique.
+    cache, held = _cache(session), _held(session)
+    for key, row in known.items():
+        cache[key] = row.id
+        held[row.id] = row
+
+    # Parties with the rows, one query rather than one per campus; the same rows.
+    for project in session.scalars(select(Project).options(selectinload(Project.parties))):
         before = (project.company_id, tuple(p.company_id for p in project.parties))
         attach(session, project)
         if before != (project.company_id, tuple(p.company_id for p in project.parties)):
