@@ -197,17 +197,25 @@ def article_for(source: Source | None, *, cache_dir: Path | None = None) -> str:
     return (source.excerpt or "")[:ARTICLE_BUDGET]
 
 
-def evidence(risk: Risk, source: Source | None, *, cache_dir: Path | None = None) -> str:
+def evidence(
+    risk: Risk,
+    source: Source | None,
+    *,
+    cache_dir: Path | None = None,
+    article: str | None = None,
+) -> str:
     """Fingerprint of what an obstacle is judged on: the obstacle and its article.
 
     The article text is hashed whole, so a re-fetch that changed the page — or a
     cache that finally holds it where the excerpt stood in before — is new evidence.
+    `article` is the text when the caller has already read it.
     """
     import hashlib
 
     from tracker import declines
 
-    article = article_for(source, cache_dir=cache_dir)
+    if article is None:
+        article = article_for(source, cache_dir=cache_dir)
     return declines.fingerprint(
         risk.category,
         risk.severity,
@@ -219,6 +227,34 @@ def evidence(risk: Risk, source: Source | None, *, cache_dir: Path | None = None
     )
 
 
+def sources_for(session: Session, risks: list[Risk]) -> dict[int, Source]:
+    """The citations behind these obstacles, by id — and only those.
+
+    `fresh` and `confirm` each loaded the whole `source` table, every citation in
+    the database with its claims, to look up the one or two dozen a run reads.
+    """
+    wanted = {r.source_id for r in risks if r.source_id is not None}
+    if not wanted:
+        return {}
+    return {s.id: s for s in session.scalars(select(Source).where(Source.id.in_(wanted)))}
+
+
+def held_declines(session: Session) -> dict[str, Any]:
+    """The `risk` declines that still hold anything back.
+
+    A decline the category check made rather than the model — the model quoted a
+    sentence and the check refused it — is dropped once the check has changed since
+    (`CATEGORY_CHECK_REVISED_AT`).
+    """
+    from tracker import declines
+
+    return {
+        subject: row
+        for subject, row in declines.load(session, "risk").items()
+        if not _overruled_by_old_check(row)
+    }
+
+
 def fresh(
     session: Session,
     risks: list[Risk],
@@ -226,31 +262,27 @@ def fresh(
     cache_dir: Path | None = None,
     again: bool = False,
 ) -> tuple[list[Risk], int]:
-    """The obstacles not already judged unclear on the same article, and how many were.
+    """The obstacles not already judged on the same article, and how many were.
 
     `unconfirmed_risks` sorts the same way every time, so without this the same top
     `--limit` obstacles were read every round: 141 open unquoted obstacles on the
     snapshot this was written against, 2 ever refuted, and nothing recording the
     `unclear` answers in between.
 
-    A decline the category check made rather than the model — the model quoted a
-    sentence and the check refused it — is not held back once the check has changed
-    since (`CATEGORY_CHECK_REVISED_AT`).
+    An article is read and hashed only for an obstacle that has a decline to compare
+    it with (`declines.pick`); one never judged needs neither.
     """
     from tracker import declines
 
-    sources = {s.id: s for s in session.scalars(select(Source)).all()}
-    known = {
-        subject: row
-        for subject, row in declines.load(session, "risk").items()
-        if not _overruled_by_old_check(row)
-    }
-    return declines.split(
+    sources = sources_for(session, risks)
+    kept, held, _ = declines.pick(
         risks,
-        known,
-        key=lambda r: (str(r.id), evidence(r, sources.get(r.source_id), cache_dir=cache_dir)),
+        held_declines(session),
+        lambda r: str(r.id),
+        lambda r: evidence(r, sources.get(r.source_id), cache_dir=cache_dir),
         again=again,
     )
+    return kept, held
 
 
 def _overruled_by_old_check(row) -> bool:
@@ -306,28 +338,47 @@ def judge(
     prompt_name: str = "risk-confirm-v1",
 ) -> tuple[Judgement, str]:
     """Ask a model whether the article reports this obstacle. Returns (judgement, article)."""
-    from tracker.llm import LLMError, LLMJsonError, parse_json_object
-    from tracker.prompts import load_prompt
-
     article = article_for(source, cache_dir=cache_dir)
     if not article.strip():
         return Judgement(risk.id, "error", reason="no article text is available to read"), ""
+    question = Question(risk.id, article, _prompt_user(project, risk, source, article, prompt_name))
+    return ask(question, extractor=extractor, prompt_name=prompt_name), article
 
-    prompt = load_prompt(prompt_name)
+
+@dataclass(frozen=True)
+class Question:
+    """One obstacle's question as plain values, so it can be asked off the main thread."""
+
+    risk_id: int
+    article: str
+    user: str
+
+
+def _prompt_user(
+    project: Project, risk: Risk, source: Source | None, article: str, prompt_name: str
+) -> str:
+    from tracker.prompts import load_prompt
+
+    return load_prompt(prompt_name).render_user(**build_context(project, risk, source, article))
+
+
+def ask(question: Question, *, extractor, prompt_name: str = "risk-confirm-v1") -> Judgement:
+    """The one model call. Touches no database: everything it needs is in `question`."""
+    from tracker.llm import LLMError, LLMJsonError, parse_json_object
+    from tracker.prompts import load_prompt
+
     try:
         reply = extractor.complete(
-            system=prompt.system,
-            user=prompt.render_user(**build_context(project, risk, source, article)),
-            max_tokens=MAX_TOKENS,
+            system=load_prompt(prompt_name).system, user=question.user, max_tokens=MAX_TOKENS
         )
     except LLMError as exc:
-        log.warning("risk confirmation failed for risk %s: %s", risk.id, exc)
-        return Judgement(risk.id, "error", reason=str(exc)[:160]), article
+        log.warning("risk confirmation failed for risk %s: %s", question.risk_id, exc)
+        return Judgement(question.risk_id, "error", reason=str(exc)[:160])
 
     try:
         payload = parse_json_object(reply.text)
     except (LLMJsonError, ValueError):
-        return Judgement(risk.id, "error", reason="unusable reply"), article
+        return Judgement(question.risk_id, "error", reason="unusable reply")
 
     verdict = str(payload.get("verdict") or "").strip().lower()
     quote = str(payload.get("quote") or "").strip()
@@ -338,7 +389,7 @@ def judge(
         confidence = 0.0
     if verdict not in {"confirmed", "refuted", "unclear"}:
         verdict = "unclear"
-    return Judgement(risk.id, verdict, quote=quote, reason=reason, confidence=confidence), article
+    return Judgement(question.risk_id, verdict, quote=quote, reason=reason, confidence=confidence)
 
 
 def verify_quote(quote: str, article: str, category: str) -> tuple[str, str]:
@@ -398,33 +449,57 @@ def apply_judgement(risk: Risk, judgement: Judgement, article: str) -> str:
     return "unclear"
 
 
-def confirm(
+def run(
     session: Session,
     risks: list[Risk],
     *,
     extractor,
+    limit: int | None = None,
+    again: bool = False,
     cache_dir: Path | None = None,
     apply: bool = True,
+    workers: int = 1,
     on_each=None,
-) -> list[Outcome]:
-    """Read each obstacle's article and settle it. One model call per obstacle.
+    on_start=None,
+):
+    """Read each obstacle's article and settle it, through `judged.run`. Returns its `Run`.
+
+    One model call per obstacle, up to `limit` of them, after holding back those
+    already judged on the same article (`fresh`). Each answer is committed as it
+    lands, so a run killed part way keeps every answer before it; one obstacle that
+    fails is rolled back and the rest go on.
+
+    What is remembered (`tracker.declines`, kind `risk`), against a hash of the
+    obstacle and its article:
+
+    * **unclear** — the model's own answer on this article: held until the article
+      or the obstacle changes, or the cooldown lapses.
+    * **no_article** — nothing to read, so nothing was asked. Held the same way, and
+      for the same reason: the hash covers the article text, so the day the cache
+      holds the page the question is new. It used to be recorded nowhere and asked
+      about again every round.
+    * **error** — the call failed or the reply was unusable: held for the night only.
 
     Args:
         apply: False judges and writes nothing, so a run can be previewed at full
             cost but zero risk. The judgement is identical either way — the same
             code decides, and only the assignment is skipped.
+        workers: calls in flight at once; one per obstacle's campus per wave.
         on_each: called with each Outcome as it lands, for progress output.
     """
-    sources = {s.id: s for s in session.scalars(select(Source)).all()}
-    out: list[Outcome] = []
-    for risk in risks:
-        project = session.get(Project, risk.project_id)
-        if project is None:
-            continue
+    from tracker import declines, judged
+
+    sources = sources_for(session, risks)
+    articles: dict[int, str] = {}
+
+    def text(risk: Risk) -> str:
+        if risk.id not in articles:
+            articles[risk.id] = article_for(sources.get(risk.source_id), cache_dir=cache_dir)
+        return articles[risk.id]
+
+    def shell(risk: Risk, project: Project, judgement: Judgement) -> Outcome:
         source = sources.get(risk.source_id)
-        shown = evidence(risk, source, cache_dir=cache_dir)
-        judgement, article = judge(project, risk, source, extractor=extractor, cache_dir=cache_dir)
-        outcome = Outcome(
+        return Outcome(
             risk_id=risk.id,
             project_id=project.id,
             project=f"{project.company} — {project.name}",
@@ -434,50 +509,95 @@ def confirm(
             judgement=judgement,
             url=(source.url if source else ""),
         )
-        if not article and judgement.verdict == "error":
+
+    def prepare(risk: Risk):
+        project = session.get(Project, risk.project_id)
+        if project is None:
+            return judged.Done(result=None)
+        article = text(risk)
+        if not article.strip():
+            outcome = shell(
+                risk,
+                project,
+                Judgement(risk.id, "error", reason="no article text is available to read"),
+            )
             outcome.result = "no_article"
-        elif apply:
-            outcome.result = apply_judgement(risk, judgement, article)
-            if outcome.result == "error":
-                # A failed call, not an answer: held for the rest of the night only
-                # (`declines.ERROR`), so the next round does not pay for it again.
-                from tracker import declines
+            return judged.Done(outcome, decline="no_article", reason=outcome.judgement.reason)
+        source = sources.get(risk.source_id)
+        return Question(risk.id, article, _prompt_user(project, risk, source, article, PROMPT))
 
-                declines.record(
-                    session,
-                    "risk",
-                    str(risk.id),
-                    shown,
-                    outcome=declines.ERROR,
-                    reason=judgement.reason,
-                    by="model",
-                )
-            if outcome.result == "unclear":
-                # The model's own answer on this article, not a failed call — so
-                # the next run holds it back until the article or the obstacle
-                # changes. See `fresh`.
-                from tracker import declines
-
-                declines.record(
-                    session,
-                    "risk",
-                    str(risk.id),
-                    shown,
-                    outcome="unclear",
-                    reason=judgement.reason,
-                    by="model",
-                )
-        else:
+    def settle(risk: Risk, question: Question, judgement: Judgement) -> judged.Done:
+        outcome = shell(risk, session.get(Project, risk.project_id), judgement)
+        if not apply:
             # Judge exactly as `apply` would, against a throwaway copy, so a
             # preview cannot report an outcome the real run would not produce.
             probe = _Detached(risk.category, risk.quote, risk.unconfirmed, risk.status)
-            outcome.result = apply_judgement(probe, judgement, article)  # type: ignore[arg-type]
-        if on_each is not None:
-            on_each(outcome)
-        out.append(outcome)
-    if apply:
-        session.flush()
-    return out
+            outcome.result = apply_judgement(probe, judgement, question.article)  # type: ignore[arg-type]
+            return judged.Done(outcome)
+        outcome.result = apply_judgement(risk, judgement, question.article)
+        if outcome.result == "error":
+            # A failed call, not an answer: held for the rest of the night only.
+            return judged.Done(outcome, decline=declines.ERROR, reason=judgement.reason)
+        if outcome.result == "unclear":
+            return judged.Done(outcome, decline="unclear", reason=judgement.reason)
+        return judged.Done(outcome, forget=True)
+
+    def failed(risk: Risk, error: BaseException) -> Outcome | None:
+        project = session.get(Project, risk.project_id)
+        if project is None:
+            return None
+        outcome = shell(risk, project, Judgement(risk.id, "error", reason=str(error)[:160]))
+        outcome.result = "error"
+        return outcome
+
+    return judged.run(
+        session,
+        risks,
+        kind="risk",
+        subject=lambda r: str(r.id),
+        fingerprint=lambda r: evidence(r, sources.get(r.source_id), article=text(r)),
+        projects=lambda r: [r.project_id],
+        prepare=prepare,
+        ask=lambda question, _db: ask(question, extractor=extractor),
+        apply=settle,
+        failed=failed,
+        limit=limit,
+        again=again,
+        # Lazy: the fingerprint is the whole article, and nothing past the limit
+        # needs reading. A held-back obstacle is still skipped before the limit.
+        lazy=True,
+        known=held_declines(session),
+        workers=workers,
+        commit=apply,
+        on_each=on_each,
+        on_start=on_start,
+        label="risks",
+    )
+
+
+def confirm(
+    session: Session,
+    risks: list[Risk],
+    *,
+    extractor,
+    cache_dir: Path | None = None,
+    apply: bool = True,
+    on_each=None,
+) -> list[Outcome]:
+    """Settle exactly these obstacles, none held back: `run` without the selection."""
+    return run(
+        session,
+        risks,
+        extractor=extractor,
+        again=True,
+        cache_dir=cache_dir,
+        apply=apply,
+        on_each=on_each,
+    ).results
+
+
+#: The prompt `run` asks with.
+PROMPT: Final = "risk-confirm-v1"
 
 
 @dataclass
@@ -495,16 +615,22 @@ __all__ = [
     "CATEGORY_CHECK_REVISED_AT",
     "MIN_CONFIDENCE",
     "OFF_CATEGORY",
+    "PROMPT",
     "REFUTED_STATUS",
     "Judgement",
     "Outcome",
+    "Question",
     "apply_judgement",
     "article_for",
+    "ask",
     "build_context",
     "confirm",
     "evidence",
     "fresh",
+    "held_declines",
     "judge",
+    "run",
+    "sources_for",
     "unconfirmed_risks",
     "verify_quote",
 ]

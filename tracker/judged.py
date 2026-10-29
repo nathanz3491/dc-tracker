@@ -184,6 +184,7 @@ def run(
     stage: str | None = None,
     room: Callable[[], int | None] | None = None,
     on_each: Callable[[Any], None] | None = None,
+    on_start: Callable[[Run, list[Any]], None] | None = None,
     label: str = "judge",
 ) -> Run:
     """Put `items` to a model, in order, keeping each answer as it lands.
@@ -210,6 +211,8 @@ def run(
         room: how many more items may start, asked before each wave; None is no
             bound and 0 stops the pass (a token budget).
         on_each: called with each item's result as it is applied, for progress.
+        on_start: called once the work is chosen, with this run (its `held` and
+            `beyond` already counted) and the chosen items, before anything is asked.
     """
     from tracker import declines
     from tracker.spend import ceiling_reached
@@ -232,6 +235,9 @@ def run(
         )
         chosen = fresh[:limit] if limit is not None else fresh
         out.beyond = len(fresh) - len(chosen)
+
+    if on_start is not None:
+        on_start(out, chosen)
 
     def remember(item: Any, shown: str, done: Done) -> None:
         if not commit or kind is None:

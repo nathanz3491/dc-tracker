@@ -30,11 +30,15 @@ from tracker.cli._shared import (
     _db_path,
     _explain_db_locks,
     _fail,
+    _model,
+    _print_ceiling,
     _print_report,
     _print_report_rows,
     _read_engine,
     _use_llm,
+    _workers,
     _writable,
+    again_flag,
     app,
     audit_app,
     console,
@@ -327,10 +331,7 @@ def risks_confirm(
         bool, typer.Option("--dry-run", help="Judge at full cost and write nothing.")
     ] = False,
     again: Annotated[
-        bool,
-        typer.Option(
-            "--again", help="Also read obstacles already judged unclear on the same article."
-        ),
+        bool, again_flag("Also read obstacles already judged on the same article.")
     ] = False,
     llm_provider: Annotated[
         str | None,
@@ -377,13 +378,7 @@ def risks_confirm(
     if category and category not in RISK_CATEGORIES:
         _fail(f"--category must be one of: {', '.join(RISK_CATEGORIES)}")
 
-    from tracker.llm import LLMUnavailable, judgement_extractor
-
-    try:
-        extractor = judgement_extractor(get_settings())
-    except LLMUnavailable as exc:
-        _fail(str(exc))
-        raise
+    extractor = _model("judgement")
 
     engine = _read_engine() if dry_run else _writable("risks confirm")
 
@@ -417,41 +412,48 @@ def risks_confirm(
         if outcome.result == "confirmed":
             console.print(f'      [green]"{escape(outcome.judgement.quote[:170])}"[/green]')
 
+    def started(run, chosen) -> None:
+        if chosen and not json_mode():
+            console.print(
+                f"[bold]{len(chosen)}[/bold] of {total} unquoted obstacle(s), "
+                "worst first — one model call each, reading the whole article."
+                + (
+                    f" [dim]{run.held} already judged on the same article.[/dim]"
+                    if run.held
+                    else ""
+                )
+                + "\n"
+            )
+
     with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
         candidates = riskcheck.unconfirmed_risks(session, project_id=project_id, category=category)
         total = len(candidates)
         if not candidates:
             console.print("[green]every open obstacle already has a quote that stands up[/green]")
             return
-        # Before the limit, so the limit buys obstacles nobody has read yet.
-        unread, held = riskcheck.fresh(session, candidates, cache_dir=cache_dir, again=again)
-        risks_to_read = unread[:limit]
-        if not risks_to_read:
-            console.print(
-                f"[green]nothing new to read[/green] [dim]— all {total} unquoted obstacle(s) "
-                "were judged unclear on the article they cite; --again reads them.[/dim]"
-            )
-            return
-        if not json_mode():
-            console.print(
-                f"[bold]{len(risks_to_read)}[/bold] of {total} unquoted obstacle(s), "
-                "worst first — one model call each, reading the whole article."
-                + (
-                    f" [dim]{held} already judged unclear on the same article.[/dim]"
-                    if held
-                    else ""
-                )
-                + "\n"
-            )
-        outcomes = riskcheck.confirm(
+        # Held-back obstacles are skipped before the limit, so the limit buys
+        # obstacles nobody has read yet. Each answer is committed as it lands.
+        got = riskcheck.run(
             session,
-            risks_to_read,
+            candidates,
             extractor=extractor,
+            limit=limit,
+            again=again,
             cache_dir=cache_dir,
             apply=not dry_run,
+            workers=_workers("judgement"),
             on_each=announce,
+            on_start=started,
         )
+        outcomes = got.results
+        if not outcomes and not got.ceiling:
+            console.print(
+                f"[green]nothing new to read[/green] [dim]— all {total} unquoted obstacle(s) "
+                "were judged on the article they cite; --again reads them.[/dim]"
+            )
+            return
 
+    _print_ceiling(got)
     if json_mode():
         emit({"outcomes": [o.as_json() for o in outcomes], "total_unconfirmed": total})
         return
