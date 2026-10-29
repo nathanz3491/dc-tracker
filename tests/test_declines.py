@@ -276,7 +276,10 @@ def test_a_refused_ruling_is_held_back_on_the_next_run(session, monkeypatch):
         calls.append(1)
         return triage.Outcome(verdict="unusable", note="the quote is not in any article")
 
-    monkeypatch.setattr(triage, "triage", refused)
+    # The batch runs the agent (`investigate`) and applies its answer (`conclude`)
+    # as two steps; the stand-in refuses at the second.
+    monkeypatch.setattr(triage, "investigate", lambda task, **kw: task)
+    monkeypatch.setattr(triage, "conclude", refused)
     cli_logic._triage_by_agent(session, [finding], extractor=object(), limit=5)
     cli_logic._triage_by_agent(session, [finding], extractor=object(), limit=5)
     assert len(calls) == 1

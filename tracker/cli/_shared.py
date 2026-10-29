@@ -495,10 +495,12 @@ def _workers(tier: str = "judgement") -> int:
     return settings.llm_workers(provider)
 
 
-def _print_held(count: int, what: str, why: str = "already put to the model") -> None:
+def _print_held(
+    count: int, what: str, why: str = "already put to the model", *, out: Console | None = None
+) -> None:
     """`holding back 3 pair(s) ... on the same evidence; --again asks them.`"""
     if count and not json_mode():
-        console.print(
+        (out or console).print(
             f"[dim]holding back {count} {what} {why} on the same evidence; --again asks them.[/dim]"
         )
 
@@ -522,7 +524,13 @@ def _print_ceiling(run) -> bool:
     return True
 
 
-def _print_tally(parts: list[tuple[int, str, str]], tokens=None, *, beyond: int = 0) -> None:
+def _print_tally(
+    parts: list[tuple[int, str, str]],
+    tokens=None,
+    *,
+    beyond: int = 0,
+    out: Console | None = None,
+) -> None:
     """A pass's closing line and its prompt-cache rate.
 
     `parts` is `(count, phrase, style)`: a `bold` part is always shown, any other
@@ -539,13 +547,14 @@ def _print_tally(parts: list[tuple[int, str, str]], tokens=None, *, beyond: int 
     line = "\n" + ", ".join(shown)
     if tokens is not None:
         line += f"  [dim]~{tokens.total:,} tokens[/dim]"
-    console.print(line)
+    out = out or console
+    out.print(line)
     if tokens is not None and (tokens.cache_hit or tokens.cache_miss):
         # The number that decides what a night costs: a cached prompt token is a
         # fiftieth of an uncached one, and an agent loop re-sends its history every
         # turn. A low rate here means the prefix is being disturbed.
         rate = tokens.cache_hit / (tokens.cache_hit + tokens.cache_miss)
-        console.print(
+        out.print(
             f"  [dim]prompt cache: {rate:.0%} hit ({tokens.cache_hit:,} cached, "
             f"{tokens.cache_miss:,} not)[/dim]"
         )

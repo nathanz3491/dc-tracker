@@ -156,6 +156,9 @@ class Outcome:
     completion_tokens: int = 0
     cache_hit_tokens: int = 0
     cache_miss_tokens: int = 0
+    #: How a "left" run ended: `leave_alone` (the model's own answer), or `stopped`
+    #: / `exhausted` (it ran out of turns without one).
+    ended: str = ""
 
     @property
     def acted(self) -> bool:
@@ -482,25 +485,63 @@ def triage(
 
     `question` is the finding in the reader's terms — the caller owns it, because
     `logic` and `audit` describe their findings differently and neither should have
-    to phrase things the other's way.
+    to phrase things the other's way. `investigate` and `conclude` in a row, which
+    is what `triage_findings` runs for many findings with the runs overlapping.
+    """
+    result = investigate(
+        task_for(project, question),
+        extractor=extractor,
+        db=session,
+        allow_search=allow_search,
+        max_steps=max_steps,
+        on_step=on_step,
+    )
+    return conclude(
+        session, project, result, min_confidence=min_confidence, require_quote=require_quote
+    )
+
+
+def task_for(project: Any, question: str) -> str:
+    """The agent's task: the row named, then the finding in the reader's terms."""
+    return f"Project #{project.id}: {project.name} — {project.company}\n\n{question}"
+
+
+def investigate(
+    task: str,
+    *,
+    extractor: Any,
+    db: Any,
+    allow_search: bool = True,
+    max_steps: int | None = None,
+    on_step: Any = None,
+) -> Any:
+    """The agent run: reading, searching, and the tool call that ends it. Writes nothing.
+
+    `db` is the session the evidence tools read through — the caller's own when one
+    finding is asked at a time, a session of the run's own when several are (see
+    `tracker.judged`). Every tool here only reads.
     """
     from tracker import agent
 
-    tools = agent.evidence_toolkit(session, allow_search=allow_search)
+    tools = agent.evidence_toolkit(db, allow_search=allow_search)
     tools += [rule_out_tool(), leave_alone_tool()]
-
     kwargs: dict[str, Any] = {}
     if max_steps is not None:
         kwargs["max_steps"] = max_steps
-    result = agent.run(
-        f"Project #{project.id}: {project.name} — {project.company}\n\n{question}",
-        tools=tools,
-        extractor=extractor,
-        system=SYSTEM,
-        on_step=on_step,
-        **kwargs,
+    return agent.run(
+        task, tools=tools, extractor=extractor, system=SYSTEM, on_step=on_step, **kwargs
     )
 
+
+def conclude(
+    session: Any,
+    project: Any,
+    result: Any,
+    *,
+    min_confidence: float = 0.0,
+    require_quote: bool = True,
+) -> Outcome:
+    """Turn an agent run into an Outcome, applying a ruling that passes the rails."""
     out = Outcome(
         verdict="error",
         note=result.note,
@@ -514,11 +555,13 @@ def triage(
         # "stopped" and "exhausted" are not errors in the provider sense, and the
         # note is the model's own account of why — worth keeping verbatim.
         out.verdict = "left" if result.outcome in {"stopped", "exhausted"} else "error"
+        out.ended = result.outcome
         return out
 
     answer = result.answer or {}
     if result.tool_name == "leave_alone":
         out.verdict = "left"
+        out.ended = "leave_alone"
         out.note = str(answer.get("reason") or "").strip()
         return out
 
@@ -544,6 +587,175 @@ def triage(
     out.changes = [sentence]
     out.note = str(answer.get("reason") or "").strip()
     return out
+
+
+def finding_question(finding: Any) -> str:
+    """A `logic` finding in the reader's terms, as the agent is asked it.
+
+    `remedy` is included because it is where the codebase records what a reader
+    should look at, and withholding it makes the model rediscover what a rule
+    already knows. `subjects` names what the finding is *about* — the prompt was
+    measurably blind without it. (The attribute is plural, and this line once read
+    it in the singular: `getattr` with a default swallowed the miss and the `About:`
+    line was never emitted, so a model handed a quote about something else declined,
+    correctly, and looked stubborn.)
+    """
+    subjects = ", ".join(finding.subjects or ())
+    return "\n".join(
+        part
+        for part in (
+            f"Finding `{finding.code}`: {finding.summary}",
+            f"About: {subjects}" if subjects else "",
+            f"Where to look: {finding.remedy}" if finding.remedy else "",
+            f"Fields involved: {', '.join(finding.fields)}" if finding.fields else "",
+        )
+        if part
+    )
+
+
+def finding_subject(finding: Any) -> str:
+    """A `logic` finding's key in `model_decline` — the same spelling as an audit finding's."""
+    from tracker.audit import decline_subject
+
+    return decline_subject(finding)
+
+
+def finding_evidence(finding: Any, project: Any) -> str:
+    """Fingerprint of a finding as the agent is shown it: the question and the row."""
+    from tracker import declines
+
+    return declines.fingerprint(
+        finding.code,
+        finding.summary,
+        sorted(finding.fields or ()),
+        sorted(finding.subjects or ()),
+        declines.citations(project),
+    )
+
+
+@dataclass
+class Triaged:
+    """One finding's run, for the report: which row, and what came of it."""
+
+    finding: Any
+    project_id: int
+    name: str
+    outcome: Outcome
+
+
+def triage_findings(
+    session: Any,
+    findings: list[Any],
+    *,
+    extractor: Any,
+    min_confidence: float = 0.75,
+    limit: int | None = None,
+    again: bool = False,
+    workers: int = 1,
+    on_each: Any = None,
+    on_start: Any = None,
+) -> Any:
+    """Put each finding to the agent through `judged.run`. Returns its `Run` of `Triaged`.
+
+    Held back first, before `limit`: a finding put to the agent on the same evidence
+    — the question and the row's citations — within the cooldown. Each finding's
+    ruling is committed as it lands; one that raises is rolled back and the rest go
+    on. The agent's evidence tools read the database, so with several workers each
+    run reads through a session of its own (`judged`, `reads_db`).
+
+    **Where each outcome is kept — a decision in the row, an inability in declines.**
+
+    * **ruled** — written into the row's notes (`logic.record_decision`), where a
+      reader sees it and `audit.settled_codes` reads it as answered while the edit
+      holds. A ruling that left the value as it was is also held back on this
+      evidence ("ruling changed nothing"): it answered nothing, and the next round
+      would pay to hear it again.
+    * **left alone** — the agent's `leave_alone`: "the evidence you read does not
+      settle this". That is an inability to decide, not a judgement that the value
+      stands, and it is now kept as one: in `model_decline`, against the evidence,
+      so it is asked again when a citation changes or a month passes. It used to be
+      written into the row's notes, which `settled_codes` reads as settled — so a
+      finding the agent could not settle in October stayed hidden after the
+      article that settles it arrived. (Notes already written stay as they are.) A
+      duplicate pair the same tool leaves alone has always been held this way.
+    * **ran out of steps** — the run stopped or exhausted its turns without an
+      answer; held the same way, for the same reason. It too used to be written
+      into the notes as "left alone".
+    * **unusable** — a ruling the rails refused: held until the evidence changes.
+    * **error** — the run never reached an answer: held for the night only.
+    """
+    from tracker import declines, judged
+    from tracker.audit import left_as_it_was
+    from tracker.logic import record_decision
+    from tracker.models import Project
+
+    def prepare(finding: Any) -> Any:
+        project = session.get(Project, finding.project_id)
+        if project is None:
+            return judged.Done(result=None)
+        return (project.id, project.name, task_for(project, finding_question(finding)))
+
+    def ask(prepared: Any, db: Any) -> Any:
+        return investigate(prepared[2], extractor=extractor, db=db)
+
+    def settle(finding: Any, prepared: Any, result: Any) -> Any:
+        project = session.get(Project, finding.project_id)
+        outcome = conclude(session, project, result, min_confidence=min_confidence)
+        got = Triaged(finding, prepared[0], prepared[1], outcome)
+        if outcome.verdict == "ruled":
+            record_decision(
+                project,
+                finding.code,
+                "; ".join(outcome.changes),
+                by=f"agent ({outcome.confidence:.2f})",
+                detail=outcome.note,
+            )
+            if all(left_as_it_was(change) for change in outcome.changes):
+                return judged.Done(
+                    got, decline="ruling changed nothing", reason="; ".join(outcome.changes)
+                )
+            return judged.Done(got, forget=True)
+        # Nothing a reader should see was decided; whatever the run wrote goes.
+        session.rollback()
+        if outcome.verdict == "left":
+            how = "left alone" if outcome.ended == "leave_alone" else "ran out of steps"
+            return judged.Done(got, decline=how, reason=outcome.note)
+        if outcome.verdict == "unusable":
+            return judged.Done(got, decline="unusable", reason=outcome.note)
+        return judged.Done(got, decline=declines.ERROR, reason=outcome.note)
+
+    def failed(finding: Any, error: BaseException) -> Triaged:
+        project = session.get(Project, finding.project_id)
+        name = project.name if project is not None else ""
+        return Triaged(finding, finding.project_id, name, Outcome(verdict="error", note=str(error)))
+
+    return judged.run(
+        session,
+        findings,
+        kind="logic",
+        subject=finding_subject,
+        fingerprint=lambda f: _evidence_of(session, f),
+        projects=lambda f: [f.project_id],
+        prepare=prepare,
+        ask=ask,
+        apply=settle,
+        failed=failed,
+        limit=limit,
+        again=again,
+        workers=workers,
+        by="agent",
+        reads_db=True,
+        on_each=on_each,
+        on_start=on_start,
+        label="logic",
+    )
+
+
+def _evidence_of(session: Any, finding: Any) -> str:
+    from tracker.models import Project
+
+    row = session.get(Project, finding.project_id)
+    return finding_evidence(finding, row) if row is not None else ""
 
 
 # --- the same question, asked about a pair of rows --------------------------
@@ -1036,12 +1248,20 @@ __all__ = [
     "SYSTEM",
     "UNANSWERABLE_BY_RULING",
     "Outcome",
+    "Triaged",
     "apply_rule_out",
     "can_rule_on",
+    "conclude",
+    "finding_evidence",
+    "finding_question",
+    "finding_subject",
     "has_live_claim",
+    "investigate",
     "leave_alone_tool",
     "pair_triage",
     "pair_verdict_tools",
     "rule_out_tool",
+    "task_for",
     "triage",
+    "triage_findings",
 ]

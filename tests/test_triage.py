@@ -740,6 +740,19 @@ def test_every_unanswerable_code_is_one_a_rule_actually_raises():
 # --- the CLI wiring around that filter ---------------------------------------
 
 
+def _agent_answers(monkeypatch, answer):
+    """Stand in for the agent: `answer(task)` is the Outcome of one finding's run.
+
+    The batch runs a finding in two steps — `investigate` (the agent run, which may
+    happen off the main thread) and `conclude` (applying it) — so the stand-in
+    replaces both: the run hands back its task, and concluding asks `answer`.
+    """
+    monkeypatch.setattr("tracker.triage.investigate", lambda task, **kw: task)
+    monkeypatch.setattr(
+        "tracker.triage.conclude", lambda session, project, task, **kw: answer(task)
+    )
+
+
 def test_the_agent_walk_sends_only_what_a_ruling_could_answer(session, row, monkeypatch):
     """`can_rule_on` is only worth anything if the walk actually applies it, and
     applies it *before* `--limit`. Slicing first spends a budget for calls on
@@ -751,11 +764,11 @@ def test_the_agent_walk_sends_only_what_a_ruling_could_answer(session, row, monk
 
     asked: list[str] = []
 
-    def _never_called(session, project, *, question, extractor, min_confidence):
+    def _never_called(question):
         asked.append(question)
         raise AssertionError("this finding should not have reached a model")
 
-    monkeypatch.setattr("tracker.triage.triage", _never_called)
+    _agent_answers(monkeypatch, _never_called)
 
     findings = [
         Finding(
@@ -781,11 +794,11 @@ def test_the_agent_walk_applies_the_limit_after_the_filter(session, row, monkeyp
     project, _campus, _building = row
     seen: list[str] = []
 
-    def _record(session, project, *, question, extractor, min_confidence):
+    def _record(question):
         seen.append(question)
         return triage.Outcome(verdict="left", note="not settled by the evidence")
 
-    monkeypatch.setattr("tracker.triage.triage", _record)
+    _agent_answers(monkeypatch, _record)
 
     padding = [
         Finding(
@@ -832,11 +845,11 @@ def test_the_agent_is_told_which_obstacle_the_finding_is_about(session, row, mon
     project, _campus, _building = row
     seen: list[str] = []
 
-    def _record(session, project, *, question, extractor, min_confidence):
+    def _record(question):
         seen.append(question)
         return triage.Outcome(verdict="left", note="no")
 
-    monkeypatch.setattr("tracker.triage.triage", _record)
+    _agent_answers(monkeypatch, _record)
 
     cli_logic._triage_by_agent(
         session,
@@ -871,10 +884,10 @@ def test_a_finding_with_nothing_left_to_rule_out_never_reaches_a_model(session, 
             source.unconfirmed_reasons = json.dumps({"mw_planned": "misread"})
     session.flush()
 
-    def _never_called(session, project, *, question, extractor, min_confidence):
+    def _never_called(question):
         raise AssertionError("a finding with nothing left to rule out reached a model")
 
-    monkeypatch.setattr("tracker.triage.triage", _never_called)
+    _agent_answers(monkeypatch, _never_called)
     finding = Finding(
         project_id=project.id,
         code="built_exceeds_planned",
@@ -915,7 +928,7 @@ def test_a_ruling_that_leaves_the_value_as_it_was_is_not_counted_as_one(session,
             ),
         ]
     )
-    monkeypatch.setattr("tracker.triage.triage", lambda *a, **k: next(answers))
+    _agent_answers(monkeypatch, lambda question: next(answers))
     shown = io.StringIO()
     monkeypatch.setattr(cli_logic, "console", Console(file=shown, width=200))
 
@@ -934,3 +947,45 @@ def test_a_ruling_that_leaves_the_value_as_it_was_is_not_counted_as_one(session,
     text = shown.getvalue()
     assert "value unchanged: another citation still states it" in text
     assert "1 ruled, 1 struck a citation and left the value as it was, 0 left alone" in text
+
+
+@pytest.mark.parametrize(
+    ("outcome", "held_as"),
+    [
+        (
+            triage.Outcome(verdict="left", note="the articles disagree", ended="leave_alone"),
+            "left alone",
+        ),
+        (
+            triage.Outcome(verdict="left", note="out of turns", ended="exhausted"),
+            "ran out of steps",
+        ),
+        (triage.Outcome(verdict="error", note="HTTP 503"), "error"),
+    ],
+)
+def test_an_undecided_finding_is_held_back_not_written_into_the_row(
+    session, row, monkeypatch, outcome, held_as
+):
+    """Deliberate change. "Left alone" was written into the row's notes, which
+    `settled_codes` reads as settled — so a finding the agent could not settle stayed
+    hidden after the article that settles it arrived. An inability to decide is now
+    held in `model_decline`, against the evidence, like a duplicate pair's; a failed
+    run for the night only."""
+    from tracker.cli import logic as cli_logic
+    from tracker.logic import Finding
+    from tracker.models import ModelDecline
+
+    project, _campus, _building = row
+    _agent_answers(monkeypatch, lambda task: outcome)
+    finding = Finding(
+        project_id=project.id,
+        code="built_exceeds_planned",
+        severity="error",
+        summary="230 MW built against 19.2 MW planned",
+        fields=("mw_built", "mw_planned"),
+    )
+    cli_logic._triage_by_agent(session, [finding], extractor=None, limit=30)
+
+    assert "built_exceeds_planned" not in (session.get(Project, project.id).notes or "")
+    (held,) = session.query(ModelDecline).filter_by(kind="logic").all()
+    assert held.outcome == held_as

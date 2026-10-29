@@ -20,9 +20,14 @@ from tracker.cli._shared import (
     _explain_db_locks,
     _fail,
     _location,
+    _print_ceiling,
+    _print_held,
     _print_report_rows,
+    _print_tally,
     _read_engine,
     _use_llm,
+    _workers,
+    again_flag,
     console,
     emit,
     err,
@@ -421,7 +426,10 @@ def logic_resolve(
     limit: Annotated[int, typer.Option("--limit", help="Findings to offer.")] = 30,
     again: Annotated[
         bool,
-        typer.Option("--again", help="Re-offer findings already answered on their row."),
+        again_flag(
+            "Re-offer findings already answered on their row, or put to the agent on the "
+            "same evidence."
+        ),
     ] = False,
     llm_provider: Annotated[
         str | None,
@@ -673,6 +681,7 @@ def logic_resolve(
                 min_confidence=min_confidence,
                 limit=limit,
                 again=again,
+                workers=_workers("agent"),
             )
             return
 
@@ -695,24 +704,6 @@ def logic_resolve(
         _triage(session, findings[:limit], logic_mod)
 
 
-def _logic_subject(finding) -> str:
-    """A finding's key in `model_decline`."""
-    return f"{finding.project_id}:{finding.code}"
-
-
-def _logic_evidence(finding, project) -> str:
-    """Fingerprint of a finding as the agent is shown it: the question and the row."""
-    from tracker import declines
-
-    return declines.fingerprint(
-        finding.code,
-        finding.summary,
-        sorted(finding.fields or ()),
-        sorted(finding.subjects or ()),
-        declines.citations(project),
-    )
-
-
 def _triage_by_agent(
     session,
     findings: list,
@@ -721,6 +712,7 @@ def _triage_by_agent(
     min_confidence: float = 0.75,
     limit: int = 30,
     again: bool = False,
+    workers: int = 1,
 ) -> None:
     """Let a model read the sources and rule wrong claims out, one finding at a time.
 
@@ -729,7 +721,9 @@ def _triage_by_agent(
     "declined after reading nothing" is the difference between a considered answer
     and a broken tool, and only the trail distinguishes them.
 
-    Committed per finding, so a provider failure on row 40 keeps the first 39.
+    The runs go through `triage.triage_findings`, which commits each finding as it
+    lands, rolls back one that fails and goes on, holds back what was already put
+    to the agent on the same evidence, and stops at the spend ceiling.
 
     **Findings no ruling can answer never reach the model**, which is the same
     filter `_triage_by_model` applies below for the same reason and a different
@@ -741,7 +735,8 @@ def _triage_by_agent(
     they are worth.
     """
     from tracker import triage as triage_mod
-    from tracker.logic import record_decision
+    from tracker.audit import left_as_it_was
+    from tracker.judged import Tokens
     from tracker.models import Project
 
     unanswerable = [f for f in findings if not triage_mod.can_rule_on(f)]
@@ -774,185 +769,86 @@ def _triage_by_agent(
         console.print("[yellow]nothing here a ruling could answer[/yellow]")
         return
 
-    # A ruling the rails refused is recorded with a hash of what the agent was
-    # shown, and held back until that changes or the cooldown lapses. `left alone`
-    # has always been recorded (in the row's notes, below); `unusable` was not, and
-    # on the first overnight run it was 8 and then 12 of a round's 40 findings —
-    # re-paid every round at the full agent price.
-    from tracker import declines
-
-    def key(finding) -> tuple[str, str]:
-        row = session.get(Project, finding.project_id)
-        return _logic_subject(finding), (_logic_evidence(finding, row) if row else "")
-
-    findings, held = declines.split(findings, declines.load(session, "logic"), key, again=again)
-    if held:
-        console.print(
-            f"[dim]holding back {held} finding(s) whose last ruling was refused on the "
-            "same evidence; --again asks them.[/dim]\n"
-        )
-    if not findings:
-        console.print("[green]nothing here the agent has not already been asked[/green]")
-        return
-
-    over_budget = max(0, len(findings) - limit)
-    findings = findings[:limit]
-
-    from tracker.audit import left_as_it_was
-
     # `stood` is a ruling that struck the citation stating the row's value while
     # another citation states it too, so the value did not move: "construction ->
     # construction". Counted apart from the rulings, which it was not: on 2026-10-19
     # three of the night's nine "ruled" changed nothing a reader of the row could see.
-    ruled = stood = left = unusable = errored = 0
-    spent = 0
-    cache_hit = cache_miss = 0
+    tally = {"ruled": 0, "stood": 0, "left": 0, "unusable": 0, "errored": 0}
+    tokens = Tokens()
+    shown = {"index": 0, "total": 0}
 
-    for index, finding in enumerate(findings, start=1):
-        project = session.get(Project, finding.project_id)
-        if project is None:
-            continue
+    def started(run, chosen) -> None:
+        shown["total"] = len(chosen)
+        _print_held(run.held, "finding(s)", "already put to the agent", out=console)
+        if not chosen:
+            console.print("[green]nothing here the agent has not already been asked[/green]")
 
-        head = f"[dim]{index}/{len(findings)}[/dim] #{project.id} {escape(project.name[:32])}"
-        # Fingerprinted before the run: a ruling re-derives the row, and a decline
-        # has to describe what the agent was actually asked about.
-        shown = _logic_evidence(finding, project)
-        # `remedy` is included because it is where the codebase records what a
-        # reader should look at, and withholding it makes the model rediscover
-        # what a rule already knows. `subjects` names what the finding is *about*
-        # — the prompt was measurably blind without it.
-        #
-        # The attribute is plural, and this line read it in the singular. `getattr`
-        # with a default swallowed the miss, so the `About:` line was never emitted
-        # once: the model has never been told which obstacle or which milestone the
-        # contradiction is about, while the comment above claimed it had. That is
-        # the exact blindness `logic.Finding.subjects` was added to fix — a model
-        # handed a quote about something else declines, correctly, and looks
-        # stubborn.
-        subjects = ", ".join(finding.subjects or ())
-        question = "\n".join(
-            part
-            for part in (
-                f"Finding `{finding.code}`: {finding.summary}",
-                f"About: {subjects}" if subjects else "",
-                f"Where to look: {finding.remedy}" if finding.remedy else "",
-                f"Fields involved: {', '.join(finding.fields)}" if finding.fields else "",
-            )
-            if part
-        )
-
-        # One finding must never end the batch. `triage` already turns a provider
-        # failure into an outcome, but a database error raised while *applying* a
-        # ruling escapes — and on the first overnight run an IntegrityError on
-        # `phase` did exactly that, killing the logic phase of three rounds out of
-        # five after a single bad finding. The session is rolled back so the next
-        # finding starts from a clean transaction rather than a poisoned one.
-        try:
-            outcome = triage_mod.triage(
-                session,
-                project,
-                question=question,
-                extractor=extractor,
-                min_confidence=min_confidence,
-            )
-        except Exception as exc:
-            session.rollback()
-            errored += 1
-            console.print(f"{head}  [red]failed[/red] [dim]— {escape(str(exc)[:140])}[/dim]")
-            continue
-        spent += outcome.prompt_tokens + outcome.completion_tokens
-        cache_hit += outcome.cache_hit_tokens
-        cache_miss += outcome.cache_miss_tokens
-        trail = " → ".join(outcome.steps) or "nothing"
-
+    def announce(got) -> None:
+        shown["index"] += 1
+        outcome = got.outcome
+        tokens.add(outcome)
+        head = f"[dim]{shown['index']}/{shown['total']}[/dim] #{got.project_id} {escape(got.name[:32])}"
         if outcome.verdict == "ruled":
-            record_decision(
-                project,
-                finding.code,
-                "; ".join(outcome.changes),
-                by=f"agent ({outcome.confidence:.2f})",
-                detail=outcome.note,
-            )
-            session.commit()
             if all(left_as_it_was(change) for change in outcome.changes):
-                # Held back on this evidence, as the audit holds back its own: a
-                # ruling that changed nothing is asked again every round otherwise.
-                declines.record(
-                    session,
-                    "logic",
-                    _logic_subject(finding),
-                    shown,
-                    outcome="ruling changed nothing",
-                    reason="; ".join(outcome.changes),
-                )
-                session.commit()
-                stood += 1
+                tally["stood"] += 1
                 console.print(
                     f"{head}  [yellow]{escape(outcome.changes[0])}[/yellow]"
                     "[dim] — value unchanged: another citation still states it[/dim]"
                 )
             else:
-                ruled += 1
+                tally["ruled"] += 1
                 console.print(f"{head}  [green]{escape(outcome.changes[0])}[/green]")
             console.print(f"      [dim]{escape(outcome.note[:150])}[/dim]")
         elif outcome.verdict == "left":
-            # Recorded, so the next run does not pay to be told the same thing.
-            record_decision(project, finding.code, "left alone", by="agent", detail=outcome.note)
-            session.commit()
-            left += 1
+            tally["left"] += 1
             console.print(f"{head}  [dim]left alone[/dim]")
             console.print(f"      [dim]{escape(outcome.note[:200])}[/dim]")
         elif outcome.verdict == "unusable":
-            session.rollback()
-            declines.record(
-                session,
-                "logic",
-                _logic_subject(finding),
-                shown,
-                outcome="unusable",
-                reason=outcome.note,
-            )
-            session.commit()
-            unusable += 1
+            tally["unusable"] += 1
             console.print(f"{head}  [yellow]unusable[/yellow] [dim]— {escape(outcome.note)}[/dim]")
         else:
-            session.rollback()
-            errored += 1
+            tally["errored"] += 1
             console.print(f"{head}  [red]error[/red] [dim]— {escape(outcome.note[:120])}[/dim]")
-
+        trail = " → ".join(outcome.steps) or "nothing"
         console.print(f"      [dim]looked at: {escape(trail)}[/dim]")
 
-    console.print(
-        f"\n[bold]{ruled}[/bold] ruled"
-        + (
-            f", [yellow]{stood}[/yellow] struck a citation and left the value as it was"
-            if stood
-            else ""
-        )
-        + f", [bold]{left}[/bold] left alone"
-        + (f", [yellow]{unusable}[/yellow] unusable" if unusable else "")
-        + (f", [red]{errored}[/red] errored" if errored else "")
-        + (f", {over_budget} beyond --limit" if over_budget else "")
-        + f"  [dim]~{spent:,} tokens[/dim]"
+    got = triage_mod.triage_findings(
+        session,
+        findings,
+        extractor=extractor,
+        min_confidence=min_confidence,
+        limit=limit,
+        again=again,
+        workers=workers,
+        on_each=announce,
+        on_start=started,
     )
-    if stood:
+    if not got.results and not got.ceiling:
+        return
+    _print_ceiling(got)
+    _print_tally(
+        [
+            (tally["ruled"], "ruled", "bold"),
+            (tally["stood"], "struck a citation and left the value as it was", "yellow"),
+            (tally["left"], "left alone", "bold"),
+            (tally["unusable"], "unusable", "yellow"),
+            (tally["errored"], "errored", "red"),
+        ],
+        tokens,
+        beyond=got.beyond,
+        out=console,
+    )
+    if tally["stood"]:
         console.print(
             "  [dim]A citation struck while another states the same value leaves the row "
             "as it was, so those findings stay open and are asked again.[/dim]"
         )
-    if cache_hit or cache_miss:
-        # The number that decides what a night costs. DeepSeek bills a cached
-        # prompt token at a fraction of an uncached one, and an agent loop is the
-        # ideal shape for it: every turn re-sends the previous turn's history
-        # verbatim. A low rate here means the prefix is being disturbed.
-        rate = cache_hit / (cache_hit + cache_miss)
-        console.print(
-            f"  [dim]prompt cache: {rate:.0%} hit ({cache_hit:,} cached, {cache_miss:,} not)[/dim]"
-        )
     console.print(
         "\n[dim]A ruling supersedes a claim and re-derives the field, so it survives "
         "the next `backfill derive` — unlike the column assignments `--llm` makes. "
-        "Recorded as `agent`, never as `operator`: nobody has read these sources.[/dim]"
+        "Recorded as `agent`, never as `operator`: nobody has read these sources. A "
+        "finding left alone is not recorded on the row; it is asked again when its "
+        "citations change or a month passes.[/dim]"
     )
 
 
@@ -992,43 +888,19 @@ def _triage_by_model(session, findings: list, logic_mod, extractor, *, limit: in
         console.print("[yellow]nothing here a model could act on[/yellow]")
         return
 
-    over_budget = max(0, len(findings) - limit)
-    findings = findings[:limit]
+    from tracker import judged
 
     applied = 0
     declined = 0
     rejected: dict[str, int] = {}
-    for index, finding in enumerate(findings, start=1):
-        project = session.get(Project, finding.project_id)
-        if project is None:
-            continue
+    shown = {"index": 0, "total": min(len(findings), limit)}
 
-        decision = logic_mod.decide(project, finding, extractor=extractor)
-        head = f"[dim]{index}/{len(findings)}[/dim] #{project.id} {escape(project.name[:34])}"
-
+    def settle(finding, project, decision):
+        # Serial on purpose (one worker): `decide` reads the row while it asks, so
+        # the call cannot leave the main thread. This is the old fixed-menu path,
+        # kept for scripts pinned to `--llm`; the agent path is the one that overlaps.
         if not decision.acted:
-            # A decline is the model doing what it was told; a rejection is its
-            # answer being unusable. Counting them together would hide a broken
-            # prompt inside a pile of sensible caution.
-            if decision.outcome == "declined":
-                declined += 1
-                # On its own line and not truncated to 90 characters. A decline is
-                # now a substantive reading of the obstacle and the milestone —
-                # "the noise complaint was first seen after the permit was
-                # approved" is the answer, and clipping it mid-word threw away the
-                # most useful thing the run produced.
-                console.print(f"{head}  [dim]left alone[/dim]")
-                console.print(f"      [dim]{escape(decision.note[:220])}[/dim]")
-            else:
-                rejected[decision.note.split(":")[0]] = (
-                    rejected.get(decision.note.split(":")[0], 0) + 1
-                )
-                console.print(
-                    f"{head}  [yellow]unusable answer[/yellow] "
-                    f"[dim]— {escape(decision.note[:70])}[/dim]"
-                )
-            continue
-
+            return judged.Done((finding, project.id, project.name, decision, ""))
         action = next(a for a in logic_mod.ACTIONS[finding.code] if a.key == decision.key)
         changed = action.apply(session, project, finding)
         logic_mod.record_decision(
@@ -1038,10 +910,57 @@ def _triage_by_model(session, findings: list, logic_mod, extractor, *, limit: in
             by=f"model ({decision.confidence:.2f})",
             detail=decision.reason,
         )
-        session.commit()
-        applied += 1
-        console.print(f"{head}  [green]{escape(changed)}[/green]")
-        console.print(f"      [dim]{escape(decision.reason[:110])}[/dim]")
+        return judged.Done((finding, project.id, project.name, decision, changed))
+
+    def announce(got) -> None:
+        nonlocal applied, declined
+        _finding, project_id, name, decision, changed = got
+        shown["index"] += 1
+        head = f"[dim]{shown['index']}/{shown['total']}[/dim] #{project_id} {escape(name[:34])}"
+        if changed:
+            applied += 1
+            console.print(f"{head}  [green]{escape(changed)}[/green]")
+            console.print(f"      [dim]{escape(decision.reason[:110])}[/dim]")
+        elif decision.outcome == "declined":
+            # A decline is the model doing what it was told; a rejection is its
+            # answer being unusable. Counting them together would hide a broken
+            # prompt inside a pile of sensible caution. On its own line and not
+            # truncated to 90 characters: a decline is a substantive reading — "the
+            # noise complaint was first seen after the permit was approved" is the
+            # answer, and clipping it mid-word threw away the most useful line.
+            declined += 1
+            console.print(f"{head}  [dim]left alone[/dim]")
+            console.print(f"      [dim]{escape(decision.note[:220])}[/dim]")
+        else:
+            reason = decision.note.split(":")[0]
+            rejected[reason] = rejected.get(reason, 0) + 1
+            console.print(
+                f"{head}  [yellow]unusable answer[/yellow] [dim]— {escape(decision.note[:70])}[/dim]"
+            )
+
+    def project_of(finding):
+        project = session.get(Project, finding.project_id)
+        return (project, finding) if project is not None else judged.Done(result=None)
+
+    got = judged.run(
+        session,
+        findings,
+        kind=None,
+        subject=lambda f: f"{f.project_id}:{f.code}",
+        fingerprint=str,
+        projects=lambda f: [f.project_id],
+        prepare=project_of,
+        ask=lambda pair, _db: logic_mod.decide(pair[0], pair[1], extractor=extractor),
+        apply=lambda finding, pair, decision: settle(finding, pair[0], decision),
+        failed=lambda finding, error: console.print(
+            f"#{finding.project_id}  [red]failed[/red] [dim]— {escape(str(error)[:140])}[/dim]"
+        ),
+        limit=limit,
+        on_each=announce,
+        label="logic-llm",
+    )
+    over_budget = got.beyond
+    _print_ceiling(got)
 
     from tracker.upsert import recompute_confidence
 
