@@ -16,16 +16,19 @@ from tracker.cli._shared import (
     _db_path,
     _explain_db_locks,
     _fail,
+    _model,
+    _print_ceiling,
     _print_report_rows,
     _read_engine,
     _use_llm,
+    _workers,
     _writable,
+    again_flag,
     console,
     emit,
     json_mode,
     tranches_app,
 )
-from tracker.config import get_settings
 from tracker.db import session_scope
 
 #: How a link reads in a terminal.
@@ -201,8 +204,7 @@ def review(
         bool, typer.Option("--dry-run", help="Review at full cost and write nothing.")
     ] = False,
     again: Annotated[
-        bool,
-        typer.Option("--again", help="Also review campuses already reviewed on the same tranches."),
+        bool, again_flag("Also review campuses already reviewed on the same tranches.")
     ] = False,
     llm_provider: Annotated[
         str | None,
@@ -227,15 +229,10 @@ def review(
     """
     _use_llm(llm_provider)
     from tracker import nesting
-    from tracker.llm import LLMUnavailable, judgement_extractor
 
     if not _db_path().is_file():
         _fail(f"database not found: {_db_path()}\nRun `tracker init` first.")
-    try:
-        extractor = judgement_extractor(get_settings())
-    except LLMUnavailable as exc:
-        _fail(str(exc))
-        raise
+    extractor = _model("judgement")
 
     engine = _read_engine() if dry_run else _writable("tranches review")
 
@@ -253,30 +250,46 @@ def review(
         if outcome.note:
             console.print(f"      [dim]{escape(outcome.note[:160])}[/dim]")
 
+    def started(run, chosen) -> None:
+        if chosen and not json_mode():
+            console.print(
+                f"[bold]{len(chosen)}[/bold] of {len(open_)} campus(es) whose tranches do not "
+                "add up, worst first — one model call each."
+                + (
+                    f" [dim]{run.held} already reviewed on the same tranches.[/dim]"
+                    if run.held
+                    else ""
+                )
+                + "\n"
+            )
+
     with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
         open_ = nesting.candidates(session, project_id=project_id)
         if not open_:
             console.print("[green]every campus's tranches add up[/green]")
             return
-        unread, held = nesting.fresh(session, open_, again=again)
-        chosen = unread[:limit]
-        if not chosen:
+        # Each campus's rulings are committed as they are written; held-back campuses
+        # are skipped before the limit.
+        got = nesting.review_all(
+            session,
+            open_,
+            extractor=extractor,
+            limit=limit,
+            again=again,
+            write=not dry_run,
+            workers=_workers("judgement"),
+            on_each=announce,
+            on_start=started,
+        )
+        outcomes = got.results
+        if not outcomes and not got.ceiling:
             console.print(
                 f"[green]nothing new to review[/green] [dim]— all {len(open_)} open campus(es) "
                 "were reviewed on the tranches they hold now; --again reviews them.[/dim]"
             )
             return
-        if not json_mode():
-            console.print(
-                f"[bold]{len(chosen)}[/bold] of {len(open_)} campus(es) whose tranches do not "
-                "add up, worst first — one model call each."
-                + (f" [dim]{held} already reviewed on the same tranches.[/dim]" if held else "")
-                + "\n"
-            )
-        outcomes = nesting.run(
-            session, chosen, extractor=extractor, write=not dry_run, on_each=announce
-        )
 
+    _print_ceiling(got)
     if json_mode():
         emit({"outcomes": [o.as_json() for o in outcomes], "open": len(open_)})
         return

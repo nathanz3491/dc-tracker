@@ -358,31 +358,59 @@ def parse(project: Any, payload: dict[str, Any]) -> Review:
 
 def review(project: Any, *, extractor, prompt_name: str = "nest-v1") -> Review:
     """Ask the model how this campus's tranches relate. One call."""
+    reply = ask(question(project, prompt_name=prompt_name), extractor=extractor)
+    if reply.failure:
+        return Review(project.id, failure=reply.failure)
+    return parse(project, reply.payload)
+
+
+@dataclass(frozen=True)
+class Question:
+    """One campus's question as plain values, so it can be asked off the main thread."""
+
+    project_id: int
+    user: str
+    prompt_name: str = "nest-v1"
+
+
+@dataclass(frozen=True)
+class Reply:
+    """What came back: the parsed payload, or why there is none."""
+
+    payload: dict[str, Any] = field(default_factory=dict)
+    failure: str = ""
+
+
+def question(project: Any, *, prompt_name: str = "nest-v1") -> Question:
+    """Everything the call needs, built on the main thread from the campus as it is now."""
+    from tracker.prompts import load_prompt
+
+    user = load_prompt(prompt_name).render_user(**build_context(project))
+    return Question(project.id, user, prompt_name)
+
+
+def ask(found: Question, *, extractor) -> Reply:
+    """The one model call. Touches no database: everything it needs is in `found`."""
     from tracker.llm import LLMError, LLMJsonError, parse_json_object
     from tracker.prompts import load_prompt
 
-    prompt = load_prompt(prompt_name)
     try:
         reply = extractor.complete(
-            system=prompt.system,
-            user=prompt.render_user(**build_context(project)),
-            max_tokens=MAX_TOKENS,
+            system=load_prompt(found.prompt_name).system, user=found.user, max_tokens=MAX_TOKENS
         )
     except LLMError as exc:
-        log.warning("tranche review failed for project %s: %s", project.id, exc)
-        return Review(project.id, failure=f"call failed: {str(exc)[:160]}")
+        log.warning("tranche review failed for project %s: %s", found.project_id, exc)
+        return Reply(failure=f"call failed: {str(exc)[:160]}")
     try:
-        payload = parse_json_object(reply.text)
+        return Reply(payload=parse_json_object(reply.text))
     except (LLMJsonError, ValueError):
         from tracker.logic import _ran_out_of_room
 
         if _ran_out_of_room(reply):
-            return Review(
-                project.id,
-                failure=f"the reply ran out of room before its answer ({MAX_TOKENS:,} tokens)",
+            return Reply(
+                failure=f"the reply ran out of room before its answer ({MAX_TOKENS:,} tokens)"
             )
-        return Review(project.id, failure="unusable reply")
-    return parse(project, payload)
+        return Reply(failure="unusable reply")
 
 
 # --- writing it down -----------------------------------------------------------
@@ -464,6 +492,94 @@ class Outcome:
         }
 
 
+def review_all(
+    session: Session,
+    pairs: list[tuple[Project, Stake]],
+    *,
+    extractor,
+    limit: int | None = None,
+    again: bool = False,
+    write: bool = True,
+    workers: int = 1,
+    on_each=None,
+    on_start=None,
+):
+    """Review each campus and record what it rules, through `judged.run`. Returns its `Run`.
+
+    One model call per campus, up to `limit`, after holding back those already
+    reviewed on the same tranches. Each campus's rulings are committed as they are
+    written, so a run stopped part way keeps them; one campus that fails is rolled
+    back and the rest go on. A failed call is held for the night (`declines.ERROR`);
+    a campus still open after its rulings is held until its tranches change; one
+    that now adds up has its decline dropped.
+
+    `write=False` applies each answer inside a savepoint, measures it, and rolls it
+    back — the same code decides either way, so a preview cannot report an outcome
+    the real run would not produce.
+    """
+    from tracker import declines, judged
+
+    def prepare(pair: tuple[Project, Stake]) -> Question:
+        return question(pair[0])
+
+    def settle(pair: tuple[Project, Stake], _q: Question, reply: Reply) -> judged.Done:
+        project, before = pair
+        outcome = Outcome(project.id, f"{project.company} — {project.name}", before, before)
+        if reply.failure:
+            outcome.result, outcome.note = "error", reply.failure
+            return judged.Done(outcome, decline=declines.ERROR, reason=reply.failure)
+        found = parse(project, reply.payload)
+        savepoint = None if write else session.begin_nested()
+        outcome.written = apply(session, project, found)
+        session.expire(project, ["nesting"])
+        outcome.after = stake(project)
+        outcome.refused = list(found.refused)
+        if outcome.after.settled:
+            outcome.result = "settled"
+        elif outcome.after.total < before.total - _SETTLED_MW:
+            outcome.result = "improved"
+        if savepoint is not None:
+            savepoint.rollback()
+            session.expire(project, ["nesting"])
+            return judged.Done(outcome)
+        if outcome.after.settled:
+            return judged.Done(outcome, forget=True)
+        # Judged on these tranches and still open: not asked again until a
+        # re-read changes them, or the cooldown lapses.
+        return judged.Done(
+            outcome,
+            decline=outcome.result,
+            reason=f"{outcome.after.total:,.0f} MW still open after {outcome.written} ruling(s)",
+        )
+
+    def failed(pair: tuple[Project, Stake], error: BaseException) -> Outcome:
+        project, before = pair
+        outcome = Outcome(project.id, f"{project.company} — {project.name}", before, before)
+        outcome.result, outcome.note = "error", str(error)[:160]
+        return outcome
+
+    return judged.run(
+        session,
+        pairs,
+        kind=KIND,
+        subject=lambda pair: str(pair[0].id),
+        fingerprint=lambda pair: evidence(pair[0]),
+        projects=lambda pair: [pair[0].id],
+        prepare=prepare,
+        ask=lambda found, _db: ask(found, extractor=extractor),
+        apply=settle,
+        failed=failed,
+        limit=limit,
+        again=again,
+        workers=workers,
+        commit=write,
+        by=MODEL,
+        on_each=on_each,
+        on_start=on_start,
+        label="nest",
+    )
+
+
 def run(
     session: Session,
     pairs: list[tuple[Project, Stake]],
@@ -472,62 +588,10 @@ def run(
     write: bool = True,
     on_each=None,
 ) -> list[Outcome]:
-    """Review each campus and record what it rules. One model call per campus.
-
-    `write=False` applies each answer inside a savepoint, measures it, and rolls it
-    back — the same code decides either way, so a preview cannot report an outcome
-    the real run would not produce.
-    """
-    from tracker import declines
-
-    out: list[Outcome] = []
-    for project, before in pairs:
-        shown = evidence(project)
-        found = review(project, extractor=extractor)
-        outcome = Outcome(project.id, f"{project.company} — {project.name}", before, before)
-        if found.failure:
-            outcome.result, outcome.note = "error", found.failure
-            if write:
-                declines.record(
-                    session,
-                    KIND,
-                    str(project.id),
-                    shown,
-                    outcome=declines.ERROR,
-                    reason=found.failure,
-                    by=MODEL,
-                )
-        else:
-            savepoint = None if write else session.begin_nested()
-            outcome.written = apply(session, project, found)
-            session.expire(project, ["nesting"])
-            outcome.after = stake(project)
-            outcome.refused = list(found.refused)
-            if outcome.after.settled:
-                outcome.result = "settled"
-            elif outcome.after.total < before.total - _SETTLED_MW:
-                outcome.result = "improved"
-            if savepoint is not None:
-                savepoint.rollback()
-                session.expire(project, ["nesting"])
-            elif outcome.after.settled:
-                declines.forget(session, KIND, str(project.id))
-            else:
-                # Judged on these tranches and still open: not asked again until a
-                # re-read changes them, or the cooldown lapses.
-                declines.record(
-                    session,
-                    KIND,
-                    str(project.id),
-                    shown,
-                    outcome=outcome.result,
-                    reason=f"{outcome.after.total:,.0f} MW still open after {outcome.written} ruling(s)",
-                    by=MODEL,
-                )
-        if on_each is not None:
-            on_each(outcome)
-        out.append(outcome)
-    return out
+    """Review exactly these campuses, none held back: `review_all` without the selection."""
+    return review_all(
+        session, pairs, extractor=extractor, again=True, write=write, on_each=on_each
+    ).results
 
 
 # --- a person's hand -----------------------------------------------------------
@@ -619,10 +683,13 @@ __all__ = [
     "MODEL",
     "Outcome",
     "Proposal",
+    "Question",
+    "Reply",
     "Review",
     "RulingError",
     "Stake",
     "apply",
+    "ask",
     "build_context",
     "candidates",
     "evidence",
@@ -632,7 +699,9 @@ __all__ = [
     "parse",
     "person_ruled",
     "project_with_rulings",
+    "question",
     "review",
+    "review_all",
     "rule",
     "run",
     "stake",
