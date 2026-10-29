@@ -54,7 +54,7 @@ from sqlalchemy.orm import Session
 
 from tracker import delays
 from tracker.dedup import looks_like_county
-from tracker.models import Project, utcnow
+from tracker.models import Project, preload_options, utcnow
 from tracker.normalize import is_blank
 from tracker.tracks import IMPLIED_BY, RISK_TRACK, TRACK_MILESTONES, standing
 from tracker.vocab import (
@@ -2293,7 +2293,9 @@ def resolve_drift(session: Session, *, apply: bool = False) -> list[Repair]:
     from tracker.upsert import recompute_from_sources
 
     repairs: list[Repair] = []
-    for project in session.scalars(select(Project)).all():
+    # Collections up front, as `review` loads them: a repair re-derives only its own
+    # row, so no row's collections change before they would have been lazy-loaded.
+    for project in session.scalars(select(Project).options(*preload_options())).all():
         drifted = [c for c in check_collisions(project) if c.stored_disagrees]
         if not drifted:
             continue
@@ -2375,7 +2377,9 @@ def review(
         on_examine: called with each project before its contradiction read.
         on_audit: called with each project before its evidence audit.
     """
-    query = select(Project)
+    # Every collection with the rows, one query each rather than four per row; the
+    # checks read the same rows either way (`models.preload_options`).
+    query = select(Project).options(*preload_options())
     if only is not None:
         query = query.where(Project.id == only)
     projects = session.scalars(query).all()

@@ -469,6 +469,9 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
             continue
         unconfirmed = {f.strip() for f in (s.unconfirmed_fields or "").split(",") if f.strip()}
         decided = _decided_against(s)
+        # Parsed once per source rather than once per claim and axis: it was 770,000
+        # `json.loads` of the same few hundred envelopes per nightly count.
+        meta = _claim_meta(s)
         for name, value in claims.items():
             if name not in WRITABLE_FIELDS or value is None:
                 continue
@@ -484,12 +487,13 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     decided_against=name in decided,
                     tertiary=tertiary,
                     part=name in parts,
-                    floor=name in _CAPACITY_FIELDS
-                    and _recorded_axis(s, name, "bound") == "at_least",
+                    floor=name in _CAPACITY_FIELDS and _axis_in(meta, name, "bound") == "at_least",
                     precision=(
-                        _recorded_precision(s, name) if name in _DATE_PRECISION_FIELDS else None
+                        _axis_in(meta, name, "date_precision")
+                        if name in _DATE_PRECISION_FIELDS
+                        else None
                     ),
-                    as_of=_recorded_axis(s, name, "as_of"),
+                    as_of=_axis_in(meta, name, "as_of"),
                 )
             )
     return rank_claims(out, settings=settings)
@@ -2610,13 +2614,23 @@ def _recorded_axis(source: Source | None, field: str, axis: str) -> str | None:
     place for the "malformed envelope is not a reason to fail a read" rule to be
     forgotten.
     """
+    return _axis_in(_claim_meta(source), field, axis)
+
+
+def _claim_meta(source: Source | None) -> dict | None:
+    """A source's parsed `claim_meta`, or None when it has none or it is malformed."""
     if source is None or not getattr(source, "claim_meta", None):
         return None
     try:
         meta = json.loads(source.claim_meta)
     except (TypeError, ValueError):
         return None
-    if not isinstance(meta, dict):
+    return meta if isinstance(meta, dict) else None
+
+
+def _axis_in(meta: dict | None, field: str, axis: str) -> str | None:
+    """`_recorded_axis` on an envelope already parsed by `_claim_meta`."""
+    if meta is None:
         return None
     entry = meta.get(field)
     if not isinstance(entry, dict):

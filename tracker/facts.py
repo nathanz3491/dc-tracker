@@ -435,7 +435,16 @@ def _milestones_and_obstacles(session: Session, project: Project) -> tuple[list,
 
 def rebuild(session: Session, project: Project) -> int:
     """Replace one campus's statements with what its sources say now. Returns rows."""
-    session.execute(delete(Fact).where(Fact.project_id == project.id))
+    # `fetch`, not the default `evaluate`: both drop the deleted statements from the
+    # session, but `evaluate` finds them by testing every object the session holds
+    # against the WHERE clause in Python — 17,000 objects per campus during a
+    # whole-table `backfill derive`, which was 11 of its 29 seconds. `fetch` asks
+    # the database which ids it deleted and looks those up. The session is flushed
+    # before either runs, so the two cannot disagree about which rows match.
+    session.execute(
+        delete(Fact).where(Fact.project_id == project.id),
+        execution_options={"synchronize_session": "fetch"},
+    )
     events, risks = _milestones_and_obstacles(session, project)
     rows = statements(project, events=events, risks=risks)
     if rows:

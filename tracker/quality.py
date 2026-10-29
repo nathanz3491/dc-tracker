@@ -54,7 +54,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.gaps import DEFAULTED, DERIVED, INFERRED, UNCONFIRMED, provenance
-from tracker.models import IngestUrl, Project, Source
+from tracker.models import IngestUrl, Project, Source, preload_options
 
 #: Fields the census covers: `confidence.KEY_FIELDS` plus the two dates.
 #:
@@ -146,12 +146,21 @@ def value_bases(session: Session, *, project_ids: list[int] | None = None) -> It
     query = select(Project)
     if project_ids:
         query = query.where(Project.id.in_(project_ids))
+    from tracker.upsert import claims_by_field
+
     for project in session.scalars(query).all():
         by_url = {s.url: s for s in (project.sources or ())}
+        # The claim map once per row, not once per field. `provenance` computes the
+        # same map from the same `project.sources` when it is not handed one, so
+        # this changes nothing but the cost: it was 8,562 re-parses of every source's
+        # JSON per sweep, about 16 of the 22 seconds the nightly counts took.
+        by_field = None
         for name in MEASURED_FIELDS:
             if getattr(project, name, None) is None:
                 continue
-            prov = provenance(project, name)
+            if by_field is None:
+                by_field = claims_by_field(list(project.sources or ()))
+            prov = provenance(project, name, by_field)
             source = by_url.get(prov.source_url) if prov and prov.source_url else None
             yield ValueBasis(
                 project_id=project.id,
@@ -431,6 +440,69 @@ def axis_census(session: Session, *, axes: tuple[str, ...] = ()) -> dict[str, Ax
     }
 
 
+@dataclass(frozen=True)
+class NightCounts:
+    """The nightly loop's yardstick: the three numbers a round has to lower.
+
+    findings: free logic findings not yet answered on their row.
+    groups: suspected-duplicate GROUPS on more than a name match — groups, because
+        nine rows for one campus are 36 pairs and one group, and a loop counting
+        pairs would read a single merge as huge progress.
+    below_t2: rows below tier 2, which is what the enrich phase moves and neither
+        other number can see.
+    """
+
+    findings: int
+    groups: int
+    below_t2: int
+
+    def __iter__(self) -> Iterator[int]:
+        return iter((self.findings, self.groups, self.below_t2))
+
+    def line(self) -> str:
+        """`findings groups below_t2`, the shape `scripts/overnight.sh` reads."""
+        return f"{self.findings} {self.groups} {self.below_t2}"
+
+
+def night_counts(session: Session) -> NightCounts:
+    """The three numbers the nightly loop measures every round by. Read-only, free.
+
+    Definitions, which the loop's progress test depends on and which must not drift:
+
+    * findings — `logic.review(session).findings` whose code is not in
+      `audit.settled_codes(row)` for its project;
+    * groups — `len(capex.duplicate_groups(pairs))` over the
+      `capex.suspected_duplicates(session)` pairs with evidence beyond the name;
+    * below_t2 — cards in `clean.scan(session)` with `tier < 2`.
+
+    One process and one load of the rows for all three. They used to be three
+    separate sweeps in a shell heredoc, each loading every row and lazy-loading its
+    collections again, and computing the duplicate pairs twice (once here and once
+    inside the scan). The rows are loaded once with every collection and held until
+    the last number is taken; the pairs are computed once and handed to the scan.
+    """
+    from tracker import audit, capex, clean, logic
+
+    # Held, not just loaded: the session keeps rows weakly, so without this list
+    # each sweep below would load them all again.
+    held = session.scalars(select(Project).options(*preload_options())).all()
+
+    settled: dict[int, set[str]] = {}
+    findings = 0
+    for finding in logic.review(session).findings:
+        if finding.project_id not in settled:
+            row = session.get(Project, finding.project_id)
+            settled[finding.project_id] = audit.settled_codes(row) if row else set()
+        if finding.code not in settled[finding.project_id]:
+            findings += 1
+
+    pairs = capex.suspected_duplicates(session)
+    groups = len(capex.duplicate_groups([p for p in pairs if set(p.kinds) - {"name"}]))
+    below = sum(1 for c in clean.scan(session, suspected=pairs).cards if c.tier < 2)
+    del held
+    return NightCounts(findings=findings, groups=groups, below_t2=below)
+
+
 __all__ = [
     "BUCKETS",
     "DEFAULTED_VALUE",
@@ -444,9 +516,11 @@ __all__ = [
     "AxisStats",
     "Census",
     "Inversion",
+    "NightCounts",
     "ValueBasis",
     "axis_census",
     "evidence_census",
+    "night_counts",
     "recency_inversions",
     "silent_defects",
     "value_bases",
