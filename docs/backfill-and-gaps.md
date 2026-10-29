@@ -104,7 +104,7 @@ search problem, and what it deliberately refuses to guess.
 tracker discover --since-days 45
 tracker queue
 tracker ingest crawl --check
-tracker ingest crawl --from-queue --limit 10
+tracker ingest queue --limit 10
 ```
 
 `discover` polls the feeds in [tracker/seed/feeds.toml](../tracker/seed/feeds.toml), keyword-filters

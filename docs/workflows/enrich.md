@@ -350,7 +350,7 @@ Both invisible from the outside, and both shaped the current call:
 
 * `cache_dir` was once absent from this call site alone, and a 36-hour `--all` run
   read ~3,000 articles while caching none. Three later steps read that cache rather
-  than the network: `ingest crawl --stale-prompt`, `backfill blocks`, and
+  than the network: `ingest reread`, `backfill blocks`, and
   `riskcheck.article_for`.
 * The archive sweep once ran before anything asked whether it was needed, so
   `enrich 10` on a finished row fetched every configured sitemap and then declined

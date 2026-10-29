@@ -335,7 +335,7 @@ class IngestReport:
 
         `new projects refused` appears only when there are some. Every other line
         is worth showing at zero — "0 fetch errors" is a result — but only
-        `ingest crawl` has `--existing-only`, so on the other paths it is a row
+        `ingest reread` and `recheck` have `--existing-only`, so on other paths it is a row
         that can never be anything but zero, widening every report to say nothing.
         """
         refused = [("new projects refused", self.refused_new)] if self.refused_new else []

@@ -17,7 +17,7 @@ Three ingest paths converge on one normalizer and one write path:
 |---|---|---|
 | Hand-curated JSON | `tracker ingest manual --json sample-projects.json` | Projects you know about that no feed carries |
 | ISO queue export | `tracker ingest pjm --csv FILE --iso pjm` | Candidate generation and corroborating citations — **not** a project feed ([why](docs/design-decisions.md)) |
-| News extraction | `tracker ingest crawl --urls urls.txt` | The 12 tracked fields, pulled from articles by an LLM and gated on quoted evidence |
+| News extraction | `tracker ingest crawl --urls urls.txt`; `ingest queue` for what `discover` queued; `ingest reread`/`recheck` to re-read | The 12 tracked fields, pulled from articles by an LLM and gated on quoted evidence |
 | SEC filings | `tracker ingest edgar` | Investment, in-service dates and named tenants, from the one publisher that cannot refuse us |
 
 Articles to extract from come from `tracker discover`, which polls news feeds and
@@ -145,7 +145,7 @@ Then the real loop, which needs one API key — or a local Ollama model instead,
 tracker tui           # all of the below, on screen, in six panes
 tracker discover      # poll news feeds, queue candidates
 tracker news          # search the news for every campus and builder that is due (`news report`: how it came in)
-tracker ingest crawl  # extract the tracked fields, gated on quoted evidence
+tracker ingest queue  # read what was queued: the tracked fields, gated on quoted evidence
 tracker gaps          # see what is thin
 tracker coverage      # which operators we hold no rows for at all
 tracker users add you@example.com   # who may read the console (and `users admin`, `edit`, `disable`…)
@@ -231,7 +231,7 @@ and 120 articles), largest first: without a date a campus is missing from the
 supply chart and can never be flagged as late.
 The first round also reads the news and adds campuses (`--discover`, default 900): it
 polls the feeds, which costs nothing, and reads that many queued articles through
-the crawl's identity check (`ingest crawl --from-queue --new-first`). A model reads
+the crawl's identity check (`ingest queue --new-first`). A model reads
 their headlines first and sets aside the pages about a place abroad (`--no-screen` to
 skip it): measured on past reads, the one kind that loses next to no campus. Pages on a
 publisher that has refused every read lately — its last four pages tried, on two days or
