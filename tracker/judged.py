@@ -236,6 +236,10 @@ def run(
         chosen = fresh[:limit] if limit is not None else fresh
         out.beyond = len(fresh) - len(chosen)
 
+    if commit:
+        # Whatever the caller wrote before the pass is its own, and a failing item's
+        # rollback below must not take it along.
+        session.commit()
     if on_start is not None:
         on_start(out, chosen)
 

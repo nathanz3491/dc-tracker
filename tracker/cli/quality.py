@@ -1046,9 +1046,8 @@ def audit_resolve(
     ] = None,
     again: Annotated[
         bool,
-        typer.Option(
-            "--again",
-            help="Re-ask findings already settled, or declined by the model on the same evidence.",
+        again_flag(
+            "Re-ask findings already settled, or declined by the model on the same evidence."
         ),
     ] = False,
     limit: Annotated[int, typer.Option("--limit", help="Findings to work through.")] = 20,
@@ -1100,20 +1099,12 @@ def audit_resolve(
         _fail(f"database not found: {path}\nRun `tracker init` first.")
 
     settings = get_settings()
-    extractor = None
-    if llm:
-        from tracker.llm import LLMUnavailable, judgement_extractor
-
-        try:
-            extractor = judgement_extractor(settings)
-        except LLMUnavailable as exc:
-            _fail(str(exc))
+    extractor = _model("judgement") if llm else None
 
     interactive = ask and _sys.stdin.isatty() and not json_mode()
 
     engine = _writable("audit resolve")
 
-    resolutions: list = []
     with _explain_db_locks(), session_scope(engine) as session:
         findings = audit_mod.run(session, project_ids=list(project_ids) if project_ids else None)
         if code:
@@ -1130,25 +1121,62 @@ def audit_resolve(
                 continue
             pending.append((project, finding))
 
+        # The rule over "N of M" for each finding, printed once: before the prompt
+        # when a person is asked, or with the answer when nobody is.
+        headed: set[str] = set()
+        counted = {"total": 0}
+
+        def head(finding) -> None:
+            key = audit_mod.decline_subject(finding)
+            if json_mode() or key in headed:
+                return
+            headed.add(key)
+            console.rule(
+                f"[dim]{len(headed)} of {counted['total']}[/dim]  "
+                f"#{finding.project_id} {escape(finding.name[:40])}",
+                align="left",
+            )
+
+        def started(run, chosen) -> None:
+            counted["total"] = len(chosen)
+            if chosen and not json_mode():
+                before = settled_before + run.held
+                console.print(
+                    f"[bold]{len(chosen) + run.beyond}[/bold] finding(s) to settle"
+                    + (f" [dim]({before} already answered or declined)[/dim]" if before else "")
+                    + "\n"
+                )
+
+        def asker(project, finding, options):
+            head(finding)
+            return _audit_ask(project, finding, options)
+
+        def announce(got) -> None:
+            if not json_mode():
+                head(got.finding)
+                _print_resolution(got)
+
         # A finding the model already declined on this exact evidence block is held
         # back, before the limit, so the limit buys questions nobody has asked yet.
-        # Declines used to be recorded nowhere, and each one cost a call — and, for
-        # a figure the model wanted more on, a search, four fetches and a second
-        # call — on every round.
-        from tracker import declines
-
-        pending, declined_before = declines.split(
+        # Each resolution is committed as it is written; one that fails is rolled
+        # back, held for the night, and the rest go on.
+        got = audit_mod.resolve_all(
+            session,
             pending,
-            declines.load(session, "audit"),
-            key=lambda pf: (
-                audit_mod.decline_subject(pf[1]),
-                audit_mod.decline_evidence(pf[0], pf[1]),
-            ),
+            extractor=extractor,
+            ask=asker if interactive else None,
+            allow_search=search,
+            settings=settings,
+            limit=limit,
             again=again,
+            workers=_workers("judgement"),
+            on_each=announce,
+            on_start=started,
         )
-        settled_before += declined_before
+        resolutions = got.results
+        settled_before += got.held
 
-        if not pending:
+        if not resolutions and not got.ceiling:
             if json_mode():
                 emit({"resolved": [], "settled_before": settled_before})
                 return
@@ -1161,56 +1189,12 @@ def audit_resolve(
                 console.print("[green]nothing implausible[/green]")
             return
 
-        if not json_mode():
-            console.print(
-                f"[bold]{len(pending)}[/bold] finding(s) to settle"
-                + (
-                    f" [dim]({settled_before} already answered or declined)[/dim]"
-                    if settled_before
-                    else ""
-                )
-                + "\n"
-            )
-
-        asker = _audit_ask if interactive else None
-        for index, (project, finding) in enumerate(pending[:limit], start=1):
-            if not json_mode():
-                console.rule(
-                    f"[dim]{index} of {min(len(pending), limit)}[/dim]  "
-                    f"#{project.id} {escape(project.name[:40])}",
-                    align="left",
-                )
-            shown = audit_mod.decline_evidence(project, finding)
-            got = audit_mod.resolve_one(
-                session,
-                project,
-                finding,
-                extractor=extractor,
-                ask=asker,
-                allow_search=search,
-                settings=settings,
-            )
-            held = _held_back_as(got)
-            if held:
-                declines.record(
-                    session,
-                    "audit",
-                    audit_mod.decline_subject(finding),
-                    shown,
-                    outcome=held,
-                    reason=got.note if got.declined else got.changed,
-                    by="model",
-                )
-            resolutions.append(got)
-            session.commit()
-            if not json_mode():
-                _print_resolution(got)
-
         from tracker.upsert import recompute_confidence
 
         rescored = recompute_confidence(session)
         session.commit()
 
+    _print_ceiling(got)
     if json_mode():
         emit(
             {
@@ -1261,34 +1245,10 @@ _STAGE_STYLE: dict[str, str] = {
 
 
 def _stood(got) -> bool:
-    """A resolution that struck a citation and left the value where it was.
+    """See `audit.stood`."""
+    from tracker.audit import stood
 
-    `investment_usd 1,200,000,000 -> 1,200,000,000`: another citation states the same
-    figure, so the re-derivation put it back. Not a dismissal — that is a judgement the
-    figure is right, recorded as one — and not a settlement either: `settled_codes`
-    leaves the finding open, so it is not counted as one here.
-    """
-    from tracker.audit import DISMISS, left_as_it_was
-
-    return got.acted and got.key != DISMISS.key and left_as_it_was(got.changed)
-
-
-def _held_back_as(got) -> str | None:
-    """The outcome a resolution is remembered under in `model_decline`, if any.
-
-    A decline, and a ruling that left the value where it was. The second leaves the
-    finding open (`_stood`), and on the same evidence the next round asked the same
-    question and got the same answer: QTS Richmond 5 (#1193) was ruled six times on
-    2026-10-21, "mw_planned 1434 -> 1434 (nothing left to rule against)" each time,
-    because the figure came from tranches, which no citation ruling reaches. It is
-    held against the evidence it was shown, so a ruling that did strike a claim has
-    changed that evidence and the question opens again on the next night.
-    """
-    if got.declined:
-        return "declined after search" if got.searched else "declined"
-    if _stood(got):
-        return "ruling changed nothing"
-    return None
+    return stood(got)
 
 
 def _print_resolution(got) -> None:

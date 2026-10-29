@@ -662,7 +662,7 @@ def test_a_ruling_that_changed_nothing_is_held_back_like_a_decline():
     1434 (nothing left to rule against)" every round: the figure came from tranches,
     which no citation ruling reaches, so each ruling left the finding open and the
     next round paid for the same answer. It is remembered now, on the evidence shown."""
-    from tracker.cli.quality import _held_back_as
+    _held_back_as = audit.held_back_as  # moved out of the CLI with the shared runner
 
     finding = audit.UnitFinding(1193, "Richmond 5", "giant_capacity_unconfirmed", "x", "y")
     stood = audit.Resolution(
@@ -676,3 +676,45 @@ def test_a_ruling_that_changed_nothing_is_held_back_like_a_decline():
         finding, "model", "d", "left as it stands — the figure was judged correct"
     )
     assert _held_back_as(judged) is None
+
+
+def test_a_failed_look_is_held_for_the_night_and_an_unusable_reply_is_one():
+    """Deliberate change: a failed call or an unusable reply used to be held nowhere
+    (or, for the reply, for a month as a decline). It is a failed look now, held for
+    the night only, as in every other paid pass."""
+    from tracker import declines
+    from tracker.llm import LLMReply
+
+    finding = audit.UnitFinding(1193, "Richmond 5", "giant_capacity_unconfirmed", "x", "y")
+    assert audit.held_back_as(audit.Resolution(finding, failed=True)) == declines.ERROR
+
+    class Garbled:
+        def complete(self, *, system, user, max_tokens):
+            return LLMReply(text="I would rather not say")
+
+    verdict = audit.ask_context({}, "giant_capacity_unconfirmed", extractor=Garbled())
+    assert verdict.failed and verdict.note == "unusable reply"
+
+
+def test_resolve_all_commits_each_finding_and_goes_on_past_one_that_fails(session, monkeypatch):
+    project, finding = _out_of_scale(session, label="Phase 1", mw=2250.0)
+    other, other_finding = _out_of_scale(session, label="Phase 2", mw=3250.0)
+    calls: list[int] = []
+
+    def flaky(question, **kw):
+        calls.append(question.finding.project_id)
+        if len(calls) == 1:
+            raise RuntimeError("socket closed")
+        return audit.Asked(first=audit.Verdict("s", 0.9, "cannot tell", outcome="declined"))
+
+    monkeypatch.setattr(audit, "ask_ladder", flaky)
+    got = audit.resolve_all(
+        session, [(project, finding), (other, other_finding)], extractor=object()
+    )
+    assert got.failed == 1
+    assert [r.failed for r in got.results] == [True, False]
+    assert got.results[1].declined
+    from tracker.models import ModelDecline
+
+    outcomes = {row.subject: row.outcome for row in session.query(ModelDecline)}
+    assert sorted(outcomes.values()) == ["declined", "error"]
