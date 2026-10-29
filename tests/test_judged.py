@@ -311,3 +311,37 @@ def test_room_bounds_how_many_start(session):
     got = _pass(session, ids, workers=3, room=lambda: next(left))
     assert [r[0] for r in got.results] == ids[:1]
     assert got.stopped and got.unreached == ids[1:]
+
+
+def test_waves_are_formed_after_the_last_wave_was_applied(session):
+    """A duplicate pair whose row was merged away is asked about the row that holds
+    it now — so which rows a pair touches is asked when its wave is formed, after
+    the merges before it, not once up front."""
+    a, b, c, d = (p.id for p in _projects(session, 4))
+    folded: dict[int, int] = {}
+    touched: list[tuple[tuple[int, int], list[int]]] = []
+
+    def surviving(pair):
+        rows = [folded.get(pair[0], pair[0]), folded.get(pair[1], pair[1])]
+        touched.append((pair, rows))
+        return rows
+
+    def apply(pair, prepared, answer):
+        if pair == (a, b):
+            folded[b] = a  # b merged into a
+        return judged.Done(result=pair)
+
+    got = judged.run(
+        session,
+        [(a, b), (b, c), (d, c)],
+        kind=None,
+        subject=str,
+        fingerprint=str,
+        projects=surviving,
+        prepare=lambda pair: pair,
+        ask=lambda prepared, _db: "ok",
+        apply=apply,
+        workers=3,
+    )
+    assert got.results == [(a, b), (b, c), (d, c)]
+    assert ((b, c), [a, c]) in touched, "asked about the row b was merged into"
