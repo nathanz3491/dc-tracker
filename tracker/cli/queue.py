@@ -475,12 +475,7 @@ def queue_duplicates(
 
     engine = _writable("queue duplicates") if drop else _read_engine()
     with session_scope(engine, commit=drop) as session:
-        reopened = disc.reopened_names(session)
-        unreadable = disc.unreadable_test(
-            article_cache("articles"),
-            reopened=reopened,
-            refusing=disc.refusing_publishers(session, reopened=reopened),
-        )
+        unreadable, _ = disc.unreadable_now(session, article_cache("articles"))
         found, back = disc.drop_same_story(session, unreadable, apply=drop)
         pairs = [(row.url, kept) for row, kept in found]
 
@@ -756,11 +751,7 @@ def queue_unreadable(
 
     engine = _writable("queue unreadable") if drop else _read_engine()
     with session_scope(engine, commit=drop) as session:
-        reopened = disc.reopened_names(session)
-        refusing = disc.refusing_publishers(session, reopened=reopened)
-        unreadable = disc.unreadable_test(
-            article_cache("articles"), reopened=reopened, refusing=refusing
-        )
+        unreadable, refusing = disc.unreadable_now(session, article_cache("articles"))
         found = [row.url for row in disc.pending(session) if unreadable(row.url)]
         removed = disc.discard_unreadable(session, unreadable, refusing=refusing) if drop else 0
     queued = Counter(disc.publisher_of(url) for url in found)

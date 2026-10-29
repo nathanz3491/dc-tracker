@@ -847,6 +847,29 @@ def test_queue_read_sets_aside_a_refusing_publisher_but_checks_one_page(
         assert (older.status, older.error) == ("skipped", discover.DISCARDED_REFUSING)
 
 
+def test_sync_and_the_queue_read_tidy_the_queue_with_one_function(initialized: Path, monkeypatch):
+    """`tracker sync` and `tracker ingest queue` once each carried their own copy of the
+    queue's preparation, and the copies had drifted in how they were sequenced. Both
+    call `discover.prepare_queue` now; only the nightly read makes the weekly check."""
+    from tracker.ingest import discover
+
+    real = discover.prepare_queue
+    calls: list[dict] = []
+
+    def spy(session, cache_dir, **kwargs):
+        calls.append(kwargs)
+        return real(session, cache_dir, **kwargs)
+
+    monkeypatch.setattr(discover, "prepare_queue", spy)
+    set_key(monkeypatch)
+    assert invoke(initialized, "ingest", "queue", "--limit", "20").exit_code == 0
+    result = invoke(
+        initialized, "sync", "--skip-discover", "--skip-refresh", "--skip-derive", "--search", "0"
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [{"probe": True, "limit": 20}, {}]
+
+
 def _capture_reads(monkeypatch) -> dict:
     """Swap the crawl for a recorder of what it was asked to read, and how."""
     from tracker.ingest import crawl
