@@ -169,8 +169,12 @@ def pull(args, local: Path) -> int:
     work = Path(tempfile.mkdtemp(prefix="sync-db-"))
     incoming = work / "tracker.db"
     try:
-        run(["scp", "-q", f"{args.host}:{there}", str(incoming)])
-        subprocess.run(["ssh", args.host, f"rm -rf {shlex.quote(os.path.dirname(there))}"])
+        try:
+            run(["scp", "-q", f"{args.host}:{there}", str(incoming)])
+        finally:
+            # Whether or not the copy arrived: a failed scp used to skip this, leaving a
+            # whole snapshot of production in the host's temp folder each time.
+            subprocess.run(["ssh", args.host, f"rm -rf {shlex.quote(os.path.dirname(there))}"])
         print(
             f"snapshot {incoming.stat().st_size / 1e6:.1f} MB "
             f"in {time.perf_counter() - started:.1f}s (VACUUM INTO on the mini)"

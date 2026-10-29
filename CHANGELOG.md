@@ -1065,6 +1065,11 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A database pull that fails part-way no longer leaves a copy of production behind on
+  the host** (`scripts/sync_db.py` `pull`; `tests/test_sync_db.py`). The pull asks the
+  host for a snapshot in its temp folder and copies it down; the snapshot was removed
+  only after a successful copy, so every dropped connection left a whole one there —
+  76 MB from 10-26 and 92 MB from 10-29 were found. It is now removed either way.
 - **A season or a hedged year — "summer of 2025", "late 2028", "mid-2026" — is read
   as the whole year on every path, so a campus is never called late before that year
   is out** (`tracker/normalize.py` `_named_before`, `_HEDGE_THEN_YEAR`,
