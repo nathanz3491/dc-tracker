@@ -167,6 +167,7 @@ def ensure(session: Session, key: str, spelling: str | None = None) -> Company:
     if company_id is not None:
         row = session.get(Company, company_id)
         if row is not None:
+            _held(session)[company_id] = row
             return row
     row = session.scalar(select(Company).where(Company.key == key))
     if row is None:
@@ -179,7 +180,22 @@ def ensure(session: Session, key: str, spelling: str | None = None) -> Company:
         session.add(row)
         session.flush()
     cache[key] = row.id
+    _held(session)[row.id] = row
     return row
+
+
+def _held(session: Session) -> dict[int, Company]:
+    """The company rows `ensure` has handed out, kept alive for the session.
+
+    The session's identity map holds objects weakly, and a caller of `ensure` keeps
+    only the id (`project.company_id = ensure(...).id`), so the row was collected
+    the moment it was returned and the next `ensure` for the same key had to load
+    it again — 6,191 SELECTs, each with an autoflush, in one whole-table `backfill
+    derive`. Holding it changes which object `session.get` returns from a fresh
+    copy to the same one, with the same column values: the row is flushed, and
+    nothing writes `company` behind the session's back mid-transaction.
+    """
+    return session.info.setdefault("company_rows", {})
 
 
 _SEEDS: dict[str, Seed] | None = None
@@ -282,6 +298,7 @@ def sync(session: Session) -> SyncReport:
 
     report = SyncReport()
     session.info.pop("company_ids", None)
+    session.info.pop("company_rows", None)
     known = {row.key: row for row in session.scalars(select(Company))}
     seed = seeds_cached()
     counts = spelling_counts(session)
@@ -455,6 +472,7 @@ def _rekey(session: Session, old_key: str, report: Rekeyed) -> None:
     from tracker.upsert import recompute_parties
 
     session.info.pop("company_ids", None)
+    session.info.pop("company_rows", None)
     report.keys_remembered = len(keys_mod.sync(session).added)
     report.parties_rebuilt = recompute_parties(session)
     new_key = report.new_key
