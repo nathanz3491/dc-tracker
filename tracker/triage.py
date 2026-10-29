@@ -988,49 +988,77 @@ def pair_triage(
     path has always had: an answer under `dupresolve.MIN_CONFIDENCE` is a shrug,
     and a shrug must not release a row from the capex hold.
     """
-    from tracker import agent
-    from tracker.dupresolve import (
-        MIN_CONFIDENCE,
-        Decision,
-        Judgement,
-        _surviving,
-        evidence_blocks_merge,
-        pair_label,
-        survivor,
-    )
-    from tracker.logic import one_line
-    from tracker.models import Project
+    from tracker import declines
 
     folded = folded if folded is not None else {}
+    asked = pair_prepare(session, pair, folded)
+    if not isinstance(asked, PairQuestion):
+        return asked
+    result = pair_investigate(
+        asked,
+        extractor=extractor,
+        db=session,
+        allow_search=allow_search,
+        system=system,
+        on_step=on_step,
+    )
+    got, held, why = pair_conclude(
+        session,
+        asked,
+        result,
+        allow_merge=allow_merge,
+        min_confidence=min_confidence,
+        require_quote=require_quote,
+        folded=folded,
+    )
+    if held:
+        declines.record(session, "pair", asked.subject, asked.shown, outcome=held, reason=why)
+    return got
+
+
+@dataclass
+class PairQuestion:
+    """One pair's question as plain values, built from the two rows as they are now."""
+
+    pair: Any
+    a_id: int
+    b_id: int
+    task: str
+    #: The pair's key in `model_decline` and the fingerprint of what the judge is
+    #: shown, taken before the run — a merge changes both rows, and a decline must
+    #: describe the question that was asked.
+    subject: str = ""
+    shown: str = ""
+
+
+def _surviving_rows(session: Any, pair: Any, folded: dict[int, int]) -> tuple[Any, Any]:
+    """The pair's two rows after earlier merges in this run, or None where one is gone."""
+    from tracker.dupresolve import _surviving
+    from tracker.models import Project
+
     a_id, b_id = _surviving(pair.a_id, folded), _surviving(pair.b_id, folded)
-    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=pair_label(pair))
     if a_id == b_id:
+        return None, None
+    return session.get(Project, a_id), session.get(Project, b_id)
+
+
+def pair_prepare(session: Any, pair: Any, folded: dict[int, int]) -> Any:
+    """The question for one pair, or the `Decision` that needs no question.
+
+    `folded` maps each row merged away earlier in the run to the row it went into,
+    so a pair naming a row that is gone is asked about the row that holds it now —
+    or answered at once when both are now one row.
+    """
+    from tracker.dupresolve import Decision, _surviving, pair_label
+
+    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=pair_label(pair))
+    if _surviving(pair.a_id, folded) == _surviving(pair.b_id, folded):
         got.detail = "one of the rows is gone — merged by an earlier pair in this run"
         return got
-
-    a, b = session.get(Project, a_id), session.get(Project, b_id)
+    a, b = _surviving_rows(session, pair, folded)
     if a is None or b is None:
         got.detail = "one of the rows is gone"
         return got
-
-    from tracker import declines
-
-    # Fingerprinted before the run, on what the judge is about to be shown — a
-    # merge below changes both rows, and the decline must describe the question.
-    subject, shown = pair_subject(a.id, b.id), pair_evidence(a, b, pair)
-
-    def declined(outcome: str, why: str) -> Any:
-        """Undecided, and asking again on the same evidence would pay for the same.
-
-        Not called for the two outcomes a re-run *can* change: a provider failure,
-        and "the same site, but merging needs --merge" — a run with `--merge` must
-        still reach that pair.
-        """
-        declines.record(session, "pair", subject, shown, outcome=outcome, reason=why)
-        got.detail = why
-        return got
-
-    tools = agent.evidence_toolkit(session, allow_search=allow_search) + pair_verdict_tools()
     task = (
         f"Are these the same site?\n\n"
         f"ROW A: #{a.id} {a.name} — {a.company} — "
@@ -1040,15 +1068,74 @@ def pair_triage(
         f"Why they were paired: {'+'.join(pair.kinds) or 'locality'}"
         + (f"\nShared tranche keys: {', '.join(pair.shared_blocks)}" if pair.shared_blocks else "")
     )
+    return PairQuestion(pair, a.id, b.id, task, pair_subject(a.id, b.id), pair_evidence(a, b, pair))
 
-    result = agent.run(
-        task, tools=tools, extractor=extractor, system=system or PAIR_SYSTEM, on_step=on_step
+
+def pair_investigate(
+    asked: PairQuestion,
+    *,
+    extractor: Any,
+    db: Any,
+    allow_search: bool = True,
+    system: str = "",
+    on_step: Any = None,
+) -> Any:
+    """The judge's run over one pair. Writes nothing; `db` is what its tools read."""
+    from tracker import agent
+
+    tools = agent.evidence_toolkit(db, allow_search=allow_search) + pair_verdict_tools()
+    return agent.run(
+        asked.task, tools=tools, extractor=extractor, system=system or PAIR_SYSTEM, on_step=on_step
     )
+
+
+def pair_conclude(
+    session: Any,
+    asked: PairQuestion,
+    result: Any,
+    *,
+    allow_merge: bool = False,
+    min_confidence: float = 0.85,
+    require_quote: bool = True,
+    folded: dict[int, int] | None = None,
+) -> tuple[Any, str, str]:
+    """Apply the judge's answer under the rails: `(decision, held back as, why)`.
+
+    "held back as" is the outcome the pair is remembered under in `model_decline`,
+    or "" when nothing is remembered: a park or a merge is a decision, and "the same
+    site, but merging needs --merge" is the one undecided outcome a re-run *can*
+    change — a run with `--merge` must still reach that pair. A run that never
+    reached an answer is held for the night only (`declines.ERROR`).
+    """
+    from tracker import declines
+    from tracker.dupresolve import (
+        MIN_CONFIDENCE,
+        Decision,
+        Judgement,
+        evidence_blocks_merge,
+        pair_label,
+        survivor,
+    )
+    from tracker.logic import one_line
+    from tracker.models import Project
+
+    folded = folded if folded is not None else {}
+    pair = asked.pair
+    got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=pair_label(pair))
+    a, b = session.get(Project, asked.a_id), session.get(Project, asked.b_id)
+    if a is None or b is None:
+        got.detail = "one of the rows is gone"
+        return got, "", ""
+
+    def declined(outcome: str, why: str) -> tuple[Any, str, str]:
+        """Undecided, and asking again on the same evidence would pay for the same."""
+        got.detail = why
+        return got, outcome, why
+
     if not result.answered:
         why = result.note or f"the run ended as {result.outcome} without deciding"
         if result.outcome == "error":
-            got.detail = why
-            return got
+            return declined(declines.ERROR, why)
         return declined(result.outcome, why)
 
     answer = result.answer or {}
@@ -1091,11 +1178,11 @@ def pair_triage(
         pairs_mod.park(session, [a.id, b.id], reason=one_line(told), by=by)
         got.action = "parked"
         got.detail = "ruled out — capex will stop holding one of these rows back"
-        return got
+        return got, "", ""
 
     if not allow_merge:
         got.detail = "the same site, but merging needs --merge"
-        return got
+        return got, "", ""
     if confidence < min_confidence:
         return declined(
             "below the merge bar",
@@ -1136,7 +1223,7 @@ def pair_triage(
         f"{merged.sources_moved} citation(s), {merged.events_moved} milestone(s) and "
         f"{merged.risks_moved} obstacle(s) moved onto #{keep.id}"
     )
-    return got
+    return got, "", ""
 
 
 def resolve_pairs(
@@ -1155,6 +1242,8 @@ def resolve_pairs(
     commit_each: bool = False,
     on_held: Any = None,
     pairs: list[Any] | None = None,
+    workers: int = 1,
+    on_each: Any = None,
 ) -> list[Any]:
     """Work the suspected pairs with an agent. Returns `dupresolve.Decision` list.
 
@@ -1181,11 +1270,63 @@ def resolve_pairs(
     write lock the whole while — which is what a console sign-in, a single write of
     `last_seen_at`, then times out against.
     """
+    got = settle_pairs(
+        session,
+        extractor=extractor,
+        limit=limit,
+        allow_merge=allow_merge,
+        weak=weak,
+        min_confidence=min_confidence,
+        require_quote=require_quote,
+        allow_search=allow_search,
+        system=system,
+        on_step=on_step,
+        again=again,
+        commit_each=commit_each,
+        pairs=pairs,
+        workers=workers,
+        on_each=on_each,
+    )
+    if on_held is not None:
+        on_held(got.held)
+    return got.results
+
+
+def settle_pairs(
+    session: Any,
+    *,
+    extractor: Any,
+    limit: int = 20,
+    allow_merge: bool = False,
+    weak: bool = False,
+    min_confidence: float = 0.85,
+    require_quote: bool = True,
+    allow_search: bool = True,
+    system: str = "",
+    on_step: Any = None,
+    again: bool = False,
+    commit_each: bool = False,
+    pairs: list[Any] | None = None,
+    workers: int = 1,
+    on_each: Any = None,
+    on_start: Any = None,
+) -> Any:
+    """`resolve_pairs`, returning the `judged.Run` itself: what the command reads.
+
+    The pairs go through `judged.run`. Each is committed as it is decided (with
+    `commit_each`; a dry run is one transaction that is never committed, and asks
+    one pair at a time, since a session of a run's own could not see its uncommitted
+    merges). One that raises is rolled back and the rest go on. A wave never holds
+    two pairs naming one row — formed after the previous wave's merges, with each
+    pair's rows read through `folded`, so a pair whose row was merged away waits for
+    the merge and is asked about the row that now holds it.
+    """
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
-    from tracker import declines
+    from tracker import judged
     from tracker.capex import suspected_duplicates
+    from tracker.dupresolve import _surviving
     from tracker.models import Project
 
     rows = {
@@ -1208,36 +1349,77 @@ def resolve_pairs(
             # costs a call to be told what the rails already know.
             found = [p for p in found if set(p.kinds) - {"name"}]
 
-    def key(pair: Any) -> tuple[str, str]:
-        a, b = rows.get(pair.a_id), rows.get(pair.b_id)
-        if a is None or b is None:
-            return pair_subject(pair.a_id, pair.b_id), ""
-        return pair_subject(a.id, b.id), pair_evidence(a, b, pair)
-
-    found, held = declines.split(found, declines.load(session, "pair"), key, again=again)
-    if on_held is not None:
-        on_held(held)
-
     folded: dict[int, int] = {}
-    out: list[Any] = []
-    for pair in found[:limit]:
-        out.append(
-            pair_triage(
-                session,
-                pair,
-                extractor=extractor,
-                allow_merge=allow_merge,
-                min_confidence=min_confidence,
-                require_quote=require_quote,
-                allow_search=allow_search,
-                folded=folded,
-                system=system,
-                on_step=on_step,
-            )
+
+    def subject(pair: Any) -> str:
+        return pair_subject(_surviving(pair.a_id, folded), _surviving(pair.b_id, folded))
+
+    def fingerprint(pair: Any) -> str:
+        if folded:
+            a, b = _surviving_rows(session, pair, folded)
+        else:
+            a, b = rows.get(pair.a_id), rows.get(pair.b_id)
+        if a is None or b is None:
+            return ""
+        return pair_evidence(a, b, pair)
+
+    def ask(asked: PairQuestion, db: Any) -> Any:
+        return pair_investigate(
+            asked,
+            extractor=extractor,
+            db=db,
+            allow_search=allow_search,
+            system=system,
+            on_step=on_step,
         )
-        if commit_each:
-            session.commit()
-    return out
+
+    def settle(_pair: Any, asked: PairQuestion, result: Any) -> Any:
+        got, held, why = pair_conclude(
+            session,
+            asked,
+            result,
+            allow_merge=allow_merge,
+            min_confidence=min_confidence,
+            require_quote=require_quote,
+            folded=folded,
+        )
+        return judged.Done(got, decline=held, reason=why)
+
+    def failed(pair: Any, error: BaseException) -> Any:
+        from tracker.dupresolve import Decision, pair_label
+
+        got = Decision(a_id=pair.a_id, b_id=pair.b_id, label=pair_label(pair))
+        got.detail = f"failed: {str(error)[:200]}"
+        return got
+
+    def prepare(pair: Any) -> Any:
+        asked = pair_prepare(session, pair, folded)
+        return asked if isinstance(asked, PairQuestion) else judged.Done(asked)
+
+    return judged.run(
+        session,
+        found,
+        kind="pair",
+        subject=subject,
+        fingerprint=fingerprint,
+        projects=lambda pair: [_surviving(pair.a_id, folded), _surviving(pair.b_id, folded)],
+        prepare=prepare,
+        ask=ask,
+        apply=settle,
+        failed=failed,
+        limit=limit,
+        again=again,
+        workers=workers if commit_each else 1,
+        commit=commit_each,
+        # Recorded either way, in the caller's transaction: a dry run never commits
+        # it, and a caller committing on its own terms keeps it.
+        remember=True,
+        by="agent",
+        reads_db=True,
+        on_each=on_each,
+        on_start=on_start,
+        label="pairs",
+    )
 
 
 __all__ = [
@@ -1248,6 +1430,7 @@ __all__ = [
     "SYSTEM",
     "UNANSWERABLE_BY_RULING",
     "Outcome",
+    "PairQuestion",
     "Triaged",
     "apply_rule_out",
     "can_rule_on",
@@ -1258,9 +1441,14 @@ __all__ = [
     "has_live_claim",
     "investigate",
     "leave_alone_tool",
+    "pair_conclude",
+    "pair_investigate",
+    "pair_prepare",
     "pair_triage",
     "pair_verdict_tools",
+    "resolve_pairs",
     "rule_out_tool",
+    "settle_pairs",
     "task_for",
     "triage",
     "triage_findings",

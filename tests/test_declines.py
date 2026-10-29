@@ -185,7 +185,10 @@ def test_same_but_no_merge_flag_is_not_recorded(session, pair_rows):
     assert session.query(ModelDecline).count() == 0
 
 
-def test_a_provider_failure_is_not_recorded(session, pair_rows):
+def test_a_provider_failure_is_held_for_the_night_only(session, pair_rows):
+    """Deliberate change: a failed run was recorded nowhere and asked again in the
+    next round of the same night. It is held as `declines.ERROR` now, as in every
+    paid pass — tonight only, since a failed call says nothing about the pair."""
     from tracker.llm import LLMError
 
     class Broken:
@@ -195,7 +198,11 @@ def test_a_provider_failure_is_not_recorded(session, pair_rows):
     _a, _b, pair = pair_rows
     got = triage.pair_triage(session, pair, extractor=Broken(), allow_search=False)
     assert "503" in got.detail
-    assert session.query(ModelDecline).count() == 0
+    (row,) = session.query(ModelDecline).all()
+    assert row.outcome == declines.ERROR
+    _age(session, declines.TONIGHT_HOURS + 1)
+    known = declines.load(session, "pair")
+    assert not declines.holds(known, row.subject, row.fingerprint), "asked again tomorrow"
 
 
 def test_the_next_run_holds_a_declined_pair_back(session, pair_rows, monkeypatch):

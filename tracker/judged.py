@@ -179,6 +179,7 @@ def run(
     known: dict[str, Any] | None = None,
     workers: int = 1,
     commit: bool = True,
+    remember: bool | None = None,
     by: str = "model",
     reads_db: bool = False,
     stage: str | None = None,
@@ -206,6 +207,8 @@ def run(
         known: the declines to hold back against, when the pass filters them first.
         workers: asks in flight at once; 1 is the serial loop, exactly.
         commit: False for a dry run — nothing is committed and nothing remembered.
+        remember: record declines even so, in the caller's open transaction (None
+            follows `commit`). For a caller that commits on its own terms.
         reads_db: `ask` reads the database through the session it is handed.
         stage: the spend ledger's stage label for the asks.
         room: how many more items may start, asked before each wave; None is no
@@ -243,18 +246,20 @@ def run(
     if on_start is not None:
         on_start(out, chosen)
 
-    def remember(item: Any, shown: str, done: Done) -> None:
-        if not commit or kind is None:
+    keep = commit if remember is None else remember
+
+    def note(key: tuple[str, str], done: Done) -> None:
+        if not keep or kind is None:
             return
         if done.decline:
             declines.record(
-                session, kind, subject(item), shown, outcome=done.decline, reason=done.reason, by=by
+                session, kind, key[0], key[1], outcome=done.decline, reason=done.reason, by=by
             )
         elif done.forget:
-            declines.forget(session, kind, subject(item))
+            declines.forget(session, kind, key[0])
 
-    def finish(item: Any, shown: str, done: Done) -> None:
-        remember(item, shown, done)
+    def finish(key: tuple[str, str], done: Done) -> None:
+        note(key, done)
         if commit:
             session.commit()
         if done.result is not None:
@@ -262,23 +267,24 @@ def run(
             if on_each is not None:
                 on_each(done.result)
 
-    def fail(item: Any, shown: str, error: BaseException, where: str) -> None:
+    def fail(item: Any, key: tuple[str, str], error: BaseException, where: str) -> None:
         # The failed item's writes go; everything committed before it stays.
         session.rollback()
         out.failed += 1
-        log.warning("%s: %s failed on %s: %s", label, where, subject(item), error)
-        if commit and kind is not None:
+        log.warning("%s: %s failed on %s: %s", label, where, key[0] or item, error)
+        if keep and kind is not None and key[0]:
             try:
                 declines.record(
                     session,
                     kind,
-                    subject(item),
-                    shown,
+                    key[0],
+                    key[1],
                     outcome=declines.ERROR,
                     reason=f"{where} failed: {error}",
                     by=by,
                 )
-                session.commit()
+                if commit:
+                    session.commit()
             except Exception as exc:  # the database itself is the problem
                 session.rollback()
                 log.warning("%s: could not record the failure: %s", label, exc)
@@ -322,35 +328,40 @@ def run(
                 cap = min(cap, left)
         wave, queue = waves(queue, projects, cap)
 
-        ready: list[tuple[Any, str, Any]] = []
+        ready: list[tuple[Any, tuple[str, str], Any]] = []
         for item in wave:
-            shown = ""
+            # The key is taken here, after every earlier item was applied, so a
+            # decline names the question as it was asked and the evidence it was
+            # shown — a merge earlier in the run may have moved a pair to other rows.
+            key = ("", "")
             try:
-                shown = fingerprint(item) if kind is not None else ""
+                if kind is not None:
+                    key = (subject(item), "")
+                    key = (key[0], fingerprint(item))
                 prepared = prepare(item)
             except Exception as exc:
-                fail(item, shown, exc, "prepare")
+                fail(item, key, exc, "prepare")
                 continue
             if isinstance(prepared, Done):
-                finish(item, shown, prepared)
+                finish(key, prepared)
                 continue
-            ready.append((item, shown, prepared))
+            ready.append((item, key, prepared))
 
         if not ready:
             continue
         with spend_stage(stage) if stage else contextlib.nullcontext():
-            for (item, shown, prepared), answer in map_ordered(
+            for (item, key, prepared), answer in map_ordered(
                 ready, lambda entry: asked(entry[2]), limit=min(workers, len(ready)), label=label
             ):
                 if isinstance(answer, _Raised):
-                    fail(item, shown, answer.error, "ask")
+                    fail(item, key, answer.error, "ask")
                     continue
                 try:
                     done = apply(item, prepared, answer)
                 except Exception as exc:
-                    fail(item, shown, exc, "apply")
+                    fail(item, key, exc, "apply")
                     continue
-                finish(item, shown, done)
+                finish(key, done)
     return out
 
 

@@ -298,7 +298,7 @@ def test_the_per_item_judgements_do_not_pay_the_per_project_price():
     `infer`'s factory, the mistake the agent tier was split out to fix."""
     import inspect
 
-    from tracker.cli import duplicates, logic, quality
+    from tracker.cli import _shared, duplicates, logic, quality
     from tracker.config import Settings
     from tracker.ingest import enrich
     from tracker.llm import judgement_extractor, reasoning_extractor
@@ -316,8 +316,14 @@ def test_the_per_item_judgements_do_not_pay_the_per_project_price():
         duplicates.duplicates_resolve,
     ):
         source = inspect.getsource(command)
-        assert "judgement_extractor" in source, command.__name__
+        # `_model("judgement")` is the shared spelling of the same factory call
+        # (`cli._shared._model`), moved out of each command with the paid-pass runner.
+        assert "judgement_extractor" in source or '_model("judgement")' in source, (
+            command.__name__
+        )
         assert "reasoning_extractor" not in source, command.__name__
+    shared = inspect.getsource(_shared._model)
+    assert "judgement_extractor" in shared and "reasoning_extractor" not in shared
     assert "_judgement_extractor(settings)" in inspect.getsource(enrich)
 
 
