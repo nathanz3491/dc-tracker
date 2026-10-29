@@ -305,6 +305,10 @@ class IngestReport:
     #: guarantees (`invariants.HeldBroken`) — a bug to fix, never a fact. Rolled
     #: back one at a time and named in the log. Shown only when there are some.
     held_refused: int = 0
+    #: Articles fetched and never read because the night's money ran out
+    #: (`tracker.spend.ceiling_reached`), asked before each one. The reads already
+    #: in flight were kept. Shown only when there are some.
+    not_read_ceiling: int = 0
     events: int = 0
     risks: int = 0
     #: What the run actually spent. `ExtractionOutcome` has carried these per URL
@@ -359,6 +363,11 @@ class IngestReport:
             if self.held_refused
             else []
         )
+        ceiling = (
+            [("not read: spend ceiling reached", self.not_read_ceiling)]
+            if self.not_read_ceiling
+            else []
+        )
         return [
             ("read", self.read),
             ("filtered out", self.filtered),
@@ -381,6 +390,7 @@ class IngestReport:
             *same,
             *ignored,
             *refused,
+            *ceiling,
         ]
 
 

@@ -419,3 +419,73 @@ def test_only_the_last_29_days_count_and_searches_never_do(tmp_path):
 def test_the_allowance_is_a_command_the_loop_can_read(tmp_path, capsys):
     assert spend.main(["allowance", str(tmp_path)]) == 0
     assert capsys.readouterr().out.strip() == f"{spend.monthly_budget() / 30:.2f}"
+
+
+# --- the ceiling a pass asks about mid-run --------------------------------------
+
+
+def _ceiling(monkeypatch, ledger, *, cny=None, tokens=None):
+    from tracker.config import get_settings
+
+    monkeypatch.setenv("TRACKER_SPEND_LEDGER", str(ledger))
+    if cny is not None:
+        monkeypatch.setenv("TRACKER_SPEND_CEILING_CNY", str(cny))
+    if tokens is not None:
+        monkeypatch.setenv("TRACKER_SPEND_CEILING_TOKENS", str(tokens))
+    get_settings.cache_clear()
+
+
+def test_no_ceiling_set_is_never_reached(tmp_path, monkeypatch):
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(_line(c=10_000_000), encoding="utf-8")
+    _ceiling(monkeypatch, ledger)
+    assert spend.ceiling_reached() == ""
+
+
+def test_the_ceiling_prices_the_ledger_the_way_total_does(tmp_path, monkeypatch):
+    """One million reply tokens is `OUT` yuan; a search beside it costs the ceiling nothing."""
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(_line(c=1_000_000) + _line(model=spend.SEARCH_MODEL), encoding="utf-8")
+    _ceiling(monkeypatch, ledger, cny=OUT + 0.01)
+    assert spend.ceiling_reached() == ""
+    assert spend.ledger_spent(ledger)[0] == pytest.approx(spend.total(spend.read(ledger)))
+
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write(_line(c=100_000))
+    why = spend.ceiling_reached()
+    assert why and "ceiling" in why, "a line appended since the last look is counted"
+
+
+def test_the_token_ceiling_stops_too(tmp_path, monkeypatch):
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(_line(p=600, c=400), encoding="utf-8")
+    _ceiling(monkeypatch, ledger, tokens=1_000)
+    assert "token" in spend.ceiling_reached()
+
+
+def test_the_ledger_is_read_incrementally_and_a_half_line_waits(tmp_path):
+    """Asked before every item, so it must not re-read a night's ledger each time —
+    and a line a writer is half way through is not counted until it is whole."""
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(_line(c=1_000_000), encoding="utf-8")
+    assert spend.ledger_spent(ledger)[0] == pytest.approx(OUT)
+    whole = _line(c=1_000_000)
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write(whole[:10])
+    assert spend.ledger_spent(ledger)[0] == pytest.approx(OUT)
+    with ledger.open("a", encoding="utf-8") as handle:
+        handle.write(whole[10:])
+    assert spend.ledger_spent(ledger)[0] == pytest.approx(2 * OUT)
+
+
+def test_a_ledger_that_shrank_is_read_again_from_the_start(tmp_path):
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(_line(c=1_000_000) * 3, encoding="utf-8")
+    assert spend.ledger_spent(ledger)[0] == pytest.approx(3 * OUT)
+    ledger.write_text(_line(c=1_000_000), encoding="utf-8")
+    assert spend.ledger_spent(ledger)[0] == pytest.approx(OUT)
+
+
+def test_a_missing_ledger_has_spent_nothing(tmp_path):
+    assert spend.ledger_spent(tmp_path / "absent.spend") == (0.0, 0)
+    assert spend.ledger_spent(None) == (0.0, 0)

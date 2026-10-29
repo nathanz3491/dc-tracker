@@ -668,6 +668,24 @@ class Settings(BaseSettings):
     #: sets `TRACKER_SPEND_LEDGER` to a fresh file per night.
     spend_ledger: Path | None = None
 
+    #: The money a ledger may reach before a paid pass stops starting new work, in
+    #: yuan, priced the way `python -m tracker.spend total` prices it. None — the
+    #: default — is no ceiling.
+    #:
+    #: **Why a command reads it, not only the loop.** The nightly loop compared the
+    #: night's ledger against its ceiling *between* passes, so a pass that began a
+    #: yuan under the line spent its whole batch before anything looked again — forty
+    #: obstacles, twenty agent pairs. Each paid pass now asks
+    #: `tracker.spend.ceiling_reached` before every item (or wave of items), keeps
+    #: what it has done, and stops. `scripts/overnight.sh` exports the night's
+    #: allowance here.
+    spend_ceiling_cny: float | None = Field(default=None, ge=0)
+
+    #: The same ceiling in tokens (prompt plus reply, model calls only). The older
+    #: measure — see `tracker.spend` for why money is the better one — kept because
+    #: the loop still offers it. None is no ceiling; both may be set, and either stops.
+    spend_ceiling_tokens: int | None = Field(default=None, ge=0)
+
     # --- merge policy -----------------------------------------------------
     #: Break a merge tie on when the article was *published* rather than on when
     #: the crawler fetched it (`source.published_at`, migration 0014).

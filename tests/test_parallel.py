@@ -162,3 +162,41 @@ def test_llm_workers_gives_the_api_its_own_number():
     settings = Settings(llm_provider="deepseek", llm_concurrency=6, ollama_concurrency=1)
     assert settings.llm_workers() == 6
     assert settings.llm_workers("ollama") == 1
+
+
+# --- stopping part way ---------------------------------------------------------
+
+
+def test_stop_keeps_what_is_already_running_and_starts_nothing_more():
+    """The spend ceiling's shape: a call in flight is paid for, so its answer is kept;
+    a task not yet started is never started."""
+    started: list[int] = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2, timeout=10)
+
+    def work(item: int) -> int:
+        with lock:
+            started.append(item)
+        if item in (0, 1):
+            barrier.wait()  # both first tasks are in flight before anything returns
+        return item
+
+    got = [item for item, _ in map_ordered(range(10), work, limit=2, stop=lambda: True)]
+    assert got == sorted(got)
+    assert 0 in got and 1 in got, "the two in flight are delivered"
+    assert len(started) <= 4, f"expected the rest cancelled, {len(started)} started"
+
+
+def test_stop_serially_starts_nothing_once_true():
+    calls: list[int] = []
+    flag = {"stop": False}
+
+    def work(item: int) -> int:
+        calls.append(item)
+        if item == 1:
+            flag["stop"] = True
+        return item
+
+    got = list(map_ordered(range(5), work, limit=1, stop=lambda: flag["stop"]))
+    assert got == [(0, 0), (1, 1)]
+    assert calls == [0, 1]

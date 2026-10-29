@@ -79,6 +79,7 @@ from tracker.normalize import (
 )
 from tracker.parallel import map_ordered
 from tracker.prompts import Prompt, load_prompt
+from tracker.spend import CEILING_REACHED, ceiling_reached
 from tracker.upsert import upsert_record
 from tracker.vocab import (
     BASIS_FIELDS,
@@ -4182,12 +4183,31 @@ def run(
     # arrive in input order, so the run's log reads the same as it always did.
     # `llm_workers()` is 1 for a local model, which restores the serial path
     # exactly — see `Settings.ollama_concurrency`.
+    #
+    # **The night's money is asked about before each article** (`spend.
+    # ceiling_reached`). A long read used to run to the end of its list however far
+    # past the ceiling it went, because only the loop between commands looked. Once
+    # it is reached, no article not yet started is read; the ones already in flight
+    # are paid for and so are still written.
+    to_read = [*cached, *fetched]
+    over: list[str] = []
+
+    def spent() -> bool:
+        if not over:
+            why = ceiling_reached(settings)
+            if why:
+                over.append(why)
+        return bool(over)
+
+    consumed = 0
     for result, outcome in map_ordered(
-        [*cached, *fetched],
+        to_read,
         outcome_for,
         limit=settings.llm_workers(),
         label="extract",
+        stop=spent,
     ):
+        consumed += 1
         if not result.ok:
             report.fetch_error += 1
             log.warning("fetch failed: %s (%s)", result.url, result.error)
@@ -4306,6 +4326,14 @@ def run(
         record_url(session, run_id, outcome, origin=_origin(origins, outcome.url))
         _checkpoint(session, dry_run)
 
+    if over:
+        report.not_read_ceiling = len(to_read) - consumed
+        log.warning(
+            "%s (%s): %d article(s) not read; what was read is kept",
+            CEILING_REACHED,
+            over[0],
+            report.not_read_ceiling,
+        )
     if dry_run:
         session.rollback()
     return report
