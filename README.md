@@ -503,6 +503,19 @@ directory, which is what lets `tracker init` work from anywhere.
 .venv/Scripts/python -m pytest -n auto
 ```
 
+**Or on the production host's faster CPU**: lint here, every test there, in a
+sandbox that cannot reach production's files, its services or the internet. It
+proves that before each run:
+
+```bash
+.venv/Scripts/python scripts/remote_suite.py
+```
+
+It sends the working tree as `git add -A` would see it, uncommitted changes
+included, and streams the host's output back. `-- --lf` reruns what failed there, and
+`--attach` and `--stop` follow or end a run in progress.
+[Testing on the host](docs/testing-on-the-host.md) has the whole flow and its guards.
+
 4,730 tests. `-n auto` (pytest-xdist) spreads them over every core: about 70 seconds on
 a 16-core machine, against five and a half minutes in one process. No single test is
 the cost — the slowest takes 5 seconds and the average 69 ms — so running them side by

@@ -12,6 +12,27 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **One command lints here and runs the full test suite on the production host,
+  without the tests being able to touch production** (`scripts/remote_suite.py`,
+  `scripts/remote_suite.sh`, `tests/test_remote_suite.py`,
+  `docs/testing-on-the-host.md`, README *Test*, CLAUDE.md §5 and §9, `.gitignore`).
+  - **Why:** the suite was slow on the dev machine, which is in use for other work
+    while it runs, and the host's CPU is several times faster.
+  - **Lint stays here:** ruff fixes and formats here, because those rewrite files,
+    so nothing has to be copied back.
+  - **What is sent:** the working tree, uncommitted changes and new files included,
+    goes as a commit object built on a throwaway index. The real index, HEAD and the
+    branch are untouched, and `git push` carries only what the host lacks.
+  - **Where it runs:** a scratch clone at `~/dev/tracker/tracker-dev`. The suite
+    starts detached there, and its log follows here: the link to the host drops now
+    and then (three times on the day this was built), and following resumes at the
+    byte where it stopped.
+  - **Sandbox:** the tests run inside a macOS sandbox. It denies production's
+    checkout, database, deployer and backups, the credential folders, every port
+    already listening on the host (the console among them) and the internet. The
+    environment is scrubbed of keys and proxies.
+  - **Proved each run:** before the first test, each of those guards is tried from
+    inside the sandbox, and one that does not hold stops the run.
 - **The nightly read stops spending slots on publishers that refuse every read, and
   notices when one stops refusing** (`tracker/ingest/discover.py`
   `refusing_publishers`, `probe_refusing`, `publisher_of`, `REFUSING_AFTER`,

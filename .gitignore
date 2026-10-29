@@ -44,6 +44,8 @@ venv/
 
 # Tooling
 .pytest_cache/
+# The host-side test flow's lock, sandbox profile, home and caches (scripts/remote_suite.sh)
+.suite/
 .ruff_cache/
 .coverage
 .coverage.*

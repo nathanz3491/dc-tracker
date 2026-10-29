@@ -144,7 +144,9 @@ went. These are the agreed exceptions:
 | `~/.local/bin/tracker` | a symlink so the CLI is on `PATH`; that directory was already on it |
 
 Everything else lives under `~/dev/tracker/` — `repo/` (the checkout), `ops/`
-(the deployer and its logs), `backups/`.
+(the deployer and its logs), `backups/`, and `tracker-dev/`: a scratch clone the test
+flow (§9) checks snapshots out into. It is never served and never deployed, and the
+tests run there cannot see the other three.
 
 **Where the tool itself thinks its data lives** is `tracker paths`, and on the host
 the answer is unchanged: the deployer installs editable inside `repo/`, so the
@@ -269,6 +271,32 @@ This applies hardest to anything asking for a decision — a plan, a set of opti
 question — and to commit messages and changelog entries, which are read by people
 deciding whether to care. It does not apply to docstrings and comments, whose reader
 already has the file open.
+
+---
+
+## 9. Lint here; run the full suite on the host.
+
+```bash
+.venv/Scripts/python scripts/remote_suite.py          # ../../../.venv/... from a worktree
+.venv/Scripts/python scripts/remote_suite.py -- --lf  # only what failed last time
+```
+
+It fixes and formats with ruff **here** — those rewrite files, so they run where
+the files are — then sends the working tree, uncommitted changes included, to
+`~/dev/tracker/tracker-dev` on `$PROD` and runs every test there on ten workers. The
+output streams back; the whole of it is kept in `data/runs/remote-suite.log`.
+
+**It cannot touch production, and proves so each time.** The tests run in a macOS
+sandbox that denies production's checkout, deployer and backups, every port already
+listening on the host (the console among them) and the internet, with an
+environment of their own. Before the first test, each of those is tried from inside
+the sandbox; one that is not refused stops the run. When that check stops a run it
+has found a hole in the sandbox: fix the cause, never route around it.
+
+This is not a deploy and does not bend §1: nothing reaches `repo/`, nothing is
+served, and the only way code goes live is still a push to `main`.
+`docs/testing-on-the-host.md` has the whole flow, the options and what to do when
+it fails.
 
 ---
 
