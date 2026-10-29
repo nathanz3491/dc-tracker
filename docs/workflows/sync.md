@@ -358,8 +358,8 @@ publisher it can read comes back at its next check. The ladder climbs
 to DeepSeek only for a 403, a 503 or a shell of a page (`fetch.should_escalate`), so a
 publisher refusing with 402, 429, 451 or its robots.txt comes back only by relenting.
 To check one now, read one of its
-pages: `tracker ingest crawl --url <page>`. A run's checks are capped at a tenth of its
-`--limit`, longest unchecked first.
+pages: `tracker ingest crawl --url <page>`. A night's checks are capped at a tenth of
+`tracker ingest queue --limit`, longest unchecked first.
 
 **Measured** by replaying the ten nightly reads from 10-19 to 10-28 on production's
 history, the rule learning night by night and checking a page a week: four pages on
@@ -565,6 +565,15 @@ prioritising after would reorder a batch that was already chosen:
    still names every kind; `--measure` reports them all, and what acting on
    `ACTED_ON` alone would do.
 
+**Rules 4 to 6 are one step, shared.** Sync's extract phase and the nightly read of
+the queue (`tracker ingest queue`) tidy the queue with the same function,
+`discover.prepare_queue`, so a rule changed for one cannot quietly not apply to the
+other; only the nightly read adds the weekly check of a refusing publisher. The
+step is one transaction, committed before the queue is read and before anything slow
+— the headline screen's model calls among them — so nothing holds SQLite's write lock
+while it waits, and a run that dies part-way leaves the queue as it found it. On a
+dry run it is rolled back, and the read that follows sees the queue as it stood.
+
 **Whatever the order, news of a campus past its date is read first**
 (`discover.deciding`): the news watch's finds about a campus that is late by the
 record. The console flags such a campus as a suspected delay once its go-live search
@@ -575,7 +584,7 @@ in the backlog's order read one. They are a few dozen a night at most. **Right a
 them come the night's weekly checks** of publishers refusing every read, one page each
 (`pending(probes=)`): a check that sat behind the limit would not be made.
 
-`ingest crawl --from-queue --new-first` asks a different question, and is what the
+`tracker ingest queue --new-first` asks a different question, and is what the
 nightly loop's discovery step runs. **The news goes first:** every article the
 feeds and archives offered that was published within the email's window
 (`feed.REPORT_WINDOW_DAYS`, 60 days), newest first,
@@ -914,11 +923,11 @@ Touching any of these means the poster is in scope. Re-render with
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed`; for a refusing publisher, `probe_refusing` on the same clock |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `PlaywrightFetcher.permitted`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
-| A page no campus story can be in is set aside | `tracker/ingest/screen.py` — `not_news`, `file_kind`, `translation`, `site_kind`, `_NOT_NEWS_HOSTS`, `_QUOTE_PAGES`, `_LISTINGS`, `builder_aside`, `abroad`, `us_places`, `post_year`, `_CAMPUS_EVENT`, `off_topic`, `SET_ASIDE`, `summary`; `tracker/ingest/discover.py` — `set_aside_not_news`; `tracker/ingest/watch.py` — `_screened`, `judge`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract); `tracker/cli/queue.py` — `queue aside` |
-| A page set aside by its headline (`--screen`) | `tracker/ingest/headlines.py` — `KINDS`, `SYSTEM`, `STAMP`, `ASIDE`, `BATCH`, `judge`, `names_us_place`, `places_held`, `screen_queue`, `measure`; `tracker/ingest/screen.py` — `us_places`, `UsPlaces`; `tracker/cli/ingest.py` — `crawl --from-queue --screen`, `_screen_headlines`; `tracker/cli/queue.py` — `queue screen`; `tracker/overnight.py` — `Options.screen` |
-| A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract); `tracker/cli/queue.py` — `queue duplicates` |
-| Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test` (`refusing=`, `probing=`), `discard_unreadable` (`refusing=`), `requeue_reopened`, `DISCARDED_UNREADABLE`, `DISCARDED_REFUSING`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/queue.py` — `queue unreadable`, `queue duplicates`; `tracker/ingest/enrich.py` — `run` |
-| Publishers that refuse every read, learned | `tracker/ingest/discover.py` — `refusing_publishers`, `Refusing`, `Refusing.due`, `publisher_of`, `_refused`, `_what_it_said`, `_TRIED`, `REFUSAL_STATUS`, `REFUSING_AFTER`, `REFUSING_DAYS`, `probe_refusing`, `pending(probes=)`, `follow_headlines(refusing=)`; `tracker/ingest/fetch.py` — `fetch_all`, `should_escalate` (what "after the ladder" means); `tracker/ingest/crawl.py` — `record_url`; `tracker/ingest/watch.py` — `_screened` (why the watch still queues them); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/desk.py` — `Desk.lines` |
+| A page no campus story can be in is set aside | `tracker/ingest/screen.py` — `not_news`, `file_kind`, `translation`, `site_kind`, `_NOT_NEWS_HOSTS`, `_QUOTE_PAGES`, `_LISTINGS`, `builder_aside`, `abroad`, `us_places`, `post_year`, `_CAMPUS_EVENT`, `off_topic`, `SET_ASIDE`, `summary`; `tracker/ingest/discover.py` — `set_aside_not_news`; `tracker/ingest/watch.py` — `_screened`, `judge`; `tracker/ingest/discover.py` — `prepare_queue`; `tracker/cli/ingest.py` — `ingest_queue`; `tracker/cli/sync.py` — `sync` (extract); `tracker/cli/queue.py` — `queue aside` |
+| A page set aside by its headline (`--screen`) | `tracker/ingest/headlines.py` — `KINDS`, `SYSTEM`, `STAMP`, `ASIDE`, `BATCH`, `judge`, `names_us_place`, `places_held`, `screen_queue`, `measure`; `tracker/ingest/screen.py` — `us_places`, `UsPlaces`; `tracker/cli/ingest.py` — `ingest_queue` (`--screen`), `_screen_headlines`; `tracker/cli/queue.py` — `queue screen`; `tracker/overnight.py` — `Options.screen` |
+| A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/ingest/discover.py` — `prepare_queue`; `tracker/cli/ingest.py` — `ingest_queue`; `tracker/cli/sync.py` — `sync` (extract); `tracker/cli/queue.py` — `queue duplicates` |
+| Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test` (`refusing=`, `probing=`), `unreadable_now`, `prepare_queue`, `QueuePrep`, `discard_unreadable` (`refusing=`), `requeue_reopened`, `DISCARDED_UNREADABLE`, `DISCARDED_REFUSING`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `ingest_queue`, `_print_prepared`; `tracker/cli/queue.py` — `queue unreadable`, `queue duplicates`; `tracker/ingest/enrich.py` — `run` |
+| Publishers that refuse every read, learned | `tracker/ingest/discover.py` — `refusing_publishers`, `Refusing`, `Refusing.due`, `publisher_of`, `_refused`, `_what_it_said`, `_TRIED`, `REFUSAL_STATUS`, `REFUSING_AFTER`, `REFUSING_DAYS`, `probe_refusing`, `pending(probes=)`, `follow_headlines(refusing=)`; `tracker/ingest/fetch.py` — `fetch_all`, `should_escalate` (what "after the ladder" means); `tracker/ingest/crawl.py` — `record_url`; `tracker/ingest/watch.py` — `_screened` (why the watch still queues them); `tracker/ingest/discover.py` — `prepare_queue(probe=)`; `tracker/cli/ingest.py` — `ingest_queue`; `tracker/ingest/desk.py` — `Desk.lines` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `deciding` (a late campus's watch finds, ahead of every order), `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |

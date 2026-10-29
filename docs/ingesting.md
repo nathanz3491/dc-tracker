@@ -8,7 +8,8 @@ Part of the [dc-tracker documentation](README.md).
 
 ## Setting the API key
 
-Only `ingest crawl` needs it. Copy the example file and fill in one line:
+Only the commands that read articles with a model need it — `ingest crawl` and its
+siblings below, `sync`, `enrich`. Copy the example file and fill in one line:
 
 ```bash
 cp .env.example .env
@@ -164,6 +165,38 @@ DeepSeek's top-level `reasoning_effort` field; it used to be sent inside the
 scripts/probe_effort.py` asks the same small question at `low` and `high` and prints
 what each reply spent — a few calls, well under ¥0.05 — which is the evidence for or
 against moving a tier to `low`.
+
+## Reading articles: one command per way of choosing them
+
+```bash
+tracker ingest crawl --url https://example.com/story   # links you name (repeatable), or --urls FILE
+tracker ingest queue --new-first --limit 900 --screen   # what `tracker discover` queued
+tracker ingest reread --cached-only --existing-only --limit 60    # what an older prompt read
+tracker ingest recheck --cached-only --existing-only --limit 60   # what the gate refused before its revision
+```
+
+Each reads articles through the same crawl — fetch, model, quoted-evidence gate,
+identity check — and differs only in how it chooses them, so each takes only the
+flags that mean something to it. `--prompt`, `--browser`, `--dry-run`, `--no-cache`,
+`--verify-identity/--no-verify-identity` and `--llm-provider` work on all four.
+
+- **`ingest crawl`** reads the links you name, even ones a previous run read: a link
+  named by hand is one somebody wants read now. `--check` only tests that the model
+  answers. `--force` makes `--urls` re-read links already read.
+- **`ingest queue`** is the nightly loop's read of the news. It tidies the queue first —
+  the same step `sync`'s extract phase takes ([the queue's rules](workflows/sync.md#where-the-queued-rows-come-from)) —
+  then reads it in order up to `--limit`. `--new-first` reads the recent news and the
+  articles naming no tracked campus first; `--screen` has a model read the headlines
+  first and set aside the pages about a place abroad.
+- **`ingest reread`** and **`ingest recheck`** re-read articles this database already
+  read: under the prompt as it stands today, or under the evidence gate as it stands
+  today ([why](data-quality.md#what-the-stored-data-actually-rests-on)). Run them
+  with `--cached-only`, which chooses only what the article cache can serve, and
+  `--existing-only`, which never creates a row.
+
+These were all `ingest crawl` once, chosen by `--from-queue`, `--stale-prompt` or
+`--refused-before-gate`, with every other job's flags accepted and quietly ignored.
+Those spellings now stop with exit 2 and name the command to run instead.
 
 ## One command for the whole loop
 

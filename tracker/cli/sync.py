@@ -735,21 +735,13 @@ def sync(
 
     # --- extract new --------------------------------------------------------
     step("extract new")
-    # A queued page on a publisher closed to us, or on one that has refused every
-    # read lately, with no body cached, leaves the queue before it is read — see
-    # `discover.discard_unreadable`, and `requeue_reopened` for the way back. The
-    # weekly check of a refusing publisher rides the nightly crawl
-    # (`ingest crawl --from-queue`), not this.
+    # The queue is tidied first, by the same steps and in the same order as the
+    # nightly queue read (`tracker ingest queue`): unreadable pages discarded or put
+    # back, pages no campus story can be in and second copies of a story set aside.
+    # The weekly check of a refusing publisher rides the nightly read, not this.
     with session_scope(engine, commit=not dry_run) as session:
-        reopened = disc.reopened_names(session)
-        refusing = disc.refusing_publishers(session, reopened=reopened)
-        unreadable = disc.unreadable_test(cache_dir, reopened=reopened, refusing=refusing)
-        disc.requeue_reopened(session, unreadable)
-        discarded = disc.discard_unreadable(session, unreadable, refusing=refusing)
-        # A page no campus story can be in, then one copy of a story; see
-        # `discover.set_aside_not_news` and `discover.drop_same_story`.
-        disc.set_aside_not_news(session)
-        disc.drop_same_story(session, unreadable)
+        prep = disc.prepare_queue(session, cache_dir)
+    unreadable, discarded = prep.unreadable, prep.discarded
     with session_scope(engine, commit=False) as session:
         # known_first spends each LLM call on depth: a queued article covering a
         # project we already track becomes a SECOND source, which fills fields one
@@ -871,17 +863,13 @@ def sync(
         with session_scope(engine, commit=False) as session:
             # No cache here (see below), so every page on a publisher closed to us or
             # refusing every read counts as unreadable and goes after the pages that
-            # can be re-read.
-            reopened = disc.reopened_names(session)
+            # can be re-read. Asked again rather than reusing the extract phase's
+            # answer: that phase's reads may have cleared a publisher, or refused one.
             stale = crawl.stale_sources(
                 session,
                 older_than_days=refresh_days,
                 limit=refresh_limit,
-                unreadable=disc.unreadable_test(
-                    None,
-                    reopened=reopened,
-                    refusing=disc.refusing_publishers(session, reopened=reopened),
-                ),
+                unreadable=disc.unreadable_now(session, None)[0],
             )
         if not stale:
             console.print(f"no source read more than {refresh_days} day(s) ago — all current")
@@ -1640,7 +1628,7 @@ def discover(
     if report.queued and not dry_run:
         console.print(
             "\n[dim]next:[/dim] tracker queue        [dim]# review what was found[/dim]\n"
-            "[dim]then:[/dim] tracker ingest crawl --from-queue"
+            "[dim]then:[/dim] tracker ingest queue"
         )
 
 

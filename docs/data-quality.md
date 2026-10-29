@@ -152,7 +152,7 @@ granted and the rest of `crawl.COMPLETION_EVENTS`. An announcement, an expansion
 filing or a delay is a statement of intent by nature, so its own sentence says "will
 build" or "plans to". Until 2026-10-20 the quote check read every type anyway and
 filed 46 of them as forecasts, 31 announcements among them, throwing their quotes
-away; `--refused-before-gate` re-reads those articles first (below), and the re-read
+away; `tracker ingest recheck` re-reads those articles first (below), and the re-read
 confirms each milestone through the same path that confirms any re-read one.
 
 An announcement is also not dated by a directory's own date. Tracker pages print
@@ -392,7 +392,7 @@ chosen for one T2 gap; under `--t2` it is now asked about that gap alone.
 ```bash
 python scripts/measure_extraction.py
 python scripts/measure_extraction.py --mutants
-tracker ingest crawl --stale-prompt --limit 20
+tracker ingest reread --cached-only --existing-only --limit 20
 ```
 
 `gaps` counts empty fields. This counts *full* ones, and asks the harder
@@ -428,7 +428,7 @@ That is a fact about *history*, not about any row, which is why no per-row check
 surfaced it: `tracker audit` asks whether a number could be true and `logic check`
 asks whether two fields agree, and each of those 89 values passed both.
 
-`--stale-prompt` is the re-read, and `source.extractor` is what makes it
+`tracker ingest reread` is the re-read, and `source.extractor` is what makes it
 possible: it has recorded which prompt produced every row since `0001` and
 nothing had ever compared it to the current stamp. It serves from the article
 cache by default, so it is a re-read rather than a re-fetch — the point is to
@@ -441,7 +441,7 @@ in English. A refused URL is never re-stamped, so it stays the oldest; taken fir
 refused after, the same 24 of the nightly 60 were wasted every night from 2026-10-11.
 
 **A change to the gate needs its own re-read**, because it does not change the prompt
-and so moves no stamp. `--refused-before-gate` takes the articles holding a value,
+and so moves no stamp. `tracker ingest recheck` takes the articles holding a value,
 milestone or party marked `quote_off_target` or `quote_unverified` before
 `crawl.GATE_REVISED_AT`, most refusals first, and drops each once any crawl has tried
 it since — so it is a backlog that empties, not a nightly rotation. `no_quote` is left
@@ -460,7 +460,7 @@ before; first in line, one night's 60 takes them all.
 **A URL the current prompt has read is not read again**, whatever the read produced.
 A re-read that wrote no citation used to re-stamp nothing and so stayed first in
 line; `ingest_url.read_by` (migration 0038) records the prompt of every read that
-reached the model or was refused by the reader, and `--stale-prompt` skips a URL
+reached the model or was refused by the reader, and `ingest reread` skips a URL
 whose `read_by` is the current stamp.
 
 **Pair it with `--cached-only`.** Serving from the cache "by default" only covers

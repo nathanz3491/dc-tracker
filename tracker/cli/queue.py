@@ -181,7 +181,7 @@ def queue(
                 "`tracker ingest crawl --url <URL>` still reads one[/dim]"
             )
         console.print(
-            "\n[dim]crawl them:  [/dim] tracker ingest crawl --from-queue\n"
+            "\n[dim]crawl them:  [/dim] tracker ingest queue\n"
             "[dim]drop one:    [/dim] tracker queue --drop --id <ID>\n"
             "[dim]drop a feed: [/dim] tracker queue --drop --feed <FEED>\n"
             "[dim]dead links:  [/dim] tracker queue check\n"
@@ -466,7 +466,7 @@ def queue_duplicates(
     """Queued articles that are another copy of a story already read or queued.
 
     The same page under another address, the same headline on two sites, a headline
-    a search engine cut short. `ingest crawl --from-queue` and `sync` set them aside
+    a search engine cut short. `ingest queue` and `sync` set them aside
     before reading the queue anyway; this does it on demand and shows what goes. Set
     aside is `skipped` with the address of the copy kept, not deleted, and a copy is
     put back when the one kept could not be read.
@@ -475,12 +475,7 @@ def queue_duplicates(
 
     engine = _writable("queue duplicates") if drop else _read_engine()
     with session_scope(engine, commit=drop) as session:
-        reopened = disc.reopened_names(session)
-        unreadable = disc.unreadable_test(
-            article_cache("articles"),
-            reopened=reopened,
-            refusing=disc.refusing_publishers(session, reopened=reopened),
-        )
+        unreadable, _ = disc.unreadable_now(session, article_cache("articles"))
         found, back = disc.drop_same_story(session, unreadable, apply=drop)
         pairs = [(row.url, kept) for row, kept in found]
 
@@ -514,7 +509,7 @@ def queue_aside(
     A PDF (the reader takes no text from one), a translated copy, a stock-quote or
     stock-chatter page, a job posting, a directory's ZIP-code page, a site that has
     refused every read; and from a builder's own archive, a post about a place abroad
-    or an old post naming nothing. `ingest crawl --from-queue` and `sync` set them
+    or an old post naming nothing. `ingest queue` and `sync` set them
     aside before reading the queue anyway; this does it on demand and shows what goes.
     Set aside is `skipped` with the reason, not deleted, and a page no rule names any
     more is put back on the next run.
@@ -592,7 +587,7 @@ def queue_screen(
     abroad: a cheap call reads fifty headlines at once, and a page it names is
     `skipped` with the kind, not deleted. `--measure` puts the headlines of pages
     already read through it first, and lists every read that found a campus it
-    would have set aside. `ingest crawl --from-queue --screen` does this before
+    would have set aside. `ingest queue --screen` does this before
     reading; the nightly loop passes it only with its own `--screen`.
     """
     from collections import Counter
@@ -743,7 +738,7 @@ def queue_unreadable(
     A closed publisher refuses every client this project is willing to be. A refusing
     one has refused the last `discover.REFUSING_AFTER` pages asked of it, on at least
     `discover.REFUSING_DAYS` days, after every rung of the fetch ladder, with none read
-    since; they are listed with that record. `ingest crawl --from-queue` and `sync`
+    since; they are listed with that record. `ingest queue` and `sync`
     discard such pages before reading the queue anyway; this does it on demand and
     shows what goes. Discarded is `skipped` with a reason that marks it, not deleted:
     when a closed publisher's weekly check answers again, or a page of a refusing one is
@@ -756,11 +751,7 @@ def queue_unreadable(
 
     engine = _writable("queue unreadable") if drop else _read_engine()
     with session_scope(engine, commit=drop) as session:
-        reopened = disc.reopened_names(session)
-        refusing = disc.refusing_publishers(session, reopened=reopened)
-        unreadable = disc.unreadable_test(
-            article_cache("articles"), reopened=reopened, refusing=refusing
-        )
+        unreadable, refusing = disc.unreadable_now(session, article_cache("articles"))
         found = [row.url for row in disc.pending(session) if unreadable(row.url)]
         removed = disc.discard_unreadable(session, unreadable, refusing=refusing) if drop else 0
     queued = Counter(disc.publisher_of(url) for url in found)
