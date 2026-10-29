@@ -1065,6 +1065,16 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A cancelled campus is no longer asked for an online date** (`tracker/gaps.py`
+  `for_project`, `measure`; `docs/design-decisions.md`, `docs/workflows/enrich.md`,
+  reader docs *Where a value came from*, en and zh; `tests/test_clean.py`,
+  `tests/test_enrich.py`). A campus that will not open has no date to publish, yet all
+  28 cancelled rows without one counted it as missing, the nightly research kept it on
+  its list of things to search for, and the console showed it as missing rather than
+  n/a. It is now not applicable, as built capacity is before anything is energized. A
+  paused campus is still asked, since it may resume. On a copy of production no row
+  reached T2 by this alone — every cancelled row still lacks another fact — so the
+  complete count does not move; what changes is what the night spends searches on.
 - **A database pull that fails part-way no longer leaves a copy of production behind on
   the host** (`scripts/sync_db.py` `pull`; `tests/test_sync_db.py`). The pull asks the
   host for a snapshot in its temp folder and copies it down; the snapshot was removed

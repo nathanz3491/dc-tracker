@@ -44,6 +44,7 @@ _RESTRICTED: Final[dict[str, tuple[str, str]]] = {
     "county": ("has_locality", "derivable from a known locality"),
     "lat": ("has_locality", "derivable from a known locality"),
     "lon": ("has_locality", "derivable from a known locality"),
+    "expected_online": ("not_cancelled", "a cancelled campus will not come online"),
 }
 
 #: Order the report in, chosen so the fields an operator can actually move sit
@@ -76,6 +77,8 @@ def _predicate(kind: str) -> ColumnElement[bool]:
         # and scoping to `city IS NOT NULL` would drop those rows from the
         # numerator while they sat in the "filled" column, understating coverage.
         return Project.city.is_not(None) | Project.county.is_not(None)
+    if kind == "not_cancelled":
+        return Project.phase.is_(None) | (Project.phase != "cancelled")
     raise ValueError(f"unknown applicability rule {kind!r}")
 
 
@@ -621,6 +624,19 @@ def for_project(project: Project, fields: tuple[str, ...] = REPORT_FIELDS) -> li
                     None,
                     NOT_APPLICABLE,
                     f"phase is {project.phase} — nothing is energized yet, so null is correct",
+                )
+            )
+            continue
+        # No date can exist for a campus that will not open. Asking for one counted
+        # against all 28 cancelled rows without a date on 2026-10-29, and kept the
+        # field on the list the nightly research searches for.
+        if name == "expected_online" and project.phase == "cancelled":
+            out.append(
+                FieldState(
+                    name,
+                    None,
+                    NOT_APPLICABLE,
+                    "phase is cancelled — the campus will not come online, so null is correct",
                 )
             )
             continue

@@ -12,7 +12,7 @@ Every value in the console carries a label saying who vouches for it. The label 
 | {{v:inferred|grid capacity}} | **inferred** | A model's judgement from the facts stored. Only ever used for likely obstacles and what to watch for — never for a number, a date or a company. |
 | {{v:defaulted|announced}} | **default** | Nobody said anything, and the field cannot be blank, so it shows the fallback. In practice: a phase of *announced* that no source stated. |
 | {{v:missing|—}} | **null** | Empty. Often the right answer — see [Why a field is empty](empty-fields). |
-| {{v:na|—}} | **n/a** | Empty, and it could not be anything else: running capacity on a campus where nothing is built yet. |
+| {{v:na|—}} | **n/a** | Empty, and it could not be anything else: running capacity on a campus where nothing is built yet, or an online date for a cancelled campus. |
 
 The styles differ in line as well as colour — none, dotted, dashed — so they can be told apart without colour.
 

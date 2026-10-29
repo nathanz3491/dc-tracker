@@ -64,7 +64,9 @@ definition. Before 2026-10-05 the loop chose the same near-T2 rows night after n
 and found nothing — 0 of 15 on 10-04 — because what they lacked was an investment
 figure or a built capacity nobody had printed. Such a field reopens as soon as the row
 gains a citation published on or after the day of the last search, and `tracker
-clean` still names it (`fields_published`).
+clean` still names it (`fields_published`). A field that cannot exist is never asked
+for at all (`gaps.for_project`): built capacity before anything is energized, and an
+online date for a cancelled campus.
 
 **An old article attached later does not reopen it.** The news watch reaches a year
 back on its first look at a campus, and until 2026-10-28 any citation the row gained
@@ -366,7 +368,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `ArchiveSweep`, `will_harvest`; `tracker/ingest/discover.py` — `RecentWalkFetcher`, `RememberingFetcher`, `walk_cache`, `WALK_FRESH`, `run` (the walk it keeps) |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `_NOT_BUILT_PHASES` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |

@@ -424,6 +424,11 @@ because the facts missing were ones nobody publishes:
   and the merge marks a row operational as soon as any source says any part is live,
   so a `construction` row has nothing energized and no figure anyone could print.
   Requiring one held 24 rows below T2.
+* **`expected_online` does not apply to a `cancelled` campus** (from 2026-10-29). A
+  campus that will not open has no online date to publish, yet all 28 cancelled rows
+  without one counted it as missing, and the nightly research kept it on its list.
+  None reached T2 by this alone — each lacked other facts too — so it changes what
+  is asked for, not the count. A `paused` campus is still asked: it may resume.
 * **A field searched twice with nothing published counts as answered**
   (`gaps.unpublished`, from the `tracker.attempts` ledger). It reopens the moment the
   row gains a citation published since the last search, so it records the evidence so

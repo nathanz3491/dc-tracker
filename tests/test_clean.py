@@ -174,6 +174,23 @@ def test_not_applicable_counts_as_complete(session):
     assert got.tier == 3
 
 
+def test_a_cancelled_campus_is_not_asked_for_an_online_date(session):
+    """A campus that will not open has no date to publish, so a null is correct; all
+    28 cancelled rows without one counted it as missing on 2026-10-29. A paused
+    campus may resume, so it is still asked."""
+    called_off = _project(
+        session, name="Called off", phase="cancelled", mw_built=None, expected_online=None
+    )
+    _source(session, called_off)
+    on_hold = _project(session, name="On hold", phase="paused", mw_built=None, expected_online=None)
+    _source(session, on_hold)
+
+    assert _card(session, called_off).by_key["fields_present"].ok is True
+    held = _card(session, on_hold).by_key["fields_present"]
+    assert held.ok is False
+    assert "expected_online" in held.detail
+
+
 def test_fields_that_are_usually_absent_are_not_counted_against_a_row(session):
     """`blocker` and `customer` are `gaps.UNMEASURABLE` — absence is usually the
     truth, so a null must not read as a backlog item."""

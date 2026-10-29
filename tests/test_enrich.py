@@ -495,6 +495,19 @@ def test_a_field_a_null_is_correct_for_is_not_counted_as_failure(session):
     assert attemptable == 11, "mw_built is excluded from the 12 while nothing is built"
 
 
+def test_a_cancelled_campus_is_not_searched_for_an_online_date(session):
+    """It will not open, so no date can be published, and a search for one is a
+    search for nothing."""
+    project = add_project(session, phase="cancelled")
+    report = run(session, project.id)
+
+    states = {s.field: s for s in report.after}
+    assert states["expected_online"].status == NOT_APPLICABLE
+    assert "will not come online" in states["expected_online"].reason
+    _, attemptable = report.tracked_score()
+    assert attemptable == 10, "neither built capacity nor an online date can exist"
+
+
 def test_mw_built_counts_once_the_site_is_operational(session):
     """Not at `construction`: a row any source calls live merges to operational, so
     one still building has nothing energized, and no figure anyone could print."""
