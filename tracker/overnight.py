@@ -518,7 +518,7 @@ def parser() -> argparse.ArgumentParser:
         "--judgement-effort",
         choices=EFFORTS,
         default=d.judgement_effort,
-        help="reasoning for risks, audit and settle (default high)",
+        help="reasoning for risks, audit, tranches and settle (default high)",
     )
     a(
         "--extraction-effort",

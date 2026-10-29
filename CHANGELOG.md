@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A paid pass now stops part way when the night's money runs out, instead of
+  finishing its whole batch first** (`tracker/spend.py` `ceiling_reached`;
+  `TRACKER_SPEND_CEILING_CNY`, `TRACKER_SPEND_CEILING_TOKENS`). Before, the ceiling
+  was checked only between passes, so one pass could overshoot by its whole batch.
+  Every paid pass, and the article reads, stop starting new work once the ledger
+  reaches the ceiling, keep what is done, print "spend ceiling reached" and exit 0.
+  Unset means no ceiling; the nightly loop sets both for every command it runs.
+- **`overnight.sh --agent-effort`** sets the reasoning effort of the agent loops
+  (duplicates, logic, enrich's agent pass) for one night, through
+  `TRACKER_DEEPSEEK_AGENT_EFFORT`. `--judgement-effort` and `--local-judgement` never
+  reached them, and their help now says which passes they do reach.
 - **One command lints here and runs the full test suite on the production host,
   without the tests being able to touch production** (`scripts/remote_suite.py`,
   `scripts/remote_suite.sh`, `tests/test_remote_suite.py`,
@@ -631,6 +642,58 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly loop's decisions are now tested Python** (`tracker/overnight.py`,
+  `tests/test_overnight.py`). The round loop, the stop rules, the ceilings, the
+  counts and the morning report had no test that ran them; each now has one, and
+  the log lines the public status page reads are constants that page imports, so
+  rewording one can no longer break the page silently. `scripts/overnight.sh` keeps
+  what must stay a shell process: the lock (the deployer recognises a running night
+  by a process named `overnight.sh`), `--status`, the wait for a deploy, the spend
+  ledger and the log. It passes a stop signal on, so a killed night is logged as
+  cut off. The order of the phases is unchanged.
+- **A crash or kill part way through a paid pass no longer throws away the answers
+  already paid for** (`tracker/judged.py`). The obstacle and tranche passes held
+  one transaction across 20-40 model calls, so a failure lost every answer and every
+  record of what had been asked, and the next night paid again; they also kept the
+  database locked the whole time. All six paid passes (duplicates, audit, risks,
+  logic, tranches, enrich's settle and agent steps) now run through one shared loop
+  that saves after each item, rolls back only the item that failed and carries on.
+- **The paid passes ask several questions at once**, never two about the same row,
+  so a night's model work finishes sooner for the same spend. With one worker (the
+  local model, and the tests) it is the old one-at-a-time loop exactly.
+- **A failed model call is held back for the rest of the night in every pass.** Four
+  passes asked again at once, and two held an unusable reply for a month.
+- **A contradiction the agent cannot settle stays open, asked again when its evidence
+  changes or after a month.** It was written into the row as settled, which hid it
+  for good, even after an article that settles it arrived. Rulings are still
+  recorded on the row; existing notes are untouched. The night's open-findings count
+  therefore no longer falls when the agent gives up on one.
+- **An obstacle with no article to read is not re-asked every round**; it is asked
+  again when the article arrives. The obstacle pass also stopped loading every
+  citation and reading every candidate's article to choose its batch.
+- **`tracker ingest crawl` is four commands, one per way of choosing what to read.**
+  `ingest crawl --urls/--url` reads links you name; `ingest queue` reads what
+  `discover` queued (was `--from-queue`); `ingest reread` re-reads what an older
+  prompt extracted (was `--stale-prompt`); `ingest recheck` re-reads what the gate
+  refused before its revision (was `--refused-before-gate`). Each takes only its own
+  flags, where before another job's flags were accepted and silently ignored. The
+  old spellings stop with exit 2 and name the command to run. What is chosen, in
+  what order, and what is written are unchanged.
+- **`sync` and the nightly queue read tidy the queue with one function**
+  (`discover.prepare_queue`), committed before the queue is read, so a rule changed
+  for one can no longer miss the other.
+- **The free steps of each nightly round take about half the time** (on production's
+  copy: a whole-table `backfill derive` 27 s to 17 s, `clean --snapshot` 21 s to 9 s,
+  the round's three counts 22 s to 9 s; one round's free work about 150 s to 85 s).
+  The database each step leaves and everything it prints are unchanged, checked by a
+  full-table dump. Rows are read once per sweep instead of once per pass, each
+  source's claims are parsed once instead of once per field, and company and fact
+  lookups no longer repeat. The loop takes its counts from `quality.night_counts`,
+  which loads the rows once for all three.
+- **The first round places new rows on the map once instead of twice**, and the
+  night's snapshot is verified and taken by the same code as `scripts/sync_db.py`
+  (`tracker/db.py` `take_snapshot`). The counts and the snapshot read the configured
+  database rather than always `data/tracker.db`.
 - **Every model call is recorded, the console's and hand-run commands' included, and
   the month's share counts them** (`tracker/cli/_shared.py` `_daytime_ledger`;
   `tracker/spend.py` `monthly_budget`; README; `scripts/overnight.sh`;
@@ -1083,6 +1146,11 @@ initial build of the v1 PRD.
   "construction" report over a directory's "operational", some plausibly wrongly.
   Exports carry the flag per claim (schema `tracker/8`) and the console marks such
   a claim "directory".
+
+### Removed
+
+- `scripts/settle.sh` and `scripts/resolve.sh`, earlier versions of the nightly loop
+  that nothing called.
 
 ### Fixed
 
