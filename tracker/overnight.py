@@ -220,6 +220,7 @@ import argparse
 import datetime as dt
 import os
 import re
+import signal
 import subprocess
 import sys
 import traceback
@@ -1277,7 +1278,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     options = parse_options(args[1:])  # exits 2 on a bad option, 0 after --help
     if args[0] == "check":
         return 0
-    return build(options, sys.stdout.buffer).main()
+    night = build(options, sys.stdout.buffer)
+    # The shell passes on a signal it is sent (see `run_night` in overnight.sh). As an
+    # exception it unwinds through the running phase's `subprocess.run`, which kills
+    # that phase, and past the loop's own error handling: a stopped night is cut off,
+    # and the log must not say it completed.
+    signal.signal(signal.SIGTERM, _stopped)
+    try:
+        return night.main()
+    except Stopped as stop:
+        night.log.say(f"stopped by signal {stop.signum} — the rest of the night is cut off")
+        return 128 + stop.signum
+
+
+class Stopped(BaseException):
+    """A signal asked the night to stop. Not an `Exception`: nothing may swallow it."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _stopped(signum: int, _frame) -> None:
+    raise Stopped(signum)
 
 
 if __name__ == "__main__":

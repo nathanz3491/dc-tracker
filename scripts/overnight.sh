@@ -188,7 +188,23 @@ wait_for_deploy
 
 # The night. A child, not `exec` — see THE LOCK above. Its own stdin is /dev/null and
 # so is every phase's: nothing in the night may wait on a keyboard.
-status=0
-OVERNIGHT_PID=$$ "$PY" -m tracker.overnight run --repo "$REPO" --allowance "$ALLOWANCE" "$@" \
-  < /dev/null || status=$?
-exit "$status"
+#
+# In the background with `wait`, so a signal to this script — launchd stopping the
+# job, a `kill` on the lock's pid — is passed on to the loop, which stops the phase it
+# is in and exits. Run in the foreground, bash would hold the signal until its child
+# finished, which is now the whole night. A trapped signal interrupts `wait`, so it
+# waits again until the loop has actually gone, and only then exits and drops the lock.
+run_night() {
+  local night status=0
+  OVERNIGHT_PID=$$ "$PY" -m tracker.overnight run --repo "$REPO" --allowance "$ALLOWANCE" "$@" \
+    < /dev/null &
+  night=$!
+  trap 'kill -TERM "$night" 2>/dev/null || true' TERM INT HUP
+  wait "$night" || status=$?
+  while kill -0 "$night" 2>/dev/null; do
+    wait "$night" || status=$?
+  done
+  return "$status"
+}
+
+run_night "$@" || exit $?

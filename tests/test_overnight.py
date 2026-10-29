@@ -956,6 +956,54 @@ def test_the_status_page_reads_a_night_that_was_cut_off(tmp_path):
     assert night.minutes is not None and night.minutes > 0
 
 
+def test_a_signal_stops_the_night_without_calling_it_complete(tmp_path):
+    """A stop asked for by a signal is not a bug in the loop: it must get past the
+    loop's own error handling, which would otherwise carry on to the report."""
+
+    def stopped(call):
+        if call[0] == "audit":
+            overnight._stopped(15, None)
+        return 0
+
+    run = make(tmp_path, ["--discover", "0"], hook=stopped)
+    with pytest.raises(overnight.Stopped) as caught:
+        go(run)
+    assert caught.value.signum == 15
+    assert ("risks", "confirm", "--limit", "40") not in run.stub.calls
+    assert "overnight complete" not in run.text
+
+
+@needs_bash
+def test_a_signal_to_the_shell_reaches_the_loop(tmp_path):
+    """Run in the foreground, the loop would make bash hold a `kill` until the whole
+    night had finished. The shell passes it on and waits for the loop to go."""
+    stub = tmp_path / "loop.sh"
+    stub.write_text(
+        "trap 'echo \"loop got TERM\"; exit 143' TERM\n"
+        "echo started\n"
+        "for i in $(seq 1 300); do sleep 0.1; done\n"
+        "echo 'ran to the end'\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    script = (
+        "set -euo pipefail\nREPO=.\nALLOWANCE=\n"
+        "PY=./loop-py\n"
+        # `"$PY" -m tracker.overnight run …` runs the stub whatever it is given.
+        "printf '#!/usr/bin/env bash\\nexec bash ./loop.sh\\n' > loop-py\nchmod +x loop-py\n"
+        + _function("run_night")
+        + "( sleep 1; kill -TERM $$ ) &\n"
+        + 'run_night --hours 1 || { status=$?; echo "night ended $status"; exit $status; }\n'
+        + "echo 'night ended 0'\n"
+    )
+    done = subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+    lines = done.stdout.splitlines()
+    assert lines == ["started", "loop got TERM", "night ended 143"], done.stderr
+    assert done.returncode == 143
+
+
 def test_the_line_shapes_are_the_shells(tmp_path):
     run = go(make(tmp_path, ["--rounds", "1", "--discover", "0"]))
     text = run.text
