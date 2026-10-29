@@ -168,26 +168,20 @@ operators we have no rows for, `--enrich` for rows that are thin — are the two
 can spend without a ceiling in sight. See [Ingesting](docs/ingesting.md).
 
 `sync`'s own `settle` phase only recomputes — `derive` plus a confidence rescore.
-Everything that *settles an open question* is a separate command, and
-[`scripts/settle.sh`](scripts/settle.sh) is the one that runs them in dependency
-order: dates before derive (a merge tiebreak falls back to crawl order without
-them), geo before duplicates (a merge rail needs coordinates to fire at all), and
-the one step that deletes rows last, behind a `VACUUM INTO` snapshot. Free by
-default; `--llm` adds the model-decided phases, `--merge` adds the folding. It ends
-with `tracker clean --snapshot --since 1`, so consecutive runs are comparable.
+Everything that *settles an open question* is a separate command, and the nightly
+loop is what runs them in dependency order: dates before derive (a merge tiebreak
+falls back to crawl order without them), geo before duplicates (a merge rail needs
+coordinates to fire at all), and the one step that deletes rows behind a verified
+`VACUUM INTO` snapshot. Each round ends with `tracker clean --snapshot --since 1`, so
+consecutive rounds and nights are comparable.
 
-```bash
-scripts/settle.sh                  # free: dates, geo, derive, logic --auto
-scripts/settle.sh --llm            # and risks, audit, logic --llm
-scripts/settle.sh --merge          # and fold suspected duplicates
-scripts/settle.sh --merge --dry-run
-scripts/settle.sh --refetch-dates  # and ask publishers for the missing dates
-```
-
-[`scripts/resolve.sh`](scripts/resolve.sh) is the narrow version — logic and
-duplicates only, with a confirmation before anything is folded.
-[`scripts/overnight.sh`](scripts/overnight.sh) is the wide one: it loops both
-until two consecutive rounds fail to reduce either count, because neither is a
+[`scripts/overnight.sh`](scripts/overnight.sh) starts it, and
+[`tracker/overnight.py`](tracker/overnight.py) is the loop itself — the phases,
+their order and the argument for it, the ceilings and the stop rules, tested with a
+stub in place of each command. The shell keeps only what the deployer has to see (the
+lock, whose pid must be a process named `overnight.sh`), `--status`, the wait for a
+deploy already running, the night's spend ledger and the log. It loops
+until two consecutive rounds fail to reduce any count, because neither backlog is a
 queue that drains — ruling a claim out re-derives a row and can raise a finding
 the old value hid, and merging changes the survivor's claim set and can match a
 third row. Ceilings on hours, rounds, **yuan** and tokens, a `VACUUM INTO` snapshot
@@ -201,7 +195,10 @@ last 29 days spent over their share; unspent money is not carried over. `--cny N
 checked before every paid phase and counts every paid model call: each one
 appends a line to the night's spend ledger (`TRACKER_SPEND_LEDGER`, which the script
 sets), `tracker/spend.py` prices it at the published rate for the hour it was made,
-and the morning report breaks the total down by command and stage. A token ceiling
+and the morning report breaks the total down by command and stage. The ceiling also
+goes to every command the night runs (`TRACKER_SPEND_CEILING_CNY`,
+`TRACKER_SPEND_CEILING_TOKENS`), so a paid pass can stop where the ledger reaches it
+rather than at the end of the pass. A token ceiling
 could not do this job: nine tokens in ten are cached prompt at a fiftieth of the
 price, and 93% of the money is the reply, so 25M tokens was anything from ¥20 to ¥31.
 Web searches are another bill — prepaid Serper credit, about ¥0.007 each — bounded by
@@ -221,7 +218,8 @@ caffeinate -i scripts/overnight.sh --hours 10
 ```
 
 `scripts/overnight.sh --status` prints where a running one has got to, from any
-other shell. Each round runs the free phases, then `audit` (a T1 gate, and cheap),
+other shell, and `scripts/overnight.sh --help` lists every option (the same as
+`python -m tracker.overnight run --help`). Each round runs the free phases, then `audit` (a T1 gate, and cheap),
 `risks`, the logic and duplicate agents, and — in the first round only
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
@@ -231,7 +229,7 @@ and 120 articles), largest first: without a date a campus is missing from the
 supply chart and can never be flagged as late.
 The first round also reads the news and adds campuses (`--discover`, default 900): it
 polls the feeds, which costs nothing, and reads that many queued articles through
-the crawl's identity check (`ingest crawl --from-queue --new-first`). A model reads
+the crawl's identity check (`ingest queue --new-first`). A model reads
 their headlines first and sets aside the pages about a place abroad (`--no-screen` to
 skip it): measured on past reads, the one kind that loses next to no campus. Pages on a
 publisher that has refused every read lately — its last four pages tried, on two days or
@@ -276,7 +274,8 @@ month passes (`tracker/declines.py`; `--again` on each command asks anyway). The
 enrich agent's fields nobody has published are the same idea, kept in the row's
 notes by `tracker/attempts.py`.
 
-`--refetch-dates` is separate because it is the one free phase that is not cheap —
+Asking publishers for dates (`tracker backfill dates --refetch`) is the one free phase
+that is not cheap —
 60 publication dates are readable straight out of the URL path and 965 need one
 HTTP request each — and **measured on the live database it is not worth running**:
 a 150-page tranche fetched 150 and wrote **0** dates, because 145 of those pages
@@ -289,20 +288,8 @@ tiebreak still ranks on `fetched_at`, deliberately, until `logic conflicts` has 
 and been measured. And refetching does **not** warm the article cache: only the
 crawl path writes it.
 
-[`scripts/resolve.sh`](scripts/resolve.sh) is the narrow companion, for the two
-report families where the question is "which of these two claims is right" and the
-answer costs an LLM call: logic collisions and suspected duplicates. It prints what
-is open before spending anything, and asks once before folding duplicates — the one
-step no re-crawl recovers — behind a `VACUUM INTO` snapshot it takes regardless.
-
-```bash
-scripts/resolve.sh --no-merge      # decide and park; deletes nothing
-scripts/resolve.sh                 # and fold, after one confirmation
-scripts/resolve.sh --yes --limit 200
-```
-
-Both scripts are resumable: every phase skips findings already answered on their
-row, so running one again works the backlog down rather than re-asking. Expect
+The loop is resumable: every phase skips findings already answered on their row, so
+running it again works the backlog down rather than re-asking. Expect
 roughly a quarter of suspected duplicate groups to fold and the rest to be parked
 or left — of the 47 measured, 28 are city-vs-county and 8 are name-overlap, and
 `dupresolve.merge_blocked` refuses both unattended by design.

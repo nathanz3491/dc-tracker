@@ -752,10 +752,10 @@ one number.
 **It runs no commands.** The Commands and Runs views went with the runner (see
 above), and later so did the six routines — named sequences such as `sync` →
 `ingest geo` → `logic check`, run as one job — whose module had outlived its only
-caller and was reachable from nothing but its own tests. The sequences that matter
-are scripts now, each stating why its order is what it is:
-[`scripts/settle.sh`](../scripts/settle.sh), [`resolve.sh`](../scripts/resolve.sh)
-and [`overnight.sh`](../scripts/overnight.sh). Single commands run from
+caller and was reachable from nothing but its own tests. The sequence that matters
+is the nightly loop, which states why its order is what it is:
+[`tracker/overnight.py`](../tracker/overnight.py), started by
+[`scripts/overnight.sh`](../scripts/overnight.sh). Single commands run from
 `tracker tui`.
 
 **The AI overview** on each project page is the one thing in the console that
