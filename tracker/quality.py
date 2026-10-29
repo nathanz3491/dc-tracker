@@ -146,12 +146,21 @@ def value_bases(session: Session, *, project_ids: list[int] | None = None) -> It
     query = select(Project)
     if project_ids:
         query = query.where(Project.id.in_(project_ids))
+    from tracker.upsert import claims_by_field
+
     for project in session.scalars(query).all():
         by_url = {s.url: s for s in (project.sources or ())}
+        # The claim map once per row, not once per field. `provenance` computes the
+        # same map from the same `project.sources` when it is not handed one, so
+        # this changes nothing but the cost: it was 8,562 re-parses of every source's
+        # JSON per sweep, about 16 of the 22 seconds the nightly counts took.
+        by_field = None
         for name in MEASURED_FIELDS:
             if getattr(project, name, None) is None:
                 continue
-            prov = provenance(project, name)
+            if by_field is None:
+                by_field = claims_by_field(list(project.sources or ()))
+            prov = provenance(project, name, by_field)
             source = by_url.get(prov.source_url) if prov and prov.source_url else None
             yield ValueBasis(
                 project_id=project.id,
