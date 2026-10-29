@@ -428,7 +428,7 @@ def enrich() -> Canvas:
     c.arrow([settle.right(), (554, 758)], colour=TEAL, label="resolved", label_dy=-6)
     c.box(
         286, 838, 208, 62, "refused",
-        ["remembered against the claims it saw;", "asked again only when they change"],
+        ["remembered against the claims it saw;", "a failed call, for the night only"],
         role="red", title_size=11.5,
     )
     c.arrow([settle.bottom(), (settle.cx, 838)], colour=RED)
@@ -693,7 +693,7 @@ def duplicates() -> Canvas:
     same = c.box(320, 706, 190, 58, "same site", ["merges — behind --merge"], role="red", title_size=12.5)
     unclear = c.box(
         320, 782, 190, 100, "unclear",
-        ["stays in the report; capex", "keeps one row out of the", "total. Not asked again until", "either row's evidence changes"],
+        ["stays in the report, out of", "the capex total; asked again", "when either row's evidence", "changes. A failed run: tomorrow"],
         role="cool", title_size=12.5,
     )
     c.arrow([who.right(-40), (297, 700), (297, diff.cy), (320, diff.cy)], colour=TEAL)
@@ -843,7 +843,7 @@ def logic() -> Canvas:
     )
     c.box(
         736, 792, 380, 204, "logic resolve · settles what it can, then asks",
-        ["1  drift repair, free. A row whose stored value its own sources no", "   longer support: re-running the declared policy is arithmetic, not", "   an opinion. The only mechanical fix in the whole report.", "", "2  answered by comparison, free. A read of data already stored,", "   never a judgement between two sourced figures. Five codes clear", "   that bar; three were 448 of 536 resolvable findings.", "", "3  what is left goes to the agent (default), the older fixed menu", "   (--llm), or to you at the keyboard. --auto stops after step 2,", "   for scripts and for the console, which has no keyboard.", "", "A finding already answered on its row is not offered again. A ruling", "counts only if it moves the row's value: one naming a citation of some", "other figure is refused, and an X -> X is reported apart and reopens."],
+        ["1  drift repair, free. A row whose stored value its own sources no", "   longer support: re-running the declared policy is arithmetic, not", "   an opinion. The only mechanical fix in the whole report.", "", "2  answered by comparison, free. A read of data already stored,", "   never a judgement between two sourced figures. Five codes clear", "   that bar; three were 448 of 536 resolvable findings.", "", "3  what is left goes to the agent (default), the older fixed menu", "   (--llm), or to you at the keyboard. --auto stops after step 2,", "   for scripts and for the console, which has no keyboard.", "", "A finding answered on its row is not offered again; one the agent", "could not settle waits until its citations change. A ruling must move", "the row's value: X -> X is reported apart, and reopens."],
         role="orange", title_size=13, align="left", sub_size=10.2,
     )
     c.box(

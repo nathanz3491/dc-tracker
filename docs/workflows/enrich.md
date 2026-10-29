@@ -261,7 +261,11 @@ per field), deliberately not the extractor that read the articles. It writes, un
 **Each answer is committed as it is applied.** `sync` hands the same session to the
 agent pass, which rolls back on its first error, so an answer left flushed was paid
 for and then lost: on a copy of production one row went from 36 superseded marks to
-39 and back to 36.
+39 and back to 36. The stage runs through the shared runner (`tracker.judged.run`,
+the loop every paid pass uses), so a dispute whose write raises is rolled back and the
+rest go on, and the night's money (`spend.ceiling_reached`) is asked about before each
+dispute. One project's disputes are asked one at a time: they all name that project,
+and the runner never puts two questions about one row in a wave.
 
 A settled field needs no bookkeeping to avoid re-asking. Applying an answer marks the
 losing claims `superseded`, which demotes them out of `confirmed`, and a dispute needs
@@ -272,8 +276,10 @@ writes nothing to the row, so it used to be re-asked on every run — and the ov
 loop re-selected the same rows each round and paid again for every refusal they
 carried. It is keyed on a hash of the claims the model was shown, so a new claim, a
 superseded one, or a re-read that changes a quote is a different question and is
-asked; so is anything after the thirty-day cooldown. An unusable reply is remembered
-the same way; a provider failure is not.
+asked; so is anything after the thirty-day cooldown. A failed look — the request
+failed, or the reply was unusable — is held for the night only (`declines.ERROR`).
+Until 2026-10-29 an unusable reply was held for a month as though the model had
+refused, and a failed request not at all, so the next round paid for it again.
 
 `LLMUnavailable` here is caught and reported as a skip rather than raised. The
 harvest is already written, and losing it because the judgement tier has no key
@@ -281,8 +287,20 @@ would throw away every article the run paid to read.
 
 ## The agent pass
 
-`--agent` (on by default) runs `gapfill.fill` per project **after** the harvest
-rounds, committed per project so a provider failure on row 20 keeps the first 19.
+`--agent` (on by default) runs the agent per project **after** the harvest rounds
+(`gapfill.fill_rows`, through the shared runner `tracker.judged.run`), committed per
+project so a provider failure on row 20 keeps the first 19, and a row whose write
+raises is rolled back while the rest go on. The runs overlap — up to
+`TRACKER_LLM_CONCURRENCY` rows at once, one for a local model — each reading through a
+session of its own, since its evidence tools only read (`gapfill.investigate`); what
+it found is stored on the main thread, in input order (`gapfill.conclude`).
+`--token-budget` bounds how many rows a wave starts, at what a row has cost so far.
+The night's money is asked about before each wave and before each project of the
+harvest (`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`); once it is spent the
+command starts nothing more, keeps what it did, and prints `spend ceiling reached`. A
+failed run is rolled back and asked again next round — it is not held for the night
+the way the other passes' failures are, because the decline store has no kind for this
+pass.
 It is the expensive rung — roughly 77,000 tokens a row against a few hundred for a
 query template — so it is pointed only at the residue the templates could not
 reach. Rows with nothing left to fill return before making a call. Refusals are
@@ -373,8 +391,9 @@ Touching any of these means the poster is in scope. Re-render with
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
 | Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
-| Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)`, its landed/unlanded check and the fields it returns per row; `tracker/gapfill.py` — `apply_facts`, `_fact_axes`, `Filled.missed`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
+| Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py`; `tracker/judged.py` — `run` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)` and the fields it returns per row; `tracker/gapfill.py` — `fill_rows` (its landed/unlanded check, `room`), `question`, `investigate`, `conclude`, `apply_facts`, `_fact_axes`, `Filled.missed`, `TYPICAL_ROW_TOKENS`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
+| The money ceiling, between projects and between waves | `tracker/spend.py` — `ceiling_reached`; `tracker/ingest/enrich.py` — `run_many`, `BatchReport.ceiling`; `tracker/judged.py` — `run` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
 | Not asking twice | `tracker/attempts.py` — `exhausted`, `published_since`, `record`, `evidence_count` |

@@ -401,7 +401,7 @@ asked the same question and got the same answer. QTS Richmond 5 was ruled six ti
 one night, "mw_planned 1434 -> 1434 (nothing left to rule against)", because its figure
 came from tranches no citation ruling reaches. Both `logic resolve` and `audit
 resolve` now record such a ruling in `model_decline` against the evidence it was shown
-(`cli.quality._held_back_as`): held for the rest of the night like any look, and after
+(`audit.held_back_as`): held for the rest of the night like any look, and after
 that only while the evidence is the same — a ruling that did strike a claim changed it.
 
 ### A ruling has to be readable back as an answer
@@ -457,19 +457,45 @@ does.
 * Its edits are recorded as `agent` or `model resolved`, never `operator resolved`,
   so a reader six months later can tell that nobody looked.
 
-Each finding is committed individually, so a provider failure on row 40 keeps the
-first 39, and a database error while *applying* a ruling rolls back that finding
-rather than ending the batch — an `IntegrityError` on `phase` once killed the logic
-phase of three overnight rounds out of five after a single bad finding.
+**The agent pass runs through the shared runner** (`tracker.judged.run`, the same loop
+every paid pass uses). Each finding is committed as it lands, so a run stopped after
+row 40 keeps the first 39, and a database error while *applying* a ruling rolls back
+that finding rather than ending the batch — an `IntegrityError` on `phase` once killed
+the logic phase of three overnight rounds out of five after a single bad finding.
+Before each wave it asks whether the night's money is spent
+(`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`); once it is, it starts nothing
+more, keeps what is done and prints `spend ceiling reached`.
 
-A ruling the rails refuse (`unusable`) is recorded in `model_decline` with a hash of
-the finding and the row's citations, and held back until one of them changes or the
-cooldown lapses — but never asked twice in one night (`declines.TONIGHT_HOURS`),
-however the citations moved in between; `--again` asks anyway. An obstacle check
-whose call failed outright is held for the night too (`declines.ERROR`), and asked
-again the next: on 10-19 one came back empty four times in one night. `left alone` has always been recorded, in the
-row's notes; `unusable` was not, and on the first overnight run it was 8 and then 12
-of each round's 40 findings, re-paid every round at the full agent price.
+**The runs overlap.** With `TRACKER_LLM_CONCURRENCY` workers (1 for a local model),
+a wave of findings — never two about the same row — is prepared in order, its agent
+runs go out together, and the answers are applied and committed one by one in input
+order before the next wave is prepared. So every finding's question is built after
+every earlier finding about its row was applied, as in a serial run. The agent's
+evidence tools read the database while it works and only ever read, so with more
+than one worker each run reads through a session of its own (`triage.investigate`);
+the writes stay on the main thread (`triage.conclude`).
+
+**What is kept where — a decision in the row, an inability to decide in
+`model_decline`.** A ruling is written into the row's notes (`record_decision`), where
+`settled_codes` reads it as answered while the edit holds. Everything undecided is
+recorded in `model_decline` with a hash of the finding and the row's citations, and
+held back until one of them changes or the cooldown lapses — but never asked twice in
+one night (`declines.TONIGHT_HOURS`), however the citations moved in between;
+`--again` asks anyway:
+
+* `left alone` — the agent's own "the evidence I read does not settle this". Until
+  2026-10-29 this was written into the row's notes, which `settled_codes` reads as
+  answered, so a finding the agent could not settle stayed hidden for good — even after
+  the article that settles it arrived. That is the inability to decide that a pair
+  left alone has always been held as, and it is held the same way now. Notes written
+  before stay as they are.
+* `ran out of steps` — the run stopped or exhausted its turns without answering; it
+  too used to be written into the notes as `left alone`.
+* `unusable` — a ruling the rails refused. On the first overnight run it was 8 and
+  then 12 of each round's 40 findings, re-paid every round at the full agent price.
+* `ruling changed nothing` — see above.
+* `error` (`declines.ERROR`) — the run never reached an answer: held for the night
+  only, and asked again the next. It used to be asked again in the very next round.
 
 The drift repairs and the free answers are committed before the first model call.
 They used to share the agent loop's transaction, so the first refused or failed
@@ -531,7 +557,8 @@ Touching any of these means the poster is in scope. Re-render with
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `_drop_restated_delays`, `_clear_built`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news`; `tracker/delays.py` — `restates`, `period_end` |
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
-| The agent path | `tracker/triage.py` — `triage`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
+| The agent path | `tracker/triage.py` — `triage_findings`, `triage`, `investigate`, `conclude`, `finding_question`, `finding_subject`, `finding_evidence`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
+| One loop for every paid pass: per-item commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |

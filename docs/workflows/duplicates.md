@@ -200,15 +200,32 @@ fresh questions. It comes back when either row's evidence changes or after
 `declines.COOLDOWN_DAYS`; `--again` asks anyway. **Within one night it holds
 whatever changed** (`declines.TONIGHT_HOURS`, 20 hours): rows gain citations all
 evening — the Census lookup, a re-read — so on 2026-10-19 the hash moved between
-rounds and Stargate Abilene's pair with its "Phase 2" twin was paid for three times. Two outcomes are deliberately not
-recorded: a provider failure, and "the same site, but merging needs `--merge`" — a run
-with `--merge` must still reach that pair. Nothing was recorded before, and with 31
-eligible pairs against a per-round limit of 25 every overnight round re-paid for
-nearly the whole set at ~45,000-260,000 tokens a pair.
+rounds and Stargate Abilene's pair with its "Phase 2" twin was paid for three times. One
+outcome is deliberately not recorded: "the same site, but merging needs `--merge`" — a
+run with `--merge` must still reach that pair. A run that never reached an answer (a
+provider failure) is recorded as `declines.ERROR` and held for the night only: it says
+nothing about the pair, but asking again in the next round would pay to fail the same
+way. Until 2026-10-29 it was not recorded at all. Nothing was recorded before
+`declines`, and with 31 eligible pairs against a per-round limit of 25 every overnight
+round re-paid for nearly the whole set at ~45,000-260,000 tokens a pair.
 
-A real run commits after every pair. It used to be one transaction for the whole run,
-which held SQLite's write lock across every agent call — minutes at a time — while a
-console sign-in waited five seconds and failed.
+**The pass runs through the shared runner** (`tracker.judged.run`, the loop every paid
+pass uses). A real run commits after every pair. It used to be one transaction for the
+whole run, which held SQLite's write lock across every agent call — minutes at a time —
+while a console sign-in waited five seconds and failed. A pair whose write raises is
+rolled back and the run goes on, and the night's money is asked about before each wave
+of pairs (`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`): once spent, nothing new
+starts, everything done is kept, and the command prints `spend ceiling reached`.
+
+**The agent runs overlap** — up to `TRACKER_LLM_CONCURRENCY` at once, one for a local
+model — in waves that never hold two pairs naming one row. A wave is formed only after
+the previous one's merges are committed, and each pair's rows are read through the
+run's `folded` map, so a pair whose row an earlier pair merged away waits for that merge
+and is then asked about the row that holds it. The judge's evidence tools only read, so
+each concurrent run reads through a session of its own (`triage.pair_investigate`);
+the rails, the park and the merge stay on the main thread (`triage.pair_conclude`). A
+`--dry-run` asks one pair at a time, because a session of its own could not see the dry
+run's uncommitted merges.
 
 ### What `--merge` still refuses
 
@@ -448,9 +465,10 @@ Touching any of these means the poster is in scope. Re-render with
 | The one-call path | `tracker/dupresolve.py` — `resolve`, `resolve_one`, `survivor`, `ask_model`, `pair_label`, `_checked` |
 | Scoring a change to any of it | `scripts/eval_pairs.py`; `docs/duplicate-shapes.md` |
 | The question all three judges are asked | `tracker/triage.py` — `CONTRADICTIONS`, `PAIR_SYSTEM`, `PAIR_SYSTEM_BASE`; `tracker/prompts/duplicates-resolve-v3.txt` |
-| The agent path | `tracker/triage.py` — `resolve_pairs`, `pair_triage`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
+| The agent path | `tracker/triage.py` — `settle_pairs`, `resolve_pairs`, `pair_triage`, `pair_prepare`, `pair_investigate`, `pair_conclude`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
+| One loop for every paid pass: per-pair commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/spend.py` — `ceiling_reached`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`; `tracker/llm.py` — `without_thinking` |
-| Not asking the same pair twice | `tracker/declines.py` — `split`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
+| Not asking the same pair twice | `tracker/declines.py` — `split`, `pick`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
 | The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | One row, several campuses | `tracker/mixed.py` — `mixed_rows`, `_Lexicon.build`, `_Row.read`, `_Row.words`, `_group`, `_names_the_other`, `_disagree`, `_stated`, `_ruled_out`, `_carries_anything`, `_NOT_A_SITE`, `_LANDFORMS`, `_CODE`, `_CODENAME`, `_LANDMARK`, `BRAND_KM`; `scripts/overnight.sh` — the morning report |
