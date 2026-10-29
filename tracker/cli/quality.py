@@ -2253,6 +2253,63 @@ def changes(
 
 
 @app.command()
+def losses(
+    against: Annotated[
+        Path,
+        typer.Option(
+            "--against",
+            help="A copy of the database from before the run — the snapshot the nightly "
+            "loop takes before round 1.",
+        ),
+    ],
+    restore: Annotated[
+        bool,
+        typer.Option(
+            "--restore",
+            help="Put back each claim a reading dropped with no ruling while the article "
+            "still says it, and re-derive its row. Without it, only report.",
+        ),
+    ] = False,
+) -> None:
+    """Values emptied since a snapshot with nothing deciding it, and put back.
+
+    A value a ruling cleared is a decision and is left alone (`changes` lists it). A
+    value whose citation simply stopped claiming it — a re-read that did not repeat
+    the field — is put back with its sentence when the stored copy of the article
+    still contains that sentence; the row is then re-derived, so the merge decides
+    the figure as on every write. The nightly loop runs this once, after its rounds.
+    """
+    from tracker import losses as losses_mod
+    from tracker.ingest.fetch import cache_path
+
+    if not against.is_file():
+        _fail(f"no snapshot at {against}")
+        return
+    root = article_cache("articles")
+
+    def article(url: str) -> str | None:
+        path = cache_path(url, root)
+        return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else None
+
+    engine = _writable("losses --restore") if restore else _read_engine()
+    with session_scope(engine, commit=restore) as session:
+        found, todo = losses_mod.find(against, session, article=article)
+        if restore:
+            losses_mod.restore(session, todo)
+        if json_mode():
+            emit(
+                {
+                    "losses": [vars(loss) for loss in found.losses],
+                    "decided": found.decided,
+                    "removed": found.removed,
+                }
+            )
+            return
+        for line in losses_mod.render(found, restored=restore):
+            console.print(escape(line), soft_wrap=True)
+
+
+@app.command()
 def clean(
     project_id: Annotated[
         int | None,

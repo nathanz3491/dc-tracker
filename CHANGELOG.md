@@ -12,6 +12,36 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A re-read no longer deletes a value it simply did not repeat, and the nightly
+  loop puts back any value lost without a ruling** (`tracker/upsert.py`
+  `omitted_quietly`, `reinstate`, `upsert_record(quote_holds=)`;
+  `tracker/ingest/crawl.py` `still_states`; `tracker/losses.py`; `tracker losses`;
+  `tracker/overnight.py` `Night.restore_losses`; `docs/data-quality.md`,
+  `docs/workflows/sync.md`; `tests/test_reread_keeps_evidence.py`,
+  `tests/test_losses.py`).
+  - **Why:** between 10-18 and 10-28, 161 stored values went from set to empty.
+    A ruling cleared 75 of them, and those are decisions. The other 81 vanished
+    because a second reading of the same article left the field out, and the
+    re-read replaced the whole citation. In 42 of them the lost sentence states the
+    value outright, and in 33 the article was re-read under the same prompt, so the
+    model simply answered differently. 48 of those values were still empty on
+    10-29, and each one dropped its row out of complete.
+  - **In the write:** when a re-read does not claim a field at all, the earlier
+    reading's quoted claim is kept, with its sentence, its qualifiers and any ruling
+    on it, as long as the article just read still contains that sentence. An article
+    edited to drop the sentence still withdraws it. A field the new reading does
+    claim, even unconfirmed, stays the new reading's answer, so a stricter gate is
+    never undone. The row's notes say what was kept.
+  - **After the night:** `tracker losses --restore` compares every value with the
+    snapshot taken before round 1. It doesn't matter which code emptied a value; only
+    what happened to the evidence decides:
+    - **The citation still claims it:** a ruling set it aside, and it is left alone.
+    - **The citation stopped claiming it and the stored article still says it:**
+      the claim is put back and the row re-derived, so the merge decides the figure
+      as on every write.
+    - **The article no longer says it:** it stays withdrawn.
+    - **There is no copy of the article:** it is listed, not guessed.
+    The loop runs this once, before the morning report.
 - **A paid pass now stops part way when the night's money runs out, instead of
   finishing its whole batch first** (`tracker/spend.py` `ceiling_reached`;
   `TRACKER_SPEND_CEILING_CNY`, `TRACKER_SPEND_CEILING_TOKENS`). Before, the ceiling

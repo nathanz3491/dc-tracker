@@ -258,6 +258,8 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # Beside `clean`: that counts how sound the values are, this lists the
             # ones a run changed with the sentence behind each, which a count cannot.
             "changes",
+            # Beside `changes`: the values a run emptied with no ruling behind them.
+            "losses",
             # How the news came in last night, per source.
             "news report",
             "queue",

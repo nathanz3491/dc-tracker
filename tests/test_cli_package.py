@@ -79,6 +79,7 @@ COMMANDS = {
     "logic conflicts",
     "logic resolve",
     "logic rule-out",
+    "losses",
     "merge",
     "news",
     "news report",

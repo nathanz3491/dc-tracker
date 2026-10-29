@@ -571,6 +571,26 @@ def _verbatim_run(quote: str, article: str) -> _Run:
     return covered
 
 
+def still_states(article: str) -> Callable[[str], bool]:
+    """Whether `article` still contains a sentence stored from an earlier reading.
+
+    The test a claim must pass to outlive a re-read that omitted it
+    (`upsert.omitted_quietly`). A stored quote is the article's own words — the gate
+    keeps the recovery, never the model's text — so containment is the usual answer,
+    and the gate's own match covers whitespace or punctuation the page has since
+    re-rendered.
+    """
+    haystack = _normalize_for_match(article)
+
+    def holds(quote: str) -> bool:
+        normalized = _normalize_for_match(quote)
+        if not normalized:
+            return False
+        return normalized in haystack or _verbatim_run(quote, article).text is not None
+
+    return holds
+
+
 def _numbers_in(text: str) -> set[str]:
     """The figures in `text`, thousands separators dropped: "1,200" is "1200"."""
     return {token.replace(",", "") for token in re.findall(r"\d+(?:[.,]\d+)*", text)}
@@ -4259,6 +4279,9 @@ def run(
         #: names that lands on the same row folds into the first's citation instead
         #: of replacing it. See `upsert.fold_reading`.
         reading: set[tuple[int, str]] = set()
+        #: What lets a re-read keep a quoted claim it did not repeat: the sentence
+        #: must still be in this text. See `upsert.omitted_quietly`.
+        holds = still_states(result.markdown) if result.markdown else None
         for record in _fold_same_row(outcome.records):
             # Asked per record, not per run: one URL list can describe several
             # campuses, and the question "which project is this?" is only
@@ -4279,6 +4302,7 @@ def run(
                     arbiter=record_arbiter,
                     reading=reading,
                     read_dates=filed,
+                    quote_holds=holds,
                 )
             except HeldBroken as exc:
                 # A bug, not a fact: the write would publish figures that break a

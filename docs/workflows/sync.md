@@ -818,6 +818,12 @@ were never reached. Any try now moves the URL to the back.
   last good read, and every citation that read produced carries today's prompt
   stamp, the model is not asked again (`crawl.run(skip_unchanged=True)`); the URL is
   recorded as tried and counted as `page unchanged, not re-read`.
+* **A re-read adds evidence; it does not quietly take any back.** A field the new
+  reading does not claim at all keeps the earlier reading's quoted claim while the
+  page still contains its sentence (`upsert.omitted_quietly`, checked by
+  `crawl.still_states` against the text just read). A page edited to drop the
+  sentence still withdraws it. Before this, 81 values in ten nights vanished because
+  a second reading left a field out. See `docs/data-quality.md`.
 * **Only what an article reading produced.** `derived:` and `inferred:` citations
   were computed, not read — the Census reference file behind 365 derived citations
   sat at the head of the old order and was fetched and sent through extraction on
@@ -933,6 +939,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Queue ordering and counts | `tracker/ingest/discover.py` — `deciding` (a late campus's watch finds, ahead of every order), `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
 | Prospect | `tracker/prospect.py`; `tracker/roster.py` — `hunt_order`, `measure` |
 | Extract and refresh | `tracker/ingest/crawl.py` — `run` (`origins=`), `stale_sources`, `unchanged_reads`, `record_url` (`origin=`), `_origin`, `failure_reason`, `MAX_REFRESH_BACKOFF`, `build_records(placeless=)`; `tracker/ingest/records.py` — `IngestReport.incomplete`, `IngestReport.not_a_data_center` |
+| A re-read keeps the quoted claims it omits | `tracker/ingest/crawl.py` — `still_states`, `run` (`quote_holds=`); `tracker/upsert.py` — `upsert_record` (`quote_holds=`), `omitted_quietly`, `reinstate`, `kept_note`; the nightly net: `tracker/losses.py` — `find`, `restore`; `tracker/overnight.py` — `Night.restore_losses` |
 | A write that breaks a held relationship | `tracker/upsert.py` — `upsert_record` (end), `recompute_from_sources` (end, logs only); `tracker/invariants.py` — `enforce`, `HeldBroken`, `campus_breaks`, `HELD`; `tracker/ingest/crawl.py` — `run` (rolls back one record); `tracker/ingest/records.py` — `IngestReport.held_refused` |
 | Not a data center | `tracker/upsert.py` — `upsert_record` (`action="excluded"`); `tracker/exclude.py` — `barred`, `not_a_data_center`, `excluded`, `exclude`, `keys_of`, `lift`; `tracker/cli/duplicates.py` — `exclude`; `tracker/migrations/0041_excluded_key.sql` |
 | The party gate | `tracker/ingest/crawl.py` — `_parties`, `_ROLE_MARKERS`, `_role_is_licensed` |

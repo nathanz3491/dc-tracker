@@ -379,6 +379,7 @@ LATER_ROUND = [
 
 def _report(snap: Path) -> list[tuple[str, ...]]:
     return [
+        ("losses", "--against", str(snap), "--restore"),
         ("clean",),
         ("logic", "check"),
         ("invariants", "--record"),
@@ -661,7 +662,7 @@ def test_with_no_snapshot_file_the_report_says_so(tmp_path):
     )
     go(run)
     assert "    no snapshot from before round 1 to compare against\n" in run.text
-    assert not any(c[0] == "changes" for c in run.stub.calls)
+    assert not any(c[0] in {"changes", "losses"} for c in run.stub.calls)
 
 
 # --- the ceiling and the tally --------------------------------------------------------

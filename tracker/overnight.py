@@ -164,6 +164,15 @@ The morning report ends with every value the night changed (`tracker changes`
 against the snapshot taken before round 1), each with the sentence now behind it,
 so a person can read what the models did in a couple of minutes.
 
+NOTHING IS LOST WITHOUT A RULING. Before the report, `tracker losses --restore`
+compares every value with that same snapshot. A value emptied while its citation
+still claims it was set aside by a ruling and is left alone; one whose citation
+simply stopped claiming it — a re-read that did not repeat the field — gets its claim
+back with its sentence when the stored article still contains it, and the row is
+re-derived. Over 10-18 to 10-28 that path emptied 81 values, 42 with a sentence on
+file stating them; `upsert.omitted_quietly` now closes it, and this is the net that
+does not depend on knowing which path did the damage (`tracker.losses`).
+
 THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
 `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted
 whether or not its command prints a token summary. The tally used to grep the log
@@ -907,8 +916,23 @@ class Night:
 
         if self.capped_:
             self.settle("settle — re-derive and score, after the ceiling")
+        self.restore_losses()
         self.morning_report()
         return 0
+
+    def restore_losses(self) -> None:
+        """Put back what the night dropped with nothing deciding it (`tracker.losses`).
+
+        Once, after the rounds and before the report, so the report's counts include
+        what came back. Against the snapshot from before round 1: a value emptied
+        since then whose citation simply stopped claiming it — while the stored
+        article still contains its sentence — gets its claim back and its row
+        re-derived. A value a ruling cleared is a decision and is left alone. Free.
+        """
+        if self.first_snapshot is None or not self.first_snapshot.is_file():
+            return
+        self.log.phase("losses — values dropped with no ruling behind them, put back")
+        self.tracker("losses", "--against", self.first_snapshot, "--restore")
 
     def run_round(self, number: int) -> bool:
         """One round, in the order the module docstring argues. True stops the night."""

@@ -337,6 +337,40 @@ measured on this corpus: if judgement gets visibly worse, pin
 `TRACKER_DEEPSEEK_REASONING_MODEL` back to a pro model for one overnight round
 and compare.
 
+## A value is never lost without a ruling
+
+A re-read used to replace an article's citation wholesale, so a field the new reading
+did not repeat vanished with it: the quote, the value, and the row's figure. Traced
+over 10-18 to 10-28, 161 values went from set to empty. 75 of them a ruling cleared,
+and those are decisions. The other 81 nobody decided: a second reading of the same
+article left the field out, 42 times with a sentence on file that stated the value
+outright, and 33 times under the same prompt, which is the model answering
+differently, not the article changing. Each one dropped its row out of T2.
+
+Two rules now hold, one inside the write and one outside it:
+
+- **A reading may add evidence, never quietly take it back** (`upsert.omitted_quietly`,
+  `upsert.reinstate`). When a re-read does not claim a field at all, the earlier
+  reading's quoted claim is kept, with its sentence, its envelope and any ruling on it,
+  as long as the article still contains that sentence (`crawl.still_states`). An
+  article edited to drop the sentence still withdraws the claim. A field the new
+  reading does claim, even as 待确认, is the new reading's answer, so a gate that has
+  grown stricter is never undone. The row's notes say `kept <field> = <value> from an
+  earlier reading of this article`.
+- **The night checks itself against its snapshot** (`tracker losses`, `tracker.losses`).
+  Whatever code emptied a value, the question is only what happened to its evidence.
+  If the citation still claims the field, a ruling or the merge set it aside, and it is
+  left alone. If the citation is gone, a merge or a person removed it. If the citation
+  stopped claiming it, the stored copy of the article decides: still there, the claim
+  is put back and the row re-derived, so the merge chooses the figure as on every
+  write; gone, the article withdrew it; no copy, it is listed and not guessed. The loop
+  runs `tracker losses --restore` once, before its report.
+
+```bash
+tracker losses --against <snapshot.db>             # what would be put back
+tracker losses --against <snapshot.db> --restore   # put it back
+```
+
 ## Reading what a night changed
 
 ```bash

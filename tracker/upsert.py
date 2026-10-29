@@ -1621,6 +1621,100 @@ def fold_source(into: Source, other: Source, *, given_by: str) -> tuple[list[str
     return notes, len(taken)
 
 
+# --- A later reading may add evidence, never quietly take it back ----------------
+#
+# A re-read replaces a citation wholesale, so a field the new reading did not repeat
+# used to vanish with it — the quote, the value, and the row's figure, since a
+# claim-owned field with no live claim is emptied. Traced over 10-18 to 10-28: 81
+# values went that way, 42 of them with a sentence on file that states the value
+# outright (QTS Richmond's "offers 110MW of capacity across three buildings"), 33
+# from the same article re-read under the same prompt. That is the model answering
+# differently twice, not the article changing, and a row that drops out of T2 for it
+# costs a search to climb back.
+#
+# So an omitted claim is kept, with its sentence, its envelope and any ruling on it,
+# whenever the article still contains that sentence. An edited article that no longer
+# says it still withdraws it, which is what replacing the citation was for. Only the
+# claim-owned fields: every other field keeps its stored value when no claim is left
+# (`resolve` returns `existing`), so nothing there can vanish this way.
+
+
+def omitted_quietly(
+    earlier: _Citation, now: Mapping[str, Any], holds: Callable[[str], bool]
+) -> list[str]:
+    """Claim-owned fields `earlier` quoted that `now` does not claim at all, whose
+    sentence `holds` says the article still contains.
+
+    "Not at all" is deliberate: a field the new reading claims — confirmed, 待确认 or
+    refused by a gate that has since grown stricter — is the new reading's answer, and
+    carrying the old one past it would undo every gate improvement.
+    """
+    return sorted(
+        name
+        for name in CLAIM_OWNED_FIELDS
+        if earlier.claims.get(name) is not None
+        and name not in now
+        and name in earlier.quoted
+        and earlier.quotes.get(name)
+        and holds(earlier.quotes[name])
+    )
+
+
+def reinstate(row: Source, earlier: _Citation, names: list[str]) -> list[str]:
+    """Put each of `names` back on `row` exactly as `earlier` held it.
+
+    The value, the sentence, the envelope, and a ruling (`superseded`, `misread`) if
+    one was made: a claim set aside stays set aside, so this restores evidence, never a
+    figure somebody rejected. Patched into the JSON columns rather than through
+    `_Citation.write`, which keeps only reasons for claimed fields and would drop a
+    citation's tranche ruling (`blocks.RULED_OUT`). Returns the names it wrote.
+    """
+    names = [n for n in names if earlier.claims.get(n) is not None]
+    if not names:
+        return []
+    claims = _json_object(row.claims)
+    quotes = _json_object(row.quotes)
+    meta = _json_object(row.claim_meta)
+    reasons = _json_object(row.unconfirmed_reasons)
+    quoted = _split(row.fields)
+    flagged = _split(row.unconfirmed_fields)
+    for name in names:
+        claims[name] = earlier.claims[name]
+        if name in earlier.quotes:
+            quotes[name] = earlier.quotes[name]
+        if name in earlier.meta:
+            meta[name] = earlier.meta[name]
+        else:
+            meta.pop(name, None)
+        quoted.add(name)
+        ruling = earlier.unconfirmed.get(name)
+        if ruling in DECIDED_REASONS:
+            reasons[name] = ruling
+            flagged.add(name)
+        else:
+            reasons.pop(name, None)
+            flagged.discard(name)
+
+    def dumped(mapping: dict[str, Any]) -> str | None:
+        return json.dumps(mapping, sort_keys=True, ensure_ascii=False) if mapping else None
+
+    row.claims = dumped(claims)
+    row.quotes = dumped(quotes)
+    row.claim_meta = dumped(meta)
+    row.unconfirmed_reasons = dumped(reasons)
+    row.fields = derive_fields({k: v for k, v in claims.items() if k in quoted})
+    row.unconfirmed_fields = derive_fields({k: v for k, v in claims.items() if k in flagged})
+    return names
+
+
+def kept_note(name: str, value: Any) -> str:
+    """The disclosure for a claim a later reading omitted and the citation kept."""
+    return (
+        f"kept {name} = {value!r} from an earlier reading of this article: the latest "
+        "reading did not repeat it, and the sentence that states it is still in the article"
+    )
+
+
 def upsert_record(
     session: Session,
     rec: IngestRecord,
@@ -1631,10 +1725,18 @@ def upsert_record(
     arbiter: Any = None,
     reading: set[tuple[int, str]] | None = None,
     read_dates: Mapping[str, _dt.datetime] | None = None,
+    quote_holds: Callable[[str], bool] | None = None,
 ) -> UpsertResult:
     """Insert or update one project and its citations.
 
     Args:
+        quote_holds: whether the article just read still contains a stored sentence.
+            Given, a re-read keeps every quoted claim it did not repeat whose sentence
+            passes (`omitted_quietly`), so a model answering differently the second
+            time cannot delete a value; an article edited to drop the sentence still
+            withdraws it. Absent — every caller without the article in hand — a
+            re-read replaces the citation as before. `crawl.run` passes it.
+
         read_dates: url -> a publication date the caller learned for that URL while
             reading it, for a date the discovery queue cannot yet hold. The queue row
             of a URL read for the first time is written *after* its citations, so a
@@ -1860,6 +1962,9 @@ def upsert_record(
     #: `fold_reading`. Non-empty only when a citation was folded rather than written.
     folded_notes: list[str] = []
     folded = False
+    #: Disclosures for claims a re-read omitted and the citation kept; see
+    #: `omitted_quietly`.
+    kept_notes: list[str] = []
     for sr in rec.sources:
         claims = {k: claim_value(v) for k, v in sr.tracked_claims().items()}
         blob = json.dumps(claims, sort_keys=True, ensure_ascii=False) if claims else None
@@ -1868,6 +1973,8 @@ def upsert_record(
             folded = True
             folded_notes += _fold_into_row(row, sr, claims)
             continue
+        # The reading this one replaces, taken before it is overwritten.
+        earlier = _Citation.of_row(row) if row is not None and quote_holds is not None else None
         if row is None:
             row = Source(project_id=project.id, url=sr.url)
             session.add(row)
@@ -1964,6 +2071,9 @@ def upsert_record(
             known = learned
         if known is not None and (row.published_at is None or known < row.published_at):
             row.published_at = known
+        if earlier is not None and quote_holds is not None:
+            for name in reinstate(row, earlier, omitted_quietly(earlier, claims, quote_holds)):
+                kept_notes.append(kept_note(name, earlier.claims[name]))
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------
@@ -2056,7 +2166,7 @@ def upsert_record(
 
     tag = record_tag([s.url for s in rec.sources])
     marker = f"{SOURCE_NOTE_PREFIX}[{tag}]"
-    contributed = [f"{marker} {line}" for line in [*rec.notes, *folded_notes]]
+    contributed = [f"{marker} {line}" for line in [*rec.notes, *folded_notes, *kept_notes]]
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
     # A folded record shares its URL set, and so its tag, with the reading that wrote
@@ -2924,6 +3034,8 @@ __all__ = [
     "fold_reading",
     "fold_source",
     "is_placeholder",
+    "kept_note",
+    "omitted_quietly",
     "rank_claims",
     "recompute_blocks",
     "recompute_confidence",
@@ -2931,6 +3043,7 @@ __all__ = [
     "recompute_h200",
     "recompute_parties",
     "record_tag",
+    "reinstate",
     "resolve_field",
     "rival_note",
     "union_blocks",
