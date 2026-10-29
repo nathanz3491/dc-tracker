@@ -1,169 +1,29 @@
 #!/usr/bin/env bash
 #
-# The whole quality loop, for running unattended in tmux.
+# The nightly quality loop, for launchd at 18:01 or for running unattended in tmux.
 #
-# Every other script here does one pass over one thing. This runs every phase that
-# can improve a row, in dependency order, in rounds, until they stop improving it.
+# WHAT THE NIGHT DOES lives in `tracker/overnight.py`, tested: the options, the
+# snapshot, the rounds and their phases, the ceilings, the progress counts and stop
+# rules, and the morning report. Its docstring is the argument for the phase order,
+# the volumes and the ceilings. This script is what has to stay a shell script:
 #
-# WHY ROUNDS. Neither backlog is a queue that drains. Ruling a claim out re-derives
-# the row and a re-derived row can raise a finding the old value hid — 52
-# resolutions once took the total from 530 to 529. Merging changes the survivor's
-# claim set and can match a third row that did not match before — answering 13 pairs
-# took the group count from 47 to 48. So the target is a fixed point, and the stop
-# condition is consecutive rounds with no reduction.
-#
-# "Reduction" means a count falling BELOW THE LOWEST IT HAS BEEN THIS NIGHT, not below
-# last round's. The counts wobble on their own — a merge splits one group into two,
-# a re-derived row drops below T2 and climbs back — and measured against the previous
-# round every wobble back down read as progress: 2026-09-29 ran seven rounds with
-# duplicate groups going 12, 14, 12, 11 and rows below T2 525, 527, 524, 528, and
-# stopped with nothing moved. Against the running minimum it stops after three.
-#
-# THE PHASE ORDER IS THE ARGUMENT. The news first, then cheapest and most-blocking:
-#
-#   news      first round only, and FIRST since 2026-10-18: it ran last, so a host
-#             reset at 19:32 on 10-16 meant no discovery that day, and feeds that
-#             hold less than a day (Bisnow: five hours) lost those stories for good.
-#             `discover` polls the feeds and walks every archive — an operator's own
-#             data-center newsroom read without the keyword test — and remembers
-#             every entry it saw (`seen_url`); `news` searches the news for every
-#             campus that is due (`tracker.ingest.watch`: daily while a campus is
-#             decided or built, a year back on its first look, up to `--baselines`
-#             first looks a night); the crawl then reads `--discover` queued
-#             articles, the news first, then what the watch and the newsrooms found,
-#             then campuses the database has not heard of, through its identity
-#             check. Then the Census lookup places the new rows (county,
-#             town centre), and one duplicate attempt is made per row created in
-#             the last `TWIN_DAYS` days, `TWINS` at most; the night's progress
-#             counts are re-taken after that, since the news adds work by design.
-#             600 a night since 2026-10-19: the watch's first look and the first
-#             walk of the builders' archives left about 6,600 articles queued, a
-#             read costs about ¥0.0075 (10-18: 156 for ¥1.17) and 40 took 48
-#             seconds. At 150 the backlog would have taken two months to clear; at
-#             600 it is about ¥4.5 a night and about two weeks.
-#   free      dates, geo, scope, derive, logic --auto. No model, no cost. `scope`
-#             re-gates stored labels against their own quotes; `derive` re-applies
-#             every derived value, and both are pure functions of what is stored.
-#             In the first round the dates step also asks publishers (`--dates`,
-#             one plain request a page, each page once per 90 days, newest first).
-#   duplicates the agent: reads both rows, folds or parks. The only step that
-#             deletes anything, so it goes behind a snapshot — and ahead of every
-#             phase that pays to read one row, since a row it folds is a row they
-#             would have read for nothing (10-19: 12 of 14 logic findings were on
-#             rows created that evening, two of them merged away minutes later).
-#   audit     THE biggest tier lever and the one this script used to miss entirely:
-#             `audit_clear` is a T1 gate failing 68 rows and the SOLE blocker on 54.
-#             One call per finding on the fixed-menu path, so it is also cheap.
-#   risks     reads the article behind each unquoted obstacle. Also T3, also cheap.
-#   logic     the agent: reads sources, rules wrong claims out of the merge.
-#   tranches  since 2026-10-21: one call per campus whose tranches still count the
-#             same megawatts twice (`tracker tranches review`), worst first, `--nest`
-#             a round. The model rules which tranche is part of which, the same as
-#             which, superseded or another campus's; a campus left open is held back
-#             until its tranches change. 128 campuses were open on the 10-21 copy,
-#             22 settled by the free rules alone; at 20 a round the rest take a few
-#             nights at about ¥0.02 a campus.
-#   enrich    the agent, last and separately budgeted, because it is the most
-#             expensive rung (~77,000 tokens a row) AND the largest tier lever
-#             there is: every one of the 283 rows sitting at T1 is held there by
-#             `fields_present` alone. Those rows are not wrong, they are empty, and
-#             nothing above this line can move one. It runs in the FIRST round only
-#             (`--enrich-rounds`): what it reads changes when articles are ingested,
-#             not when a merge or a ruling lands, and on the nights of 2026-09-24 to
-#             09-29 it was 86% of the bill, round after round, for one new fact.
-#             It picks rows with `--t2` — the ones below T2 for missing fields,
-#             fewest missing first — where `--target 0` alone had sorted the
-#             FULLEST rows first and spent every round on rows already past the bar.
-#   reread    first round only: re-reads, from the cache, up to `--reread` articles
-#             that a superseded extraction prompt last read, oldest vintage first, so
-#             a tightened gate reaches rows written before it. Existing rows only.
-#   recheck   first round only: the same cached re-read, of up to `--recheck` articles
-#             holding a value, milestone or party the gate refused before its last
-#             revision (`crawl.GATE_REVISED_AT`). A gate change does not move the
-#             prompt's stamp, so `reread` never sees it. Most refusals first; each
-#             article is taken once. Existing rows only.
-#   (news)    see the top: what used to be the `discover` phase here, last, now
-#             runs before everything else. Everything published within the email's
-#             two-month window is read first, newest first, whatever campus it
-#             names, because what is read tonight is mailed tomorrow: a 09-21
-#             lawsuit against a tracked campus once waited behind the backlog until
-#             10-03 and was mailed as news.
-#
-# WHAT IT COSTS, AND THE CEILING. The ceiling is money, priced from the spend ledger by
-# `tracker.spend` at OpenCode Go's rates for the hour each call was made. By default it
-# is tonight's share of a month (`tracker.spend allowance`, from 2026-10-25). OpenCode
-# Go's flash allowance is $80 a month, and other work runs on the same plan, so the
-# tracker keeps to 85% of it: ¥482.80 over a rolling 30 days, counting the console's
-# and hand-run commands' daytime ledgers with the nights' (from 10-26), ¥16.09 a night, less a
-# seventh of whatever the last 29 days spent over their share. Unspent money is not
-# carried over: tried on the 10-25 ledgers, it ran four weeks above the share on
-# October's savings and then left two nights with nothing. Before that it was a flat ¥15 that no
-# night reached: from 10-19 to 10-25 the loop spent ¥9.47-12.86 a night and stopped
-# at its fixed point with seven hours to spare, so the volumes below were raised the
-# same day. `--cny N` still sets a flat ceiling for one night. Web searches are a separate bill (prepaid
-# Serper credit, about ¥0.007 each): the ledger records them and `--search-cap`
-# (default 2000 a night, `TRACKER_SEARCH_CAP`) stops every command at it; the news
-# watch, which runs first, may use all but 500 of them, so the research that runs
-# later still has searches to send. The money ceiling does not count them, and the
-# closing line and the spend report price them beside the model spend.
-#
-# A ceiling in tokens (`--tokens`, still honoured) mostly counted cached prompt,
-# which is billed at a fiftieth of the rate; about 93% of the money is the reply,
-# most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and on the
-# six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
-# firing. The check runs before every paid phase, so a night ends below `--cny` plus
-# one phase.
-#
-# THE VOLUME, raised on 2026-10-05. The cost fixes of 09-30 left nights at ¥1.76-2.75
-# against a ¥12 ceiling, so the loop was doing a fifth of what it was allowed to:
-# 15 rows enriched on a 60-article budget, 10 queued articles read for new campuses,
-# while 419 rows sat below T2 with something still worth searching for and 1,659
-# readable articles waited in the queue. Now 40 rows on 160 articles (the enrich pass
-# at ~¥0.12 a row, about ¥5), 40 queued articles (~¥0.01 each), 18 feeds, and 60 findings and
-# 40 pairs a round. About ¥7 a night, so the ceiling still has room; the enrich pass
-# is the largest single phase, which bounds the overshoot at about `--cny` + ¥5.
-#
-# Raised again on 2026-10-25, to spend the month's share: 80 rows on 320 articles
-# (69% of rows still lacked a basic field; split on 10-26 into 30 campuses being built
-# or permitted with no date or capacity, then 50 below T2), 900 queued articles, and 120 each to
-# re-read and re-check. About ¥16-17 a night at the 10-25 rates, which the night's
-# ¥16.09 trims; enrich runs after the duplicate, audit,
-# obstacle, contradiction and tranche passes in a round, so a ceiling reached early
-# cuts reading, never settling. An overshoot is one
-# enrich pass (about ¥6), and the next nights' allowance pays it back.
-#
-# Later rounds are cheaper than the first: every paid phase records what it answered
-# or could not decide, keyed on the evidence it was shown, and does not re-offer it
-# until that evidence changes or a month passes (`tracker/declines.py`).
-#
-# The per-item judgements — risks, audit, enrich's settle step — run at `high`
-# reasoning effort (`--judgement-effort`). They ran at `low` for one night,
-# 2026-09-30, and two of the audit's three model decisions that night were wrong in
-# ways that move published totals: it replaced a campus's $600M with a statewide
-# "$20 billion+ in Ohio", and kept a land price as a campus's build investment while
-# saying in its own reason that it was the land price. The step cost ¥0.18 that
-# night; `high` costs a few tenths of a yuan more, which is not the place to save.
-# `--local-judgement` sends them to the local model (TRACKER_JUDGEMENT_PROVIDER=ollama).
-#
-# The morning report ends with every value the night changed (`tracker changes`
-# against the snapshot taken before round 1), each with the sentence now behind it,
-# so a person can read what the models did in a couple of minutes.
-#
-# THE CEILING READS A LEDGER, NOT THE LOG. Every paid call appends a line to the file
-# `TRACKER_SPEND_LEDGER` names (`tracker.llm.record_spend`), so a phase is counted
-# whether or not its command prints a token summary. The tally used to grep the log
-# for `~N tokens`, which three commands print and five paid phases did not — and
-# under `set -o pipefail` a grep that matched nothing *failed*, so from 2026-09-03 the
-# very first tally of every night, taken before any phase had printed anything,
-# ended the script straight after its snapshot. Twenty-one nights ran no phase at
-# all and logged no error. The morning report now breaks the night's spend down by
-# command, from the same file.
-#
-# WHAT IT CANNOT DO. Roughly 250 findings are about tranche identity —
-# `block_label_ambiguous` and relatives — and the only repair an agent has is
-# superseding a claim about a field. It will read the sources and decline them, once
-# each. The real fix is a `blocks fold` command that does not exist. A stubborn
-# residue of block findings is not this script failing.
+#   * THE LOCK. The deployer (outside this repo) decides a night is running by reading
+#     data/runs/overnight.lock/pid and checking that process's command line names
+#     `overnight.sh`. So this script takes the lock, holds it for the whole night and
+#     releases it in its EXIT trap, and runs the Python loop as a child — never `exec`:
+#     an exec'd process's command line names Python, and the deployer would read the
+#     night as over and deploy under it.
+#   * `--status`, which must answer from any shell, with or without a venv.
+#   * the wait for a deployer already running when the night starts;
+#   * PATH and the venv, which launchd does not give a process;
+#   * the night's spend ledger, named here so the status page can find it by the
+#     night's start (`overnight-YYYYMMDD-HHMMSS.spend`), and exported so every
+#     `tracker` child appends to it;
+#   * the read of tonight's money allowance (`tracker.spend allowance`, over every
+#     ledger beside tonight's), handed to the loop, which falls back to ¥15 when it
+#     reads nothing;
+#   * the `tee` into data/runs/overnight.log, so the loop and every phase it runs
+#     write to one stream.
 #
 # RUNNING IT IN TMUX
 #
@@ -172,20 +32,16 @@
 #   # detach with ctrl-b then d; come back with `tmux attach -t tracker`
 #
 # `caffeinate -i` stops the machine idle-sleeping out from under a ten-hour job.
-# From anywhere else, `overnight.sh --status` prints where it has got to.
+# From anywhere else, `overnight.sh --status` prints where it has got to;
+# `overnight.sh --help` lists the options.
 #
-# SAFETY, since nobody is watching:
-#   * a `VACUUM INTO` snapshot before the first merge and every --backup-every rounds
-#   * one run at a time, enforced here rather than discovered as a lock timeout
-#   * every phase is `|| true`: a provider failure at 3am loses that phase, not the
-#     night, and every command commits as it goes
-#   * the night runs on one version of the code. A deploy resets the checkout under
-#     the commands not yet started and runs `tracker init`, which wants the same
-#     single write lock: on 2026-10-19 two deploys landed mid-run, so the night's
-#     later phases ran different code from its first. The deployer now holds any
-#     commit while this run's lock is live, and this run waits for a deployer that is
-#     already running when it starts (`wait_for_deploy`). Still, do not push to main
-#     while it runs: the held commit goes live unwatched when the night ends.
+# The night runs on one version of the code. A deploy resets the checkout under the
+# commands not yet started and runs `tracker init`, which wants the same single write
+# lock: on 2026-10-19 two deploys landed mid-run, so the night's later phases ran
+# different code from its first. The deployer now holds any commit while this run's
+# lock is live, and this run waits for a deployer that is already running when it
+# starts (`wait_for_deploy`). Still, do not push to main while it runs: the held
+# commit goes live unwatched when the night ends.
 
 set -euo pipefail
 
@@ -194,175 +50,23 @@ cd "$REPO"
 
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 PY="$REPO/.venv/bin/python"
-tracker() { "$PY" -m tracker "$@"; }
-
-HOURS=10
-ROUNDS=20
-DRY_ROUNDS=2
-FINDINGS=60
-PAIRS=40
-AUDIT=60
-RISKS=40
-NEST=20
-ENRICH=50
-ENRICH_BUDGET=200
-ENRICH_ROUNDS=1
-# The first enrich pass: campuses being built or permitted that lack an online date
-# or planned capacity, largest first, asked only those two fields (`enrich
-# --pipeline`). On 10-26, 111 of 258 under construction and 135 of 169 in permitting
-# had no date, so the supply chart and the delay flags could not see them; the T2
-# pass weighs every field alike and rarely chose them.
-PIPELINE=30
-PIPELINE_BUDGET=120
-DISCOVER=900
-# Have a model read the queued headlines first and set aside what cannot be campus
-# news (`ingest crawl --screen`). On, for pages about a place abroad only: measured
-# on 5,272 past reads on 2026-10-26, that spares 230 useless reads and loses 4 of
-# 2,841 useful ones; every other kind cost real news (`headlines.ACTED_ON`).
-SCREEN=1
-BASELINES=300
-SEARCH_CAP=2000
-DATES=150
-REREAD=120
-RECHECK=120
-# The twin pass: rows created in the last TWIN_DAYS days, at most TWINS of them a
-# night. A lookback rather than tonight alone, because a night whose pass was capped,
-# crashed or blind (it ran before the rows had a county until 2026-10-20) was never
-# revisited: the 10-19 night left about 16 twins standing. A pair already asked on
-# the same evidence is held back (`declines`), so the lookback re-asks only what
-# changed. The cap is what keeps a 100-row night from spending the budget here.
-TWINS=60
-TWIN_DAYS=3
-MIN_CONF=0.85
-DO_MERGE=1
-DO_ENRICH=1
-DO_DISCOVER=1
-TOKEN_CAP=25000000
-# Empty: tonight's share of the month (`tracker.spend allowance`). `--cny` sets it.
-CNY_CAP=
-JUDGEMENT_EFFORT=high
-EXTRACTION_EFFORT=
-LOCAL_JUDGEMENT=0
-BACKUP_EVERY=5
-STATUS_ONLY=0
 
 LOG="${OVERNIGHT_LOG:-$REPO/data/runs/overnight.log}"
-
-usage() {
-  cat <<'USAGE'
-usage: overnight.sh [options]
-       overnight.sh --status        # where a running one has got to
-
-Runs every quality phase in rounds until they stop improving anything. Meant to be
-started in tmux and left.
-
-  --hours N          wall-clock ceiling (default 10). Checked between rounds.
-  --rounds N         max rounds (default 20)
-  --dry-rounds N     stop after N rounds with no reduction (default 2)
-  --findings N       logic findings per round (default 60)
-  --pairs N          duplicate pairs per round (default 40)
-  --audit N          audit findings per round (default 60)
-  --risks N          obstacles per round (default 40)
-  --nest N           campuses whose tranches the model nests, per round (default 20)
-  --pipeline N       campuses being built or permitted with no online date or
-                     capacity to enrich first (default 30); 0 to skip
-  --pipeline-budget N articles that pass may read (default 120)
-  --enrich N         projects below T2 to enrich after it (default 50); 0 to skip
-  --enrich-budget N  articles that pass may read (default 200)
-  --enrich-rounds N  enrich in the first N rounds only (default 1)
-  --discover N       queued articles to read, the news first (default 900); 0 to skip
-                     discovery, the news watch and the read altogether
-  --screen           have a model read their headlines first and set aside what
-                     is about a place abroad (default on)
-  --no-screen        read the queue unscreened
-  --baselines N      campuses the news watch gives their first, year-long look each
-                     night (default 300); 0 for follow-ups only
-  --search-cap N     web searches the whole night may send (default 2000); the news
-                     watch may use all but 500, which the research keeps
-  --dates N          pages to ask for a publish date, first round (default 150); 0 to skip
-  --reread N         articles to re-read under the current prompt, first round
-                     (default 120); 0 to skip
-  --recheck N        articles holding a refusal from before the gate's last
-                     revision to re-read, first round (default 120); 0 to skip
-  --min-confidence F floor a duplicate fold needs (default 0.85)
-  --no-merge         never fold duplicates; park and rule only. Deletes nothing.
-  --cny N            stop when the night's model spend, priced, reaches N yuan (default:
-                     tonight's share of the tracker's month, `tracker.spend allowance`)
-  --tokens N         also stop when prompt+reply tokens pass N (default 25,000,000)
-  --judgement-effort E  reasoning for risks, audit and settle: low|high|max (default high)
-  --extraction-effort E reasoning for reading articles (default: whatever .env says)
-  --local-judgement  send risks, audit and settle to the local model (Ollama)
-  --backup-every N   snapshot every N rounds (default 5). Always before round 1.
-  --status           print the tail of the log and exit
-  --help
-
-In tmux:
-
-  tmux new -s tracker
-  caffeinate -i ~/dev/tracker/repo/scripts/overnight.sh --hours 10
-  # ctrl-b d to detach, `tmux attach -t tracker` to return
-
-Everything is appended to data/runs/overnight.log; the morning report is the last
-thing in it.
-USAGE
-}
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --hours)          shift; HOURS="${1:?}" ;;
-    --rounds)         shift; ROUNDS="${1:?}" ;;
-    --dry-rounds)     shift; DRY_ROUNDS="${1:?}" ;;
-    --findings)       shift; FINDINGS="${1:?}" ;;
-    --pairs)          shift; PAIRS="${1:?}" ;;
-    --audit)          shift; AUDIT="${1:?}" ;;
-    --risks)          shift; RISKS="${1:?}" ;;
-    --nest)           shift; NEST="${1:?}" ;;
-    --enrich)         shift; ENRICH="${1:?}" ;;
-    --enrich-budget)  shift; ENRICH_BUDGET="${1:?}" ;;
-    --pipeline)       shift; PIPELINE="${1:?}" ;;
-    --pipeline-budget) shift; PIPELINE_BUDGET="${1:?}" ;;
-    --enrich-rounds)  shift; ENRICH_ROUNDS="${1:?}" ;;
-    --discover)       shift; DISCOVER="${1:?}" ;;
-    --screen)         SCREEN=1 ;;
-    --no-screen)      SCREEN=0 ;;
-    --baselines)      shift; BASELINES="${1:?}" ;;
-    --search-cap)     shift; SEARCH_CAP="${1:?}" ;;
-    --dates)          shift; DATES="${1:?}" ;;
-    --reread)         shift; REREAD="${1:?}" ;;
-    --recheck)        shift; RECHECK="${1:?}" ;;
-    --min-confidence) shift; MIN_CONF="${1:?}" ;;
-    --cny)            shift; CNY_CAP="${1:?}" ;;
-    --tokens)         shift; TOKEN_CAP="${1:?}" ;;
-    --judgement-effort)  shift; JUDGEMENT_EFFORT="${1:?}" ;;
-    --extraction-effort) shift; EXTRACTION_EFFORT="${1:?}" ;;
-    --local-judgement) LOCAL_JUDGEMENT=1 ;;
-    --backup-every)   shift; BACKUP_EVERY="${1:?}" ;;
-    --no-merge)       DO_MERGE=0 ;;
-    --status)         STATUS_ONLY=1 ;;
-    -h|--help)        usage; exit 0 ;;
-    *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
-  esac
-  shift
-done
-
-[ "$ENRICH" -gt 0 ] 2>/dev/null || DO_ENRICH=0
-[ "$DISCOVER" -gt 0 ] 2>/dev/null || DO_DISCOVER=0
-
-effort_ok() { case "$1" in low|high|max) return 0 ;; *) return 1 ;; esac; }
-effort_ok "$JUDGEMENT_EFFORT" || { echo "--judgement-effort must be low, high or max" >&2; exit 2; }
-[ -z "$EXTRACTION_EFFORT" ] || effort_ok "$EXTRACTION_EFFORT" \
-  || { echo "--extraction-effort must be low, high or max" >&2; exit 2; }
-# Exported, so every `tracker` child reads them. The environment wins over `.env`,
-# which is the point: these are the night's settings, not the machine's.
-export TRACKER_DEEPSEEK_JUDGEMENT_EFFORT="$JUDGEMENT_EFFORT"
-export TRACKER_SEARCH_CAP="$SEARCH_CAP"
-[ -z "$EXTRACTION_EFFORT" ] || export TRACKER_DEEPSEEK_EXTRACTION_EFFORT="$EXTRACTION_EFFORT"
-[ "$LOCAL_JUDGEMENT" -eq 0 ] || export TRACKER_JUDGEMENT_PROVIDER=ollama
-
 LOCK="$REPO/data/runs/overnight.lock"
 # The deploy poller, which sits beside the checkout in `ops/`, never inside it.
 DEPLOYER="$(cd "$REPO/.." && pwd)/ops/poll.sh"
 DEPLOY_WAIT=1800
+
+# Only the two options this script answers itself; every other one is the loop's,
+# passed through untouched and checked by it before the lock is taken.
+STATUS_ONLY=0
+HELP=0
+for arg in "$@"; do
+  case "$arg" in
+    --status)  STATUS_ONLY=1 ;;
+    -h|--help) HELP=1 ;;
+  esac
+done
 
 if [ "$STATUS_ONLY" -eq 1 ]; then
   if [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" != "" ] \
@@ -377,6 +81,7 @@ if [ "$STATUS_ONLY" -eq 1 ]; then
   # logs fewer than twenty such lines let the night before's "overnight complete"
   # open the listing — on 10-22 it read as if 10-20 were the last run.
   # `|| true`: under pipefail a log with no round lines yet is not an error.
+  # The two patterns are `STARTING` and `ROUND_LINE` in tracker/overnight.py.
   if [ -f "$LOG" ]; then
     start="$(grep -n '\] overnight starting' "$LOG" | tail -1 | cut -d: -f1 || true)"
     tail -n +"${start:-1}" "$LOG" | grep -E '^\[|^  round ' | tail -20 || true
@@ -386,23 +91,23 @@ fi
 
 [ -x "$PY" ] || { echo "no venv at $PY" >&2; exit 1; }
 
+if [ "$HELP" -eq 1 ]; then
+  "$PY" -m tracker.overnight run --help
+  exit 0
+fi
+
+# A mistyped option ends here, before the lock and before the log.
+"$PY" -m tracker.overnight check "$@" || exit 2
+
 mkdir -p "$(dirname "$LOG")"
 # One ledger per night, so the tally reads only this run's calls — summing a shared
 # file made a second night start at the first night's total. Exported, so every
-# `tracker` child below appends to it.
+# `tracker` child appends to it. The name is `ledger_name` in tracker/overnight.py,
+# which the status page reads back.
 export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight-$(date '+%Y%m%d-%H%M%S').spend}"
-# Tonight's money ceiling, unless `--cny` named one: the tracker's daily share of its
-# month on OpenCode Go, less a seventh of whatever the last 29 days overspent
-# (`tracker.spend allowance`, which reads every ledger beside this one). A ceiling
-# that cannot be read falls back to the old ¥15.
-CNY_FROM='--cny'
-if [ -z "$CNY_CAP" ]; then
-  CNY_CAP="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>/dev/null || true)"
-  CNY_FROM="the month's allowance"
-  case "$CNY_CAP" in
-    ''|*[!0-9.]*) CNY_CAP=15; CNY_FROM='the fallback, as no allowance could be read' ;;
-  esac
-fi
+# Tonight's share of the month, read before tonight's ledger exists. Empty when it
+# cannot be read; the loop then falls back, and `--cny` overrides it either way.
+ALLOWANCE="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>/dev/null || true)"
 exec > >(tee -a "$LOG") 2>&1
 
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has no
@@ -481,408 +186,9 @@ wait_for_deploy() {
 
 wait_for_deploy
 
-say()   { printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-phase() { printf '\n--- %s  %s\n' "$(date '+%H:%M:%S')" "$*"; }
-
-backup() {
-  local dir dest
-  if [ -d "$REPO/../backups" ]; then dir="$REPO/../backups"; else dir="$REPO/data/backups"; fi
-  mkdir -p "$dir"
-  dest="$dir/tracker.backup-overnight-$(date '+%Y%m%d-%H%M%S').db"
-  # VACUUM INTO, never cp: WAL mode means a copy of the main file alone opens
-  # cleanly and is silently stale. Same reasoning as scripts/sync_db.py.
-  "$PY" - "${TRACKER_DB:-$REPO/data/tracker.db}" "$dest" <<'PYEOF'
-import sqlite3
-import sys
-
-con = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
-try:
-    con.execute("VACUUM INTO '%s'" % sys.argv[2])
-finally:
-    con.close()
-PYEOF
-  echo "    snapshot: $dest"
-  # Not `local`: the morning report compares the database with the first one.
-  SNAPSHOT="$dest"
-}
-
-# Three numbers from one process: logic findings not yet answered, duplicate
-# GROUPS, and rows below T2. Groups rather than pairs because nine rows for one
-# campus are 36 pairs and one group, and a loop counting pairs would read a single
-# merge as huge progress. Rows-below-T2 is what the enrich phase moves and neither
-# other number can see.
-counts() {
-  "$PY" - <<'PYEOF'
-from tracker import clean as cl
-from tracker import logic
-from tracker.audit import settled_codes
-from tracker.capex import duplicate_groups, suspected_duplicates
-from tracker.db import open_db, session_scope
-from tracker.models import Project
-
-engine = open_db("data/tracker.db")
-with session_scope(engine, commit=False) as s:
-    settled, todo = {}, 0
-    for f in logic.review(s).findings:
-        if f.project_id not in settled:
-            row = s.get(Project, f.project_id)
-            settled[f.project_id] = settled_codes(row) if row else set()
-        if f.code not in settled[f.project_id]:
-            todo += 1
-    pairs = [p for p in suspected_duplicates(s) if set(p.kinds) - {"name"}]
-    below = sum(1 for c in cl.scan(s).cards if c.tier < 2)
-    print(todo, len(duplicate_groups(pairs)), below)
-PYEOF
-}
-
-# Prompt plus completion tokens across every paid call this run made. awk alone, and
-# never a pipeline: this runs under `set -euo pipefail`, where a stage that finds
-# nothing to match exits non-zero and takes the whole script with it — which is
-# exactly how this function used to end every night before its first phase. A
-# missing or empty ledger is a night that has spent nothing, and prints 0.
-spent_so_far() {
-  if [ ! -s "$TRACKER_SPEND_LEDGER" ]; then
-    echo 0
-    return 0
-  fi
-  awk -F'\t' '{t += $5 + $6} END {printf "%d\n", t}' "$TRACKER_SPEND_LEDGER"
-}
-
-# What this run's paid calls cost, in yuan with two decimals, priced by
-# `tracker.spend` at the rate for the hour each was made. `|| echo 0.00` rather than
-# letting a failure through: this is read under `set -e`, and a pricing problem must
-# cost the night its ceiling check, never the night itself.
-spent_cny() {
-  "$PY" -m tracker.spend total "$TRACKER_SPEND_LEDGER" 2>/dev/null || echo 0.00
-}
-
-# The night's spend by phase — command, and the stage within it where one was
-# recorded — dearest first, with how much of the prompt the provider served from
-# cache. A phase whose hit rate falls is one whose prompt prefix is being disturbed.
-spend_by_command() {
-  "$PY" -m tracker.spend report "$TRACKER_SPEND_LEDGER" 2>/dev/null || echo "    (no report)"
-}
-
-# The closing line's money: the model bill the ceiling counts, then what the web
-# searches cost beside it — prepaid credit, outside the ceiling by design, and on
-# 2026-10-19 780 of them, about ¥5.54 against ¥9.89 on models, which this line used
-# to leave out. Falls back to the old figures rather than failing the report.
-spent_summary() {
-  "$PY" -m tracker.spend summary "$TRACKER_SPEND_LEDGER" 2>/dev/null \
-    || echo "¥$(spent_cny), ~$(spent_so_far) tokens"
-}
-
-# True when any of the three counts — findings, groups, rows below T2 — fell below the
-# lowest it has been tonight, and lowers that minimum. Against the minimum rather than
-# last round's value, so a count that wobbles up and back down is not progress; see
-# WHY ROUNDS in the header. `return $moved` is an answer for an `if`, never an exit.
-progressed() {
-  local moved=1
-  if [ "$1" -lt "$MIN_F" ]; then MIN_F=$1; moved=0; fi
-  if [ "$2" -lt "$MIN_D" ]; then MIN_D=$2; moved=0; fi
-  if [ "$3" -lt "$MIN_B" ]; then MIN_B=$3; moved=0; fi
-  return $moved
-}
-
-# True when either ceiling is reached: yuan, or tokens. Called before every paid
-# phase rather than once a round: a round is several phases, so a check at the top of
-# the round let one round overshoot the ceiling by a round.
-over_ceiling() {
-  SPENT=$(spent_so_far)
-  CNY=$(spent_cny)
-  if [ "$SPENT" -ge "$TOKEN_CAP" ]; then return 0; fi
-  awk -v spent="$CNY" -v cap="$CNY_CAP" 'BEGIN { exit !(spent + 0 >= cap + 0) }'
-}
-
-# --- start ------------------------------------------------------------------
-
-STARTED=$(date +%s)
-# The moment rows count as new tonight, in the database's own clock (naive UTC).
-STARTED_UTC=$(date -u '+%Y-%m-%d %H:%M:%S')
-# The start of the twin pass's lookback, in the same clock. Python rather than
-# `date -v`/`date -d`, which BSD and GNU spell differently.
-TWIN_SINCE=$("$PY" -c 'import datetime as d, sys
-print((d.datetime.now(d.UTC) - d.timedelta(days=int(sys.argv[1]))).strftime("%Y-%m-%d %H:%M:%S"))' "$TWIN_DAYS")
-DEADLINE=$((STARTED + HOURS * 3600))
-SPENT=0
-CNY=0.00
-STALE=0
-CAPPED=0
-
-say "overnight starting  (pid $$)"
-printf '    repo      %s\n' "$REPO"
-printf '    ceilings  %sh, %s rounds, ¥%s, %s tokens, %s searches\n' \
-  "$HOURS" "$ROUNDS" "$CNY_CAP" "$TOKEN_CAP" "$SEARCH_CAP"
-printf '    money     ¥%s tonight, from %s\n' "$CNY_CAP" "$CNY_FROM"
-printf '    per round %s findings, %s audit, %s risks, %s pairs\n' \
-  "$FINDINGS" "$AUDIT" "$RISKS" "$PAIRS"
-printf '    enrich    %s campus(es) with no date or capacity on %s articles, then %s row(s) below T2 on %s, first %s round(s)\n' \
-  "$PIPELINE" "$PIPELINE_BUDGET" "$ENRICH" "$ENRICH_BUDGET" "$ENRICH_ROUNDS"
-printf '    merge=%s  enrich=%s  screen=%s  min-confidence %s\n' \
-  "$DO_MERGE" "$DO_ENRICH" "$SCREEN" "$MIN_CONF"
-if [ "$LOCAL_JUDGEMENT" -eq 1 ]; then WHERE=', on the local model'; else WHERE=''; fi
-printf '    judgement %s effort%s\n' "$JUDGEMENT_EFFORT" "$WHERE"
-printf '    spend     %s\n' "$TRACKER_SPEND_LEDGER"
-
-read -r F0 D0 B0 <<<"$(counts)"
-printf '    at start  %s finding(s), %s duplicate group(s), %s row(s) below T2\n' "$F0" "$D0" "$B0"
-# The lowest each count has been tonight. Progress is a count falling below its
-# minimum, not below last round's value — see WHY ROUNDS in the header.
-MIN_F=$F0; MIN_D=$D0; MIN_B=$B0
-
-say 'snapshot before anything is deleted'
-SNAPSHOT=""
-backup
-FIRST_SNAPSHOT="$SNAPSHOT"
-
-# Before each paid phase. `break` leaves the round loop from inside its body, so the
-# settle below still runs once for whatever the night managed.
-capped() {
-  if over_ceiling; then
-    say "spend ceiling reached (¥$CNY of ¥$CNY_CAP, ~$SPENT of $TOKEN_CAP tokens) before $1 — stopping"
-    CAPPED=1
-    return 0
-  fi
-  return 1
-}
-
-for round in $(seq 1 "$ROUNDS"); do
-  now=$(date +%s)
-  if [ "$now" -ge "$DEADLINE" ]; then
-    say "wall-clock ceiling of ${HOURS}h reached — stopping between rounds"; break
-  fi
-  SPENT=$(spent_so_far)
-  CNY=$(spent_cny)
-
-  say "round $round of $ROUNDS  (¥$CNY, ~$SPENT tokens, $(( (DEADLINE - now) / 60 ))m left)"
-  if [ "$round" -gt 1 ] && [ $((round % BACKUP_EVERY)) -eq 1 ]; then backup; fi
-
-  # --- news: first, so nothing later can cost the day's news ----------------
-  # The one phase that adds rows. First round only: the queue does not change
-  # between rounds. Polling the feeds and walking the archives costs nothing; the
-  # news watch is one search a campus (prepaid credit, under `--search-cap`); each
-  # article read is one extraction (about ¥0.03), and the crawl's identity check —
-  # one call, only when a record nearly matches a row — is what keeps a campus
-  # already held under another name from becoming its twin. Rounds after this one
-  # run `duplicates` over whatever it added.
-  if [ "$DO_DISCOVER" -eq 1 ] && [ "$round" -eq 1 ]; then
-    phase "news — feeds and archives, the campus news watch, $DISCOVER queued article(s) read"
-    tracker discover --no-show < /dev/null || true
-    tracker news --baselines "$BASELINES" \
-      --max-queries "$((SEARCH_CAP > 500 ? SEARCH_CAP - 500 : SEARCH_CAP))" < /dev/null || true
-    if capped news; then break; fi
-    if [ "$SCREEN" -eq 1 ]; then SCREEN_FLAG=--screen; else SCREEN_FLAG=; fi
-    # Unquoted on purpose: when off, the flag must vanish rather than pass "".
-    tracker ingest crawl --from-queue --new-first --limit "$DISCOVER" $SCREEN_FLAG \
-      < /dev/null || true
-
-    # Where the new rows are, before asking what they duplicate. The twin pass
-    # pairs a row with an existing one through a shared town or county, or a
-    # distance — and a row fresh from an article usually has a town and nothing
-    # else: on 2026-10-19, 74 of 185 recent rows had no county and none had
-    # coordinates, because `ingest geo` ran in the free phase, after the pass. So a
-    # campus filed under its county met its own twin filed under the town and saw
-    # nothing in common. The Census lookup is free and takes seconds.
-    tracker ingest geo < /dev/null || true
-
-    # One attempt to fold per row recently added, each against its likeliest twin
-    # wherever that twin is filed (`duplicates resolve --created-since`). The
-    # regular pass only sees pairs within one town or one company, and on
-    # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its duplicate
-    # because one row named the town and a different company, the other the county.
-    if capped duplicates; then break; fi
-    phase "duplicates — one attempt per row created in the last $TWIN_DAYS day(s), $TWINS at most"
-    if [ "$DO_MERGE" -eq 1 ]; then
-      tracker duplicates resolve --merge --min-confidence "$MIN_CONF" \
-        --created-since "$TWIN_SINCE" --limit "$TWINS" < /dev/null || true
-    else
-      tracker duplicates resolve --created-since "$TWIN_SINCE" --limit "$TWINS" < /dev/null || true
-    fi
-
-    # The night's yardstick, re-taken now. The news adds rows and findings by design,
-    # so measured against the counts from before it every later round looked like no
-    # progress: on 2026-10-19 round 2 lowered all three counts, was still above the
-    # pre-news minimums, and the night declared a fixed point with 7.4 hours and ¥5
-    # unused. Progress is measured from here.
-    read -r F0 D0 B0 <<<"$(counts)"
-    printf '    after news %s finding(s), %s duplicate group(s), %s row(s) below T2\n' \
-      "$F0" "$D0" "$B0"
-    MIN_F=$F0; MIN_D=$D0; MIN_B=$B0
-  fi
-
-  # --- free: no model, no cost --------------------------------------------
-  # `|| true` throughout: one phase failing must not end the night, and every
-  # command below commits as it goes, so whatever succeeded is already durable.
-  phase 'free — dates, geo, scope, derive, logic --auto'
-  # First round only, the date check also asks publishers: one plain request per
-  # page, no model. Without it only dates written in a URL's path are found, and
-  # 1,836 citations sat undated night after night — the date the morning email
-  # decides "is this news" by. Each page is asked once per 90 days (migration
-  # 0035), newest first, so the limit reaches new articles rather than re-asking a
-  # Census table that will never state one.
-  if [ "$round" -eq 1 ] && [ "$DATES" -gt 0 ] 2>/dev/null; then
-    tracker backfill dates --apply --refetch --yes --limit "$DATES" < /dev/null || true
-  else
-    tracker backfill dates --apply < /dev/null || true
-  fi
-  tracker ingest geo < /dev/null || true
-  tracker backfill scope --apply < /dev/null || true
-  tracker backfill derive < /dev/null || true
-  tracker logic resolve --auto --apply < /dev/null || true
-
-  # --- duplicates: before anything reads a row it may fold ----------------
-  # Ahead of audit, risks and logic, because each of those pays to read one row's
-  # sources: on 2026-10-19, 12 of the 14 first-round logic findings were on rows
-  # created that evening, and #1732 was worked twice and #1742 for 15 tool steps
-  # before the duplicate pass that ran after them merged both away.
-  if capped duplicates; then break; fi
-  phase "duplicates — $PAIRS pair(s)"
-  if [ "$DO_MERGE" -eq 1 ]; then
-    tracker duplicates resolve --merge --limit "$PAIRS" \
-      --min-confidence "$MIN_CONF" < /dev/null || true
-  else
-    tracker duplicates resolve --limit "$PAIRS" < /dev/null || true
-  fi
-
-  # --- audit: a T1 gate, and cheap ----------------------------------------
-  if capped audit; then break; fi
-  phase "audit — implausible figures, $AUDIT at a time"
-  tracker audit resolve --no-ask --limit "$AUDIT" < /dev/null || true
-
-  if capped risks; then break; fi
-  phase "risks — unquoted obstacles, $RISKS at a time"
-  tracker risks confirm --limit "$RISKS" < /dev/null || true
-
-  # --- the agent phases ---------------------------------------------------
-  if capped logic; then break; fi
-  phase "logic — a model reads the sources, $FINDINGS at a time"
-  tracker logic resolve --limit "$FINDINGS" < /dev/null || true
-
-  # After logic, which may rule a claim out and re-derive a row's tranches: the
-  # review then reads the tranches the night settled on.
-  if capped tranches; then break; fi
-  phase "tranches — a model nests the tranches of $NEST campus(es) that do not add up"
-  tracker tranches review --limit "$NEST" < /dev/null || true
-
-  # --- enrich: last, and the largest lever --------------------------------
-  # Every row sitting at T1 is held there by `fields_present` alone. Nothing above
-  # this line can move one, because they are not wrong — they are empty. First
-  # round(s) only: a second pass the same night finds the same pages, and a page it
-  # has read is not read again, so it was paying to be told so. `--t2` picks the rows
-  # that tier fails, fewest missing first.
-  # The forward views first: campuses being built or permitted that lack the date
-  # or the capacity the supply chart and the delay flags read (`--pipeline`).
-  if [ "$round" -le "$ENRICH_ROUNDS" ] && [ "$PIPELINE" -gt 0 ] 2>/dev/null; then
-    if capped pipeline; then break; fi
-    phase "enrich — $PIPELINE campus(es) being built or permitted with no date or capacity, $PIPELINE_BUDGET article budget"
-    tracker enrich --select "$PIPELINE" --pipeline --budget "$PIPELINE_BUDGET" \
-      < /dev/null || true
-  fi
-  if [ "$DO_ENRICH" -eq 1 ] && [ "$round" -le "$ENRICH_ROUNDS" ]; then
-    if capped enrich; then break; fi
-    phase "enrich — $ENRICH row(s) below T2, $ENRICH_BUDGET article budget"
-    tracker enrich --select "$ENRICH" --t2 --target 0 --budget "$ENRICH_BUDGET" \
-      < /dev/null || true
-  fi
-
-  # Re-read, from the article cache, what an older prompt extracted. The gate has
-  # been tightened release after release and each tightening applied only to rows
-  # written afterwards: on 2026-10-10, 2,320 citations were last read by a
-  # superseded prompt and 374 rows failed `vintage_current` for it. Cached only,
-  # so nothing is fetched and a closed publisher's page we already hold is read
-  # again legitimately; existing projects only, so a re-read never adds a campus.
-  # Oldest vintage first. About ¥0.02 an article.
-  if [ "$round" -eq 1 ] && [ "$REREAD" -gt 0 ] 2>/dev/null; then
-    if capped reread; then break; fi
-    phase "reread — $REREAD article(s) last read by a superseded prompt"
-    tracker ingest crawl --stale-prompt --cached-only --existing-only \
-      --limit "$REREAD" < /dev/null || true
-  fi
-
-  # Re-read what the gate refused before it last changed. v3.7.5 (2026-10-17)
-  # began accepting short exact quotes, quotes with one slip, hyphenated figures,
-  # pre-2020 years and coarse dates; 1,293 cached, readable articles held a refusal
-  # it may reverse. 60 a night, about ¥1.2, so the backlog clears in about 22 nights and
-  # then the step finds nothing and costs nothing.
-  if [ "$round" -eq 1 ] && [ "$RECHECK" -gt 0 ] 2>/dev/null; then
-    if capped recheck; then break; fi
-    phase "recheck — $RECHECK article(s) holding a refusal from before the gate's last revision"
-    tracker ingest crawl --refused-before-gate --cached-only --existing-only \
-      --limit "$RECHECK" < /dev/null || true
-  fi
-
-  # --- reconcile and measure ----------------------------------------------
-  phase 'settle — re-derive and score'
-  tracker backfill derive < /dev/null || true
-  tracker clean --snapshot --since 1 < /dev/null || true
-
-  SPENT=$(spent_so_far)
-  read -r F1 D1 B1 <<<"$(counts)"
-  printf '\n  round %s: findings %s -> %s (%+d)  groups %s -> %s (%+d)  below-T2 %s -> %s (%+d)\n' \
-    "$round" "$F0" "$F1" "$((F1 - F0))" "$D0" "$D1" "$((D1 - D0))" "$B0" "$B1" "$((B1 - B0))"
-
-  if progressed "$F1" "$D1" "$B1"; then
-    STALE=0
-  else
-    STALE=$((STALE + 1))
-    printf '  nothing below the night'"'"'s lowest (%s findings, %s groups, %s below T2): %s of %s stale rounds\n' \
-      "$MIN_F" "$MIN_D" "$MIN_B" "$STALE" "$DRY_ROUNDS"
-  fi
-  F0=$F1; D0=$D1; B0=$B1
-
-  if [ "$F1" -eq 0 ] && [ "$D1" -eq 0 ] && [ "$B1" -eq 0 ]; then
-    say "everything settled"; break
-  fi
-  if [ "$STALE" -ge "$DRY_ROUNDS" ]; then
-    say "$DRY_ROUNDS rounds with no reduction — this is the fixed point, stopping"; break
-  fi
-done
-
-# A round cut short by the ceiling skipped its settle. It is free, and it is what
-# re-derives the rows the phases that did run just changed.
-if [ "$CAPPED" -eq 1 ]; then
-  phase 'settle — re-derive and score, after the ceiling'
-  tracker backfill derive < /dev/null || true
-  tracker clean --snapshot --since 1 < /dev/null || true
-fi
-
-# --- the morning report -----------------------------------------------------
-
-say 'what is left'
-tracker clean < /dev/null || true
-echo
-tracker logic check < /dev/null 2>&1 | sed -n '1,12p' || true
-# How the figures relate (勾稽关系), and the change since last night: one line per
-# relationship, `!` on a held one that breaks (a bug). Recorded, so tomorrow's
-# report can say what tonight moved.
-say 'how the figures relate'
-tracker invariants --record < /dev/null || true
-echo
-tracker duplicates < /dev/null 2>&1 | sed -n '1,2p' || true
-# The opposite question: one row holding several campuses' citations, so its figures
-# are a mixture. Read-only — the count and the worst row; a person splits them.
-tracker duplicates mixed < /dev/null 2>&1 | sed -n '1,2p' || true
-
-ELAPSED=$(( ($(date +%s) - STARTED) / 60 ))
-say "overnight complete — ${ELAPSED}m, $(spent_summary)"
-spend_by_command
-
-# How the news came in: per source, what was seen, kept, read, failed to load, set
-# aside unread and found; how late it was; and whatever is wrong with the intake
-# itself — no discovery tonight, a feed gone quiet, fresh news left waiting, search
-# credit running low.
-say 'how the news came in'
-tracker news report --since "$STARTED_UTC" < /dev/null || true
-
-# Every value the night changed, each with the sentence now behind it. The quality
-# counts above cannot see a wrong value that has a real quote; a reader can, in the
-# minutes this list takes to read. `tracker logic rule-out` takes back a bad one.
-say 'what the night changed'
-if [ -n "$FIRST_SNAPSHOT" ] && [ -f "$FIRST_SNAPSHOT" ]; then
-  tracker changes --against "$FIRST_SNAPSHOT" < /dev/null || true
-else
-  echo "    no snapshot from before round 1 to compare against"
-fi
-echo
-printf '    Anything still listed needs either a person or a command that does not\n'
-printf '    exist yet. The block findings are the second kind — see this header.\n'
+# The night. A child, not `exec` — see THE LOCK above. Its own stdin is /dev/null and
+# so is every phase's: nothing in the night may wait on a keyboard.
+status=0
+OVERNIGHT_PID=$$ "$PY" -m tracker.overnight run --repo "$REPO" --allowance "$ALLOWANCE" "$@" \
+  < /dev/null || status=$?
+exit "$status"
