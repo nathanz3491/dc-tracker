@@ -86,7 +86,6 @@ def test_night_counts_matches_the_loop_definition(session):
     assert got.findings > 0 and got.groups > 0 and got.below_t2 > 0
     assert got.groups == 1, "four rows for one campus are one group, not six pairs"
     assert got.below_t2 == 6, "no row here has a citation, so none reaches T2"
-    assert got.line() == f"{got.findings} {got.groups} {got.below_t2}"
 
 
 def test_an_answered_finding_stops_counting(session):

@@ -594,8 +594,8 @@ def logic_resolve(
         # either way — that is deliberate, so the preview and the change come from
         # identical code — but printing "repaired" on a run that wrote nothing told
         # the reader the opposite of the truth. `--auto` without `--apply` is the
-        # dry-run half of `scripts/settle.sh` and `scripts/resolve.sh`, so this is
-        # the path most likely to be read and believed.
+        # preview a person reads before letting it write, so this is the path most
+        # likely to be read and believed.
         label = "repaired" if writing else "would repair"
         for repair in repairs:
             console.print(

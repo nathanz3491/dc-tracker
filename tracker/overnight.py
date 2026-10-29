@@ -149,7 +149,7 @@ Later rounds are cheaper than the first: every paid phase records what it answer
 or could not decide, keyed on the evidence it was shown, and does not re-offer it
 until that evidence changes or a month passes (`tracker/declines.py`).
 
-The per-item judgements — risks, audit, enrich's settle step — run at `high`
+The per-item judgements — risks, audit, tranches, enrich's settle step — run at `high`
 reasoning effort (`--judgement-effort`). They ran at `low` for one night,
 2026-09-30, and two of the audit's three model decisions that night were wrong in
 ways that move published totals: it replaced a campus's $600M with a statewide
@@ -535,7 +535,8 @@ def parser() -> argparse.ArgumentParser:
     a(
         "--local-judgement",
         action="store_true",
-        help="send risks, audit and settle to the local model (Ollama)",
+        help="send risks, audit, tranches and settle to the local model (Ollama); "
+        "the agent loops stay on the API",
     )
     a(
         "--backup-every",

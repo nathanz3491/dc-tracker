@@ -2218,8 +2218,8 @@ def changes(
         Path,
         typer.Option(
             "--against",
-            help="A copy of the database from before the run — the snapshot overnight.sh "
-            "takes before round 1.",
+            help="A copy of the database from before the run — the snapshot the nightly "
+            "loop takes before round 1.",
         ),
     ],
 ) -> None:

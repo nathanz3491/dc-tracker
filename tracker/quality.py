@@ -459,10 +459,6 @@ class NightCounts:
     def __iter__(self) -> Iterator[int]:
         return iter((self.findings, self.groups, self.below_t2))
 
-    def line(self) -> str:
-        """`findings groups below_t2`, the shape `scripts/overnight.sh` reads."""
-        return f"{self.findings} {self.groups} {self.below_t2}"
-
 
 def night_counts(session: Session) -> NightCounts:
     """The three numbers the nightly loop measures every round by. Read-only, free.
