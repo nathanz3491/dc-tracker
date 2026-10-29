@@ -744,3 +744,102 @@ def schema_version(engine: Engine) -> int:
             return 0
         row = conn.execute(text("SELECT MAX(version) FROM schema_version")).first()
     return int(row[0]) if row and row[0] is not None else 0
+
+
+# --- Snapshots ---------------------------------------------------------------
+#
+# The one way this project copies a database file. It runs in WAL mode, so committed
+# data sits in `tracker.db-wal` until a checkpoint folds it back, and a `cp` of
+# `tracker.db` alone opens cleanly, reports no error and is silently out of date —
+# measured once at 16.3 MB of main file against a 7.9 MB WAL. `VACUUM INTO` asks
+# SQLite for a consistent single-file copy instead, WAL content included. The nightly
+# loop's snapshot before it folds duplicates and `scripts/sync_db.py`'s local side
+# both come through here. (`sync_db`'s remote half cannot: it runs as `python3 -c`
+# on the far end, where this package is not importable, so it carries its own copy.)
+
+#: Tables whose row counts a snapshot is checked against. Not every table — just
+#: enough that a truncated copy cannot pass, cheaply.
+#:
+#: **Names are singular, and getting that wrong is silent.** An earlier version of
+#: `sync_db` counted `projects`/`sources`; nothing matched, the comparison ran over
+#: an empty dict, and the snapshot was reported "verified" having checked nothing.
+#: :func:`take_snapshot` refuses outright when no table is recognised.
+SNAPSHOT_TABLES: tuple[str, ...] = (
+    "project",
+    "source",
+    "event",
+    "risk",
+    "capacity_block",
+    "ingest_url",
+)
+
+
+def table_counts(path: Path | str) -> dict[str, int]:
+    """Row counts of :data:`SNAPSHOT_TABLES` that exist, from a read-only handle."""
+    con = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+    try:
+        present = {
+            row[0] for row in con.execute("select name from sqlite_master where type='table'")
+        }
+        return {
+            t: con.execute(f"select count(*) from {t}").fetchone()[0]
+            for t in SNAPSHOT_TABLES
+            if t in present
+        }
+    finally:
+        con.close()
+
+
+def vacuum_into(source: Path | str, target: Path | str) -> None:
+    """A consistent single-file copy of `source` at `target`, WAL content included.
+
+    `source` is opened read-only, so a running writer is never blocked for longer
+    than SQLite's own read. A file already at `target` is replaced.
+    """
+    target = Path(target)
+    if target.exists():
+        target.unlink()
+    con = sqlite3.connect(f"file:{Path(source).as_posix()}?mode=ro", uri=True)
+    try:
+        # Interpolated because VACUUM INTO takes no parameters. The path is one the
+        # caller names (a temporary file, a dated backup), never operator input, and a
+        # quote in it is doubled so it cannot end the literal early.
+        con.execute("VACUUM INTO '{}'".format(target.as_posix().replace("'", "''")))
+    finally:
+        con.close()
+
+
+def verify_snapshot(snap: Path | str, expected: dict[str, int]) -> list[str]:
+    """Everything wrong with a snapshot, empty when it is sound.
+
+    `PRAGMA integrity_check`, and no counted table with fewer rows than `expected`.
+    Greater is fine: writes can land between the two reads. Fewer means the copy lost
+    rows, which is the failure worth catching.
+    """
+    problems: list[str] = []
+    con = sqlite3.connect(f"file:{Path(snap).as_posix()}?mode=ro", uri=True)
+    try:
+        result = con.execute("pragma integrity_check").fetchone()[0]
+        if result != "ok":
+            problems.append(f"integrity_check said {result!r}")
+    finally:
+        con.close()
+    got = table_counts(snap)
+    for table, want in expected.items():
+        if got.get(table, 0) < want:
+            problems.append(f"{table}: {got.get(table, 0)} rows, source had {want}")
+    return problems
+
+
+def take_snapshot(source: Path | str, target: Path | str) -> list[str]:
+    """Count `source`, copy it to `target` with `VACUUM INTO`, and verify the copy.
+
+    Returns the problems :func:`verify_snapshot` found — empty when the copy is
+    sound. A source with none of :data:`SNAPSHOT_TABLES` is a problem too: the row
+    check would otherwise pass having compared nothing.
+    """
+    expected = table_counts(source)
+    if not expected:
+        return [f"none of {', '.join(SNAPSHOT_TABLES)} exist in {source}"]
+    vacuum_into(source, target)
+    return verify_snapshot(target, expected)

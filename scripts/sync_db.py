@@ -30,72 +30,24 @@ import json
 import os
 import shlex
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-#: Tables whose row counts are compared. Not every table — just enough that a
-#: truncated copy cannot pass, cheaply.
-#:
-#: **Names are singular, and getting that wrong is silent.** An earlier version
-#: counted `projects`/`sources`; nothing matched, the comparison ran over an
-#: empty dict, and the snapshot was reported "verified" having checked nothing.
-#: Both directions now refuse outright when no table is recognised.
-_COUNTED = ("project", "source", "event", "risk", "capacity_block", "ingest_url")
+# The checkout's own `tracker` package, whichever directory this is run from: the
+# local half of a sync (count, `VACUUM INTO`, verify) is the library's, the one
+# snapshot implementation the nightly loop also uses.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from tracker.db import SNAPSHOT_TABLES as _COUNTED
+from tracker.db import table_counts as counts
+from tracker.db import vacuum_into as snapshot
+from tracker.db import verify_snapshot as verify
 
 DEFAULT_HOST = "mm"
 DEFAULT_REMOTE = "~/dev/tracker/repo/data/tracker.db"
-
-
-def counts(path: Path) -> dict[str, int]:
-    """Row counts for the tables that exist, from a read-only handle."""
-    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    try:
-        present = {
-            row[0] for row in con.execute("select name from sqlite_master where type='table'")
-        }
-        return {
-            t: con.execute(f"select count(*) from {t}").fetchone()[0]
-            for t in _COUNTED
-            if t in present
-        }
-    finally:
-        con.close()
-
-
-def snapshot(source: Path, target: Path) -> None:
-    """A consistent single-file copy, WAL content included."""
-    if target.exists():
-        target.unlink()
-    con = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-    try:
-        # Interpolated because VACUUM INTO takes no parameters. The path is a
-        # temporary file this process just named, never operator input.
-        con.execute(f"VACUUM INTO '{target.as_posix()}'")
-    finally:
-        con.close()
-
-
-def verify(snap: Path, expected: dict[str, int]) -> list[str]:
-    """Everything wrong with the snapshot, empty when it is sound."""
-    problems: list[str] = []
-    con = sqlite3.connect(f"file:{snap}?mode=ro", uri=True)
-    try:
-        result = con.execute("pragma integrity_check").fetchone()[0]
-        if result != "ok":
-            problems.append(f"integrity_check said {result!r}")
-    finally:
-        con.close()
-    got = counts(snap)
-    for table, want in expected.items():
-        # Greater is fine: writes can land between the two reads. Fewer means the
-        # copy lost rows, which is the failure worth catching.
-        if got.get(table, 0) < want:
-            problems.append(f"{table}: {got.get(table, 0)} rows, source had {want}")
-    return problems
 
 
 def _ssh_python(host: str, code: str) -> str:
@@ -105,6 +57,12 @@ def _ssh_python(host: str, code: str) -> str:
     if result.returncode != 0:
         raise SystemExit(f"remote python failed:\n{result.stderr.strip()}")
     return result.stdout.strip()
+
+
+# The remote half is code sent as `python3 -c` to the far end, where the `tracker`
+# package is not importable (that is the system Python, not the checkout's venv). So
+# it repeats the count and the `VACUUM INTO` in a few self-contained lines, and the
+# library above stays the only copy on this side.
 
 
 def remote_counts(host: str, remote: str) -> dict[str, int]:
@@ -271,7 +229,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     if args.db is None:
         from tracker.config import get_settings
 
