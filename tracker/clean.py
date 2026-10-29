@@ -49,7 +49,7 @@ from typing import Any, Final
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tracker.models import Project
+from tracker.models import Project, preload_options
 
 #: Tier names, and the conditions each one adds to the tier below it. A row is at
 #: tier N when every condition of tiers 0..N holds, so the tiers are cumulative by
@@ -514,15 +514,22 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
 
 def scan(session: Session, *, project_ids: list[int] | None = None) -> Sweep:
     """Every row's card. About 4.5 seconds over the whole database."""
-    got = _shared(session, project_ids)
     query = select(Project)
     if project_ids:
         query = query.where(Project.id.in_(project_ids))
+    # Loaded once with every collection a card or a shared pass reads, and held for
+    # the whole sweep. The session keeps rows only weakly, so each pass below —
+    # silent defects, inversions, tranche groups, duplicates, then the cards — used
+    # to load every row afresh and lazy-load its collections again: 16,000 queries
+    # for one sweep. A read-only sweep sees the same rows either way; this only
+    # stops it reading them five times.
+    projects = session.scalars(query.options(*preload_options())).all()
+    got = _shared(session, project_ids)
 
     cards: list[CleanCard] = []
     failures: collections.Counter[str] = collections.Counter()
     histogram: collections.Counter[int] = collections.Counter()
-    for project in session.scalars(query).all():
+    for project in projects:
         one = card(session, project, shared=got)
         cards.append(one)
         histogram[one.tier] += 1

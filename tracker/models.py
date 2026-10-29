@@ -187,6 +187,27 @@ class Project(Base):
         return f"<Project {self.id} {self.company}/{self.name} {self.state} c={self.confidence}>"
 
 
+def preload_options() -> tuple:
+    """Loader options that fetch every collection of `Project` with the rows.
+
+    For the whole-table sweeps (`clean.scan`, `logic.review`): one query per
+    collection instead of one per row and collection. Each collection is the same
+    rows a lazy load would return, in the same order — both read it through the
+    collection's `project_id` index — so a sweep's answers do not change, only the
+    number of round trips behind them.
+    """
+    from sqlalchemy.orm import selectinload
+
+    return (
+        selectinload(Project.sources),
+        selectinload(Project.events),
+        selectinload(Project.risks),
+        selectinload(Project.blocks),
+        selectinload(Project.parties),
+        selectinload(Project.nesting),
+    )
+
+
 class Source(Base):
     __tablename__ = "source"
 
