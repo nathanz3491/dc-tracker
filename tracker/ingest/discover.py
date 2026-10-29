@@ -2168,6 +2168,111 @@ def requeue_reopened(session: Session, unreadable: Callable[[str], bool]) -> int
     return len(rows)
 
 
+def unreadable_now(
+    session: Session, cache_dir: Path | None, *, path: Path | None = None
+) -> tuple[Callable[[str], bool], dict[str, Refusing]]:
+    """(the test for pages no fetch will read, the refusing publishers it counts).
+
+    The three reads every caller of :func:`unreadable_test` made in the same order --
+    the closed entries a weekly check found open, the publishers refusing every read,
+    then the test over both -- made once, here, so that the queue's preparation, the
+    refresh phase and the queue listings cannot drift into different ideas of what is
+    unreadable. `cache_dir` is the cache the crawl will serve from, None for none.
+    """
+    reopened = reopened_names(session)
+    refusing = refusing_publishers(session, path=path, reopened=reopened)
+    return unreadable_test(cache_dir, path=path, reopened=reopened, refusing=refusing), refusing
+
+
+@dataclass
+class QueuePrep:
+    """What :func:`prepare_queue` did to the queue, for the caller to report."""
+
+    #: Pages no fetch will read tonight, the weekly checks among them excepted. The
+    #: test the crawl's selection orders by, so it is the one this run prepared with.
+    unreadable: Callable[[str], bool]
+    #: Publishers refusing every read lately, by host.
+    refusing: dict[str, Refusing]
+    #: Discarded pages put back: their publisher answered, or a body was cached.
+    requeued: int = 0
+    #: Queued pages taken out of the queue as unreadable.
+    discarded: int = 0
+    #: Why each page set aside as no campus news was set aside, one entry a page.
+    not_news: list[str] = field(default_factory=list)
+    #: Pages set aside as no campus news earlier that no rule names any more.
+    unset: int = 0
+    #: Queued articles set aside as another copy of a story.
+    copies: int = 0
+    #: Copies set aside earlier, put back because the copy kept could not be read.
+    back: int = 0
+    #: One page each of the refusing publishers whose weekly check is due, to read first.
+    probes: list[str] = field(default_factory=list)
+
+
+def prepare_queue(
+    session: Session,
+    cache_dir: Path | None,
+    *,
+    probe: bool = False,
+    limit: int | None = None,
+) -> QueuePrep:
+    """Tidy the queue before a crawl reads it, and say what was done.
+
+    The steps, in this order because each reads what the one before wrote:
+
+    1. learn which publishers refuse every read, and so which pages no fetch will
+       read (:func:`unreadable_now`);
+    2. put back the discarded pages that are readable again (:func:`requeue_reopened`);
+    3. discard the queued pages that are not (:func:`discard_unreadable`);
+    4. set aside the pages no campus story can be in (:func:`set_aside_not_news`) --
+       before the next step, so a page never read is not kept as a story's one copy;
+    5. set aside every other copy of a story (:func:`drop_same_story`);
+    6. with `probe`, put one page of each refusing publisher due its weekly check back
+       in the queue, to be read first (:func:`probe_refusing`); at most a tenth of
+       `limit`, the crawl's read limit, so a small crawl is not all checks. `tracker
+       sync` leaves this to the nightly queue read.
+
+    **One transaction, the caller's.** Every step writes through `session` and none
+    commits: the caller opens it with `session_scope(engine, commit=not dry_run)`, so a
+    real run commits all six together and a dry run rolls all six back, and a run
+    that dies part-way leaves the queue as it found it rather than half tidied.
+    Commit it **before** reading the queue for the crawl (:func:`pending`) and before
+    anything slow, such as the headline screen's model calls: those then run on a
+    queue already settled, without holding SQLite's one write lock while they wait.
+    On a dry run the read that follows sees the queue as it was, which is what
+    `--dry-run` has always reported.
+
+    The test returned answers each address once and remembers it. Nothing in the
+    preparation or the selection after it caches a page, so the answer cannot change
+    before the crawl starts; asked four times over the same few thousand queued pages,
+    each answer a file lookup, it was the larger part of the preparation's cost.
+    """
+    test, refusing = unreadable_now(session, cache_dir)
+    known: dict[str, bool] = {}
+
+    def unreadable(url: str) -> bool:
+        answer = known.get(url)
+        if answer is None:
+            answer = known[url] = test(url)
+        return answer
+
+    prep = QueuePrep(unreadable=unreadable, refusing=refusing)
+    prep.requeued = requeue_reopened(session, unreadable)
+    prep.discarded = discard_unreadable(session, unreadable, refusing=refusing)
+    not_news, prep.unset = set_aside_not_news(session)
+    prep.not_news = [reason for _, reason in not_news]
+    copies, prep.back = drop_same_story(session, unreadable)
+    prep.copies = len(copies)
+    if probe:
+        prep.probes = probe_refusing(
+            session, refusing, cache_dir, limit=max(1, limit // 10) if limit else None
+        )
+    if prep.probes:
+        probing = frozenset(prep.probes)
+        prep.unreadable = lambda url: url not in probing and unreadable(url)
+    return prep
+
+
 def pending(
     session: Session,
     limit: int | None = None,
@@ -3636,6 +3741,7 @@ __all__ = [
     "ProbeResult",
     "ProjectIdentity",
     "PruneCandidate",
+    "QueuePrep",
     "RecentWalkFetcher",
     "Refusing",
     "RememberingFetcher",
@@ -3665,6 +3771,7 @@ __all__ = [
     "pending",
     "pending_risk_count",
     "pending_split",
+    "prepare_queue",
     "probe_closed",
     "probe_refusing",
     "project_identities",
@@ -3685,6 +3792,7 @@ __all__ = [
     "set_aside_not_news",
     "sweep_sitemaps",
     "term_in",
+    "unreadable_now",
     "unreadable_test",
     "verify_urls",
     "walk_cache",

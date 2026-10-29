@@ -621,7 +621,7 @@ def test_queue_lists_a_candidate_with_its_headline(initialized: Path):
     assert result.exit_code == 0
     assert "900MW data center campus" in result.output, "the headline is what makes it triageable"
     assert "dcd" in result.output
-    assert "tracker ingest crawl --from-queue" in result.output
+    assert "tracker ingest queue" in result.output
 
 
 def test_queue_excludes_already_crawled_urls(initialized: Path):
@@ -655,26 +655,84 @@ def test_queue_aside_names_pages_no_campus_story_can_be_in_and_sets_them_aside(
     assert "campus-approved" in listing and "findings-report" not in listing
 
 
-@pytest.mark.parametrize(
-    "extra",
-    [
-        ["--from-queue", "--urls", "URLS"],
-        ["--from-queue", "--url", "https://a.test/x"],
-        ["--urls", "URLS", "--url", "https://a.test/x"],
-    ],
-)
-def test_crawl_sources_are_mutually_exclusive(initialized: Path, tmp_path: Path, extra):
-    """Three ways in now, and still only one at a time.
+def test_crawl_sources_are_mutually_exclusive(initialized: Path, tmp_path: Path):
+    """A file of links or links named one by one, never both at once.
 
-    The message names which two were given rather than saying "not both", which
-    stopped being accurate once `--url` existed.
+    The message names which two were given rather than saying "not both".
     """
     urls = tmp_path / "u.txt"
     urls.write_text("https://a.test/x\n", encoding="utf-8")
-    args = [str(urls) if part == "URLS" else part for part in extra]
-    result = invoke(initialized, "ingest", "crawl", *args)
+    result = invoke(
+        initialized, "ingest", "crawl", "--urls", str(urls), "--url", "https://a.test/x"
+    )
     assert result.exit_code == 2
     assert "only one of" in result.output
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # The nightly loop's three reads, exactly as it ran them before the split.
+        (["--from-queue", "--new-first", "--limit", "900", "--screen"], "tracker ingest queue"),
+        (["--from-queue", "--new-first", "--limit", "900"], "tracker ingest queue"),
+        (
+            ["--stale-prompt", "--cached-only", "--existing-only", "--limit", "60"],
+            "tracker ingest reread",
+        ),
+        (
+            ["--refused-before-gate", "--cached-only", "--existing-only", "--limit", "60"],
+            "tracker ingest recheck",
+        ),
+    ],
+)
+def test_the_old_crawl_forms_fail_naming_the_command_that_replaced_them(
+    initialized: Path, old, new
+):
+    """`ingest crawl --from-queue` and its siblings are commands of their own now. The
+    old spelling must stop, loudly and pointing at the new one -- not run some other
+    job, and not die on Click's "no such option" with no idea where the job went."""
+    result = invoke(initialized, "ingest", "crawl", *old)
+    assert result.exit_code == 2, result.output
+    assert new in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize(
+    ("args", "owner"),
+    [
+        (["--url", "https://a.test/x", "--limit", "5"], "tracker ingest queue"),
+        (["--url", "https://a.test/x", "--new-first"], "tracker ingest queue"),
+        (["--url", "https://a.test/x", "--no-screen"], "tracker ingest queue"),
+        (["--url", "https://a.test/x", "--cached-only"], "tracker ingest reread"),
+        (["--url", "https://a.test/x", "--existing-only"], "tracker ingest recheck"),
+    ],
+)
+def test_crawl_refuses_the_flags_of_the_other_reads(initialized: Path, args, owner):
+    """`--limit` beside `--url` used to be accepted and ignored; now it is refused, and
+    the refusal says which command it belongs to."""
+    result = invoke(initialized, "ingest", "crawl", *args)
+    assert result.exit_code == 2, result.output
+    assert owner in " ".join(result.output.split())
+
+
+@pytest.mark.parametrize(
+    ("command", "foreign"),
+    [
+        ("queue", ["--cached-only"]),
+        ("queue", ["--existing-only"]),
+        ("queue", ["--url", "https://a.test/x"]),
+        ("queue", ["--force"]),
+        ("reread", ["--new-first"]),
+        ("reread", ["--screen"]),
+        ("reread", ["--urls", "u.txt"]),
+        ("recheck", ["--new-first"]),
+        ("recheck", ["--no-screen"]),
+        ("recheck", ["--check"]),
+    ],
+)
+def test_each_read_takes_only_its_own_flags(initialized: Path, command, foreign):
+    result = invoke(initialized, "ingest", command, *foreign)
+    assert result.exit_code == 2, result.output
+    assert "No such option" in result.output
 
 
 def test_crawl_accepts_a_single_url_without_a_file(initialized: Path):
@@ -698,21 +756,21 @@ def test_crawl_rejects_a_url_that_is_not_one(initialized: Path):
 def test_crawl_with_neither_source_explains_the_options(initialized: Path):
     result = invoke(initialized, "ingest", "crawl")
     assert result.exit_code == 2
-    assert "--from-queue" in result.output
+    assert "tracker ingest queue" in " ".join(result.output.split())
     assert "--check" in result.output
 
 
-def test_crawl_from_an_empty_queue_exits_cleanly(initialized: Path):
+def test_queue_read_from_an_empty_queue_exits_cleanly(initialized: Path):
     """Nothing to do is not an error, and must not need an API key to discover that."""
-    result = invoke(initialized, "ingest", "crawl", "--from-queue")
+    result = invoke(initialized, "ingest", "queue")
     assert result.exit_code == 0
     assert "queue is empty" in result.output
 
 
-def test_crawl_from_queue_needs_a_key_and_says_so(initialized: Path):
+def test_queue_read_needs_a_key_and_says_so(initialized: Path):
     """The key is checked before any fetching, so a missing one costs nothing."""
     queue_one(initialized)
-    result = invoke(initialized, "ingest", "crawl", "--from-queue")
+    result = invoke(initialized, "ingest", "queue")
     assert result.exit_code == 2
     assert "DEEPSEEK_API_KEY" in result.output
     assert "api.deepseek.com" in result.output, "must name the host the key has to work against"
@@ -722,7 +780,7 @@ def test_crawl_from_queue_needs_a_key_and_says_so(initialized: Path):
     )
 
 
-def test_crawl_from_queue_sets_aside_a_refusing_publisher_but_checks_one_page(
+def test_queue_read_sets_aside_a_refusing_publisher_but_checks_one_page(
     initialized: Path, monkeypatch
 ):
     """A publisher whose last pages were all refused, on two days, has its queued pages
@@ -776,7 +834,7 @@ def test_crawl_from_queue_sets_aside_a_refusing_publisher_but_checks_one_page(
 
     monkeypatch.setattr(crawl, "run", fake_run)
     set_key(monkeypatch)
-    result = invoke(initialized, "ingest", "crawl", "--from-queue", "--limit", "10")
+    result = invoke(initialized, "ingest", "queue", "--limit", "10")
 
     assert result.exit_code == 0, result.output
     assert asked == [["https://refuses.test/2026/10/newer/", "https://reads.test/2026/10/story/"]]
@@ -787,6 +845,92 @@ def test_crawl_from_queue_sets_aside_a_refusing_publisher_but_checks_one_page(
             select(IngestUrl).where(IngestUrl.url == "https://refuses.test/2026/10/older/")
         )
         assert (older.status, older.error) == ("skipped", discover.DISCARDED_REFUSING)
+
+
+def _capture_reads(monkeypatch) -> dict:
+    """Swap the crawl for a recorder of what it was asked to read, and how."""
+    from tracker.ingest import crawl
+    from tracker.ingest.records import IngestReport
+
+    seen: dict = {}
+
+    def fake_run(session, urls, **kwargs):
+        seen.update(kwargs, urls=list(urls))
+        return IngestReport()
+
+    monkeypatch.setattr(crawl, "run", fake_run)
+    set_key(monkeypatch)
+    return seen
+
+
+def test_the_nightly_queue_read_screens_then_reads_the_news_first(initialized: Path, monkeypatch):
+    """`ingest queue --new-first --limit N --screen` is the loop's call: the queue in its
+    news-first order, unlimited, to the headline screen, which keeps the first N."""
+    from tracker.cli import ingest as ingest_cli
+    from tracker.ingest import discover
+
+    queue_one(initialized)
+    asked: dict = {}
+    real_pending = discover.pending
+
+    def pending(session, **kwargs):
+        asked.update(kwargs)
+        return real_pending(session, **kwargs)
+
+    def screen(session, queued, *, want, apply):
+        asked.update(screened=[row.url for row in queued], want=want, apply=apply)
+        return queued[:want]
+
+    monkeypatch.setattr(discover, "pending", pending)
+    monkeypatch.setattr(ingest_cli, "_screen_headlines", screen)
+    seen = _capture_reads(monkeypatch)
+    result = invoke(initialized, "ingest", "queue", "--new-first", "--limit", "3", "--screen")
+
+    assert result.exit_code == 0, result.output
+    assert (asked["limit"], asked["new_first"]) == (None, True)
+    assert (asked["want"], asked["apply"]) == (3, True)
+    assert seen["urls"] == ["https://a.test/one/"]
+    assert seen["force"] is True
+    assert (seen["cached_only"], seen["existing_only"], seen["route"]) == (False, False, None)
+    assert "ingest queue: queue" in result.output
+
+
+@pytest.mark.parametrize(
+    ("command", "selector"), [("reread", "stale_by_prompt"), ("recheck", "refused_before_gate")]
+)
+def test_the_nightly_rereads_choose_from_the_cache_and_create_nothing(
+    initialized: Path, monkeypatch, command, selector
+):
+    """`ingest reread|recheck --cached-only --existing-only --limit N`, as the loop runs
+    them: only what the cache holds is chosen, before the limit is cut, and the crawl
+    is told to fetch nothing and found no row."""
+    from tracker.ingest import crawl
+
+    chosen: dict = {}
+
+    def select(session, **kwargs):
+        chosen.update(kwargs)
+        return ["https://a.test/read-before/"]
+
+    monkeypatch.setattr(crawl, selector, select)
+    seen = _capture_reads(monkeypatch)
+    result = invoke(
+        initialized, "ingest", command, "--cached-only", "--existing-only", "--limit", "7"
+    )
+
+    assert result.exit_code == 0, result.output
+    assert chosen["limit"] == 7
+    assert chosen["readable_in"] is not None and chosen["policy"] is not None
+    assert seen["urls"] == ["https://a.test/read-before/"]
+    assert (seen["force"], seen["cached_only"], seen["existing_only"]) == (True, True, True)
+    assert seen["route"] is not None
+
+
+@pytest.mark.parametrize("command", ["reread", "recheck"])
+def test_a_reread_refuses_cached_only_beside_no_cache(initialized: Path, command):
+    result = invoke(initialized, "ingest", command, "--cached-only", "--no-cache")
+    assert result.exit_code == 2
+    assert "opposite things" in result.output
 
 
 def test_point_reads_a_link_through_the_whole_fetch_ladder(initialized: Path, monkeypatch):

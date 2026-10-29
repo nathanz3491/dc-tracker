@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import atexit
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Final
 
 import typer
 from rich.markup import escape
@@ -87,6 +88,207 @@ def ingest_manual(
     _print_report(report, title=f"ingest manual: {json_path.name}")
 
 
+# --- reading articles: one command per way of choosing them ------------------
+#
+# `ingest crawl` used to be five jobs behind one name -- a file of links, a link, the
+# queue, a re-read under a newer prompt, a re-read under a revised gate -- chosen by a
+# flag, with every other job's flags accepted and quietly ignored: `--limit` beside
+# `--urls`, `--new-first` beside `--stale-prompt`. Each job is its own command now and
+# takes only the flags that mean something to it. What they share -- from building the
+# model client to printing the report -- is `_read`, and the flags they share are
+# declared once, here.
+
+_Prompt = Annotated[str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")]
+_Browser = Annotated[
+    bool,
+    typer.Option(
+        "--browser",
+        help="Allow escalation to Crawl4AI for pages plain HTTP cannot read. Needs the 'crawl' extra.",
+    ),
+]
+_DryRun = Annotated[bool, typer.Option("--dry-run", help="Report without writing.")]
+_NoCache = Annotated[bool, typer.Option("--no-cache", help="Ignore the on-disk article cache.")]
+_VerifyIdentity = Annotated[
+    bool,
+    typer.Option(
+        "--verify-identity/--no-verify-identity",
+        help=(
+            "Default. Before creating a row that has a near-match, a model reads "
+            "the article and says whether it is the same site — preventing the "
+            "duplicate instead of reporting it. Fires only on ambiguous inserts, "
+            "and falls back to creating the row whenever it is unsure."
+        ),
+    ),
+]
+_LlmProvider = Annotated[
+    str | None,
+    typer.Option(
+        "--llm-provider",
+        help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+        show_default=False,
+    ),
+]
+_CachedOnly = Annotated[
+    bool,
+    typer.Option(
+        "--cached-only",
+        help="Read only articles already cached; never fetch. Chooses only articles "
+        "the cache holds, before --limit is cut.",
+    ),
+]
+_ExistingOnly = Annotated[
+    bool,
+    typer.Option(
+        "--existing-only",
+        help="Never create a project. Refusals are counted and logged.",
+    ),
+]
+
+
+@dataclass(frozen=True)
+class _Reading:
+    """How to read, whichever command chose what to read: the flags they share."""
+
+    prompt_name: str
+    browser: bool
+    dry_run: bool
+    no_cache: bool
+    verify_identity: bool
+    cached_only: bool = False
+    existing_only: bool = False
+
+
+def _read(
+    command: str,
+    engine,
+    url_list: list[str],
+    *,
+    source_label: str,
+    force: bool,
+    how: _Reading,
+) -> None:
+    """Read `url_list` through the crawl and print what came of it.
+
+    The model client is built first, so a missing key fails before a single page is
+    fetched; then the fetch ladder, the crawl, the identity arbiter's tally, the run
+    ledger and the report. `command` is the subcommand's name, which labels all of it.
+    """
+    from tracker.ingest import crawl
+    from tracker.ingest.fetch import MissingDependency, ensure_browser_available, escalation_ladder
+    from tracker.llm import LLMUnavailable, build_extractor
+
+    settings = get_settings()
+    label = f"ingest {command}"
+    # Resolved before any fetching, so a missing key fails immediately rather
+    # than after paying for a page load per URL.
+    try:
+        extractor = build_extractor(settings)
+    except LLMUnavailable as exc:
+        _fail(str(exc))
+        return
+
+    if how.browser:
+        # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
+        # so nothing before this point would have noticed the extra was absent.
+        try:
+            ensure_browser_available()
+        except MissingDependency as exc:
+            _fail(str(exc))
+            return
+    # A ladder, cheapest rung first. curl_cffi needs no flag: it costs one
+    # ordinary request and clears the WAFs that fingerprint TLS rather than
+    # reading the User-Agent. Chromium stays behind --browser.
+    escalate = escalation_ladder(settings, browser=how.browser)
+
+    cache_dir = None if how.no_cache else article_cache("articles")
+    console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
+
+    from tracker import keys as keys_mod
+
+    started = time.monotonic()
+    with session_scope(engine) as session:
+        report = crawl.run(
+            session,
+            url_list,
+            prompt_name=how.prompt_name,
+            extractor=extractor,
+            escalate=escalate,
+            settings=settings,
+            dry_run=how.dry_run,
+            force=force,
+            cache_dir=cache_dir,
+            cached_only=how.cached_only,
+            existing_only=how.existing_only,
+            # A re-read of an article rows already cite goes back to the row it names,
+            # spelling aside — see `keys.citing_route`.
+            route=keys_mod.citing_route(session) if how.existing_only else None,
+            arbiter=_identity_arbiter(how.verify_identity, label=label),
+        )
+    _report_arbiter(label)
+
+    from tracker import runlog
+
+    if not how.dry_run:
+        runlog.record_ingest(
+            _db_path(),
+            command=label,
+            report=report,
+            seconds=time.monotonic() - started,
+            model=getattr(settings, "minimax_model", None),
+        )
+
+    _print_report(report, title=f"{label}: {source_label}{' (dry run)' if how.dry_run else ''}")
+    if report.llm_calls:
+        console.print(
+            f"[dim]{report.llm_calls} model call(s), {report.tokens:,} tokens "
+            f"({report.prompt_tokens:,} in, {report.completion_tokens:,} out). "
+            f"Logged to data/runs/{runlog.LOG_NAME}.[/dim]"
+        )
+
+
+def _cache_flags_agree(how: _Reading) -> None:
+    """Refuse `--cached-only` beside `--no-cache` before choosing anything to read."""
+    if how.cached_only and how.no_cache:
+        _fail("--cached-only and --no-cache ask for opposite things")
+
+
+#: The jobs `ingest crawl` ran behind a flag until each became its own command.
+_MOVED: Final = {
+    "--from-queue": "queue",
+    "--stale-prompt": "reread",
+    "--refused-before-gate": "recheck",
+}
+
+#: Flags only those jobs took, and the commands that take them now.
+_ELSEWHERE: Final = {
+    "--limit": ("queue", "reread", "recheck"),
+    "--new-first": ("queue",),
+    "--screen": ("queue",),
+    "--cached-only": ("reread", "recheck"),
+    "--existing-only": ("reread", "recheck"),
+}
+
+
+def _refuse_moved(given: dict[str, bool]) -> None:
+    """Fail, naming the command to run instead, on a flag `ingest crawl` no longer takes.
+
+    The old spellings are still parsed (as hidden options) so that they reach this
+    rather than Click's bare "no such option", which would leave whoever typed
+    `ingest crawl --from-queue` -- or a script that has not been updated -- with no
+    idea where the job went.
+    """
+    for flag, command in _MOVED.items():
+        if given.get(flag):
+            _fail(
+                f"`ingest crawl {flag}` is its own command now: run `tracker ingest "
+                f"{command}` (`tracker ingest {command} --help` lists its options)"
+            )
+    for flag, commands in _ELSEWHERE.items():
+        if given.get(flag):
+            where = ", ".join(f"`tracker ingest {name}`" for name in commands)
+            _fail(f"`ingest crawl` reads the links it is given and takes no {flag}: see {where}")
+
+
 @ingest_app.command("crawl")
 def ingest_crawl(
     urls: Annotated[
@@ -97,144 +299,64 @@ def ingest_crawl(
         list[str] | None,
         typer.Option("--url", help="A single article URL. Repeatable."),
     ] = None,
-    from_queue: Annotated[
-        bool,
-        typer.Option(
-            "--from-queue", help="Crawl what `tracker discover` queued instead of a file."
-        ),
-    ] = False,
-    stale_prompt: Annotated[
-        bool,
-        typer.Option(
-            "--stale-prompt",
-            help="Re-read sources extracted by an older version of the prompt.",
-        ),
-    ] = False,
-    refused: Annotated[
-        bool,
-        typer.Option(
-            "--refused-before-gate",
-            help=(
-                "Re-read sources holding a value, milestone or party the evidence gate "
-                "refused before its last revision, most refusals first."
-            ),
-        ),
-    ] = False,
-    limit: Annotated[
-        int | None,
-        typer.Option(
-            "--limit",
-            help="With --from-queue, --stale-prompt or --refused-before-gate, take at most this many.",
-        ),
-    ] = None,
-    new_first: Annotated[
-        bool,
-        typer.Option(
-            "--new-first",
-            help="With --from-queue, read articles naming no tracked campus first, newest first.",
-        ),
-    ] = False,
-    screen_headlines: Annotated[
-        bool,
-        typer.Option(
-            "--screen",
-            help="With --from-queue, have a model read the headlines first and set aside what "
-            "cannot be campus news (`tracker queue screen`).",
-        ),
-    ] = False,
-    prompt_name: Annotated[
-        str, typer.Option("--prompt", help="Prompt name or path, e.g. extract-v1.")
-    ] = "extract-v1",
     check: Annotated[
         bool,
         typer.Option("--check", help="Test LLM connectivity and exit. Ingests nothing."),
     ] = False,
-    browser: Annotated[
-        bool,
-        typer.Option(
-            "--browser",
-            help="Allow escalation to Crawl4AI for pages plain HTTP cannot read. Needs the 'crawl' extra.",
-        ),
-    ] = False,
     force: Annotated[
-        bool, typer.Option("--force", help="Re-process URLs a previous run completed.")
-    ] = False,
-    dry_run: Annotated[bool, typer.Option("--dry-run", help="Report without writing.")] = False,
-    no_cache: Annotated[
-        bool, typer.Option("--no-cache", help="Ignore the on-disk article cache.")
-    ] = False,
-    cached_only: Annotated[
         bool,
-        typer.Option(
-            "--cached-only",
-            help="Read only articles already cached; never fetch. Pair with --stale-prompt.",
-        ),
+        typer.Option("--force", help="With --urls, re-process URLs a previous run completed."),
     ] = False,
-    existing_only: Annotated[
-        bool,
-        typer.Option(
-            "--existing-only",
-            help="Never create a project. Refusals are reported. Pair with --stale-prompt.",
-        ),
-    ] = False,
-    verify_identity: Annotated[
-        bool,
-        typer.Option(
-            "--verify-identity/--no-verify-identity",
-            help=(
-                "Default. Before creating a row that has a near-match, a model reads "
-                "the article and says whether it is the same site — preventing the "
-                "duplicate instead of reporting it. Fires only on ambiguous inserts, "
-                "and falls back to creating the row whenever it is unsure."
-            ),
-        ),
-    ] = True,
-    llm_provider: Annotated[
-        str | None,
-        typer.Option(
-            "--llm-provider",
-            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
-            show_default=False,
-        ),
-    ] = None,
+    prompt_name: _Prompt = "extract-v1",
+    browser: _Browser = False,
+    dry_run: _DryRun = False,
+    no_cache: _NoCache = False,
+    verify_identity: _VerifyIdentity = True,
+    llm_provider: _LlmProvider = None,
+    # The flags of the jobs that moved out, hidden: see `_refuse_moved`.
+    from_queue: Annotated[bool, typer.Option("--from-queue", hidden=True)] = False,
+    stale_prompt: Annotated[bool, typer.Option("--stale-prompt", hidden=True)] = False,
+    refused: Annotated[bool, typer.Option("--refused-before-gate", hidden=True)] = False,
+    limit: Annotated[int | None, typer.Option("--limit", hidden=True)] = None,
+    new_first: Annotated[bool, typer.Option("--new-first", hidden=True)] = False,
+    screen: Annotated[bool | None, typer.Option("--screen/--no-screen", hidden=True)] = None,
+    cached_only: Annotated[bool, typer.Option("--cached-only", hidden=True)] = False,
+    existing_only: Annotated[bool, typer.Option("--existing-only", hidden=True)] = False,
 ) -> None:
-    """Extract projects from news articles with an LLM.
+    """Extract projects from the news articles you name, with an LLM.
 
     Every non-null value must be backed by a verbatim quote that really appears in
     the fetched article; unsupported values are dropped and the drop is recorded
     in the project's notes.
 
-    `--stale-prompt` re-reads articles this database has already read, using the
-    prompt as it stands today. The gate has been tightened repeatedly and each
-    improvement only ever applied to rows written after it landed — so a row
-    extracted before migration `0007` has no per-field quote, not because nothing
-    supported it but because there was nowhere to record the sentence. Those rows
-    read as established ever since. Served from the article cache by default,
-    which makes it a re-read rather than a re-fetch: `--no-cache` would confound
-    "the prompt improved" with "the page changed".
+    `--urls FILE` reads a file of links, `--url` one link (repeatable), and either is
+    read even if a previous run already read it: a link named by hand is one somebody
+    wants read now. `--check` only tests that the model answers.
 
-    `--refused-before-gate` is the same re-read for a change to the gate rather than
-    to the prompt, which does not move the prompt's stamp and so is invisible to
-    `--stale-prompt`: articles holding a refusal from before `crawl.GATE_REVISED_AT`
-    that no crawl has tried since. Each is taken once. Articles behind an
-    announcement, expansion, filing or delay the tense check filed as a forecast
-    before `crawl.TENSE_CHECK_REVISED_AT` go first.
-
-    **Pair a re-read with `--existing-only`.** An article this database already
-    cites also names other things — re-reading Hyperion's coverage yields "Project
-    Everest" and a parish's generating units — and a repair pass that quietly adds
-    campuses is an ingest with no worklist and no review. The refusals are counted
-    and logged, so a genuinely new campus can be added deliberately afterwards.
+    The other ways of choosing what to read are commands of their own: `tracker
+    ingest queue` reads what `tracker discover` queued, `tracker ingest reread` what
+    an older prompt extracted, and `tracker ingest recheck` what the evidence gate
+    refused before its last revision.
     """
+    _refuse_moved(
+        {
+            "--from-queue": from_queue,
+            "--stale-prompt": stale_prompt,
+            "--refused-before-gate": refused,
+            "--limit": limit is not None,
+            "--new-first": new_first,
+            "--screen": screen is not None,
+            "--cached-only": cached_only,
+            "--existing-only": existing_only,
+        }
+    )
     _use_llm(llm_provider)
     from tracker.ingest import crawl
     from tracker.llm import LLMUnavailable, build_extractor
 
-    settings = get_settings()
-
     if check:
         try:
-            info = build_extractor(settings).check()
+            info = build_extractor(get_settings()).check()
         except LLMUnavailable as exc:
             _fail(str(exc))
             return
@@ -246,35 +368,18 @@ def ingest_crawl(
         console.print("[green]ok[/green]")
         return
 
-    chosen = [
-        name
-        for name, given in (
-            ("--urls", urls),
-            ("--url", url),
-            ("--from-queue", from_queue),
-            ("--stale-prompt", stale_prompt),
-            ("--refused-before-gate", refused),
-        )
-        if given
-    ]
-    if len(chosen) > 1:
-        _fail(
-            "pass only one of --urls, --url, --from-queue, --stale-prompt or "
-            "--refused-before-gate "
-            f"(got {', '.join(chosen)})"
-        )
+    if urls and url:
+        _fail("pass only one of --urls or --url (got --urls, --url)")
         return
-    if not chosen:
+    if not urls and not url:
         _fail(
-            "pass --urls FILE, --url URL, --from-queue, --stale-prompt, "
-            "--refused-before-gate, "
-            "or --check to test connectivity"
+            "pass --urls FILE or --url URL, or --check to test connectivity. The queue "
+            "is `tracker ingest queue`; re-reads are `tracker ingest reread` and "
+            "`tracker ingest recheck`"
         )
         return
 
     engine, _ = init_db(_db_path())
-    source_label = "queue"
-
     if url:
         from tracker.normalize import canonical_url
 
@@ -286,153 +391,9 @@ def ingest_crawl(
             _fail(f"not an http(s) URL: {bad[0]}")
             return
         source_label = url_list[0] if len(url_list) == 1 else f"{len(url_list)} URLs"
-        # Same reasoning as the queue path below: a URL named explicitly is one
-        # the operator wants read now, and the skip rule would otherwise make a
-        # second attempt at an already-seen link do nothing at all.
-        force = True
-    elif from_queue:
-        from tracker.ingest import discover as disc
-
-        # A page on a publisher closed to us, or on one that has refused every read
-        # lately, with no body cached, is taken out of the queue: no fetch will read
-        # it, and sorted last it still sat there, 627 of 1,893 queued pages on
-        # 2026-10-14. A publisher found readable again -- by a weekly check, or by any
-        # of its pages being read -- gets its discarded pages back first.
-        cache = None if no_cache else article_cache("articles")
-        with session_scope(engine, commit=False) as session:
-            reopened = disc.reopened_names(session)
-            refusing = disc.refusing_publishers(session, reopened=reopened)
-        unreadable = disc.unreadable_test(cache, reopened=reopened, refusing=refusing)
-        with session_scope(engine, commit=not dry_run) as session:
-            requeued = disc.requeue_reopened(session, unreadable)
-            discarded = disc.discard_unreadable(session, unreadable, refusing=refusing)
-            # A page no campus story can be in -- a PDF, a translated copy, a quote
-            # page, a builder's post about Frankfurt -- is set aside first, so it is
-            # never kept as the one copy of a story below.
-            not_news, unset = disc.set_aside_not_news(session)
-            # One copy of a story is read: the others are set aside before the limit
-            # is cut, and put back if the copy kept cannot be read.
-            copies, back = disc.drop_same_story(session, unreadable)
-            # Once a week a refusing publisher has one page read first, through every
-            # rung: how one that relents, or that DeepSeek's fetch can read again once
-            # its account has a balance, is noticed. A tenth of the limit at most.
-            probes = disc.probe_refusing(
-                session, refusing, cache, limit=max(1, limit // 10) if limit else None
-            )
-        unreadable = disc.unreadable_test(
-            cache, reopened=reopened, refusing=refusing, probing=frozenset(probes)
-        )
-        if not_news:
-            from tracker.ingest import screen
-
-            console.print(
-                f"[dim]{len(not_news)} queued page(s) {'would be' if dry_run else 'were'} "
-                "set aside before reading, as no campus story can be in them: "
-                f"{escape(screen.summary(reason for _, reason in not_news))} "
-                "(`tracker queue aside` lists them)[/dim]"
-            )
-        if unset:
-            console.print(
-                f"[dim]{unset} page(s) set aside earlier are back in the queue: no rule "
-                "names them any more[/dim]"
-            )
-        if back:
-            console.print(
-                f"[dim]{back} article(s) set aside as another copy are back in the queue: "
-                "the copy kept could not be read[/dim]"
-            )
-        if copies:
-            console.print(
-                f"[dim]{len(copies)} queued article(s) {'would be' if dry_run else 'were'} "
-                "set aside as another copy of a story already read or queued[/dim]"
-            )
-        if requeued:
-            console.print(
-                f"[dim]{requeued} discarded article(s) are back in the queue: their "
-                "publisher answered its weekly check, or had a page read[/dim]"
-            )
-        if refusing:
-            worst = sorted(refusing.values(), key=lambda r: (-r.pages, r.host))[:5]
-            console.print(
-                f"[dim]{len(refusing)} publisher(s) refused every read lately, the last "
-                f"{disc.REFUSING_AFTER} or more of their pages on {disc.REFUSING_DAYS} or "
-                "more days: "
-                + escape(", ".join(f"{r.host} ({r.pages})" for r in worst))
-                + (", …" if len(refusing) > len(worst) else "")
-                + " (`tracker queue unreadable` lists them)[/dim]"
-            )
-        if discarded:
-            console.print(
-                f"[dim]{discarded} queued article(s) {'would be' if dry_run else 'were'} "
-                "discarded: on publishers marked closed in seed/feeds.toml or refusing "
-                "every read, with nothing cached[/dim]"
-            )
-        if probes:
-            console.print(
-                f"[dim]{len(probes)} weekly check(s): one page each of "
-                + escape(", ".join(sorted({disc.publisher_of(url) for url in probes})))
-                + " is read first, to see whether the publisher still refuses[/dim]"
-            )
-        with session_scope(engine, commit=screen_headlines and not dry_run) as session:
-            queued = disc.pending(
-                session,
-                limit=None if screen_headlines else limit,
-                new_first=new_first,
-                unreadable=unreadable,
-                probes=frozenset(probes),
-            )
-            if screen_headlines:
-                queued = _screen_headlines(session, queued, want=limit, apply=not dry_run)
-            url_list = [row.url for row in queued]
-        if not url_list:
-            console.print(
-                "[green]queue is empty[/green] — run `tracker discover` to look for articles"
-            )
-            return
-        # A queued URL is `discovered`, not `ok`, so crawl would process it
-        # anyway; forcing makes that explicit and independent of the skip rule.
-        force = True
-    elif stale_prompt:
-        from tracker import policy as policy_mod
-        from tracker.prompts import load_prompt
-
-        stamp = load_prompt(prompt_name).stamp
-        with session_scope(engine, commit=False) as session:
-            # With --cached-only, only what that read can actually re-read, so the
-            # limit is not spent on the same refusals every night.
-            url_list = crawl.stale_by_prompt(
-                session,
-                stamp=stamp,
-                limit=limit,
-                readable_in=None if (no_cache or not cached_only) else article_cache("articles"),
-                policy=policy_mod.load() if cached_only else None,
-            )
-        if not url_list:
-            console.print(
-                f"[green]every extracted source is on {stamp}[/green] — nothing to re-read"
-            )
-            return
-        source_label = f"prompts superseded by {stamp}"
-        # Every one of these is already `ok`, so the skip rule would drop all of
-        # them. Re-reading an article we have already read, under a prompt that
-        # has since been tightened, is the entire point of this selector.
-        force = True
-    elif refused:
-        from tracker import policy as policy_mod
-
-        with session_scope(engine, commit=False) as session:
-            url_list = crawl.refused_before_gate(
-                session,
-                limit=limit,
-                readable_in=None if (no_cache or not cached_only) else article_cache("articles"),
-                policy=policy_mod.load() if cached_only else None,
-            )
-        if not url_list:
-            console.print(
-                "[green]no refusal from before the gate's last revision is left to re-read[/green]"
-            )
-            return
-        source_label = f"refusals from before {crawl.GATE_REVISED_AT:%Y-%m-%d %H:%M} UTC"
+        # A URL named explicitly is one the operator wants read now, and the skip
+        # rule would otherwise make a second attempt at an already-seen link do
+        # nothing at all.
         force = True
     else:
         if not urls.is_file():
@@ -444,76 +405,276 @@ def ingest_crawl(
             return
         source_label = urls.name
 
-    # Resolved before any fetching, so a missing key fails immediately rather
-    # than after paying for a page load per URL.
-    try:
-        extractor = build_extractor(settings)
-    except LLMUnavailable as exc:
-        _fail(str(exc))
-        return
+    _read(
+        "crawl",
+        engine,
+        url_list,
+        source_label=source_label,
+        force=force,
+        how=_Reading(prompt_name, browser, dry_run, no_cache, verify_identity),
+    )
 
-    from tracker.ingest.fetch import MissingDependency, ensure_browser_available, escalation_ladder
 
-    if browser:
-        # Fail on the flag, not twenty pages in. `__aenter__` holds the import,
-        # so nothing before this point would have noticed the extra was absent.
-        try:
-            ensure_browser_available()
-        except MissingDependency as exc:
-            _fail(str(exc))
-            return
-    # A ladder, cheapest rung first. curl_cffi needs no flag: it costs one
-    # ordinary request and clears the WAFs that fingerprint TLS rather than
-    # reading the User-Agent. Chromium stays behind --browser.
-    escalate = escalation_ladder(settings, browser=browser)
+@ingest_app.command("queue")
+def ingest_queue(
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Read at most this many queued articles.")
+    ] = None,
+    new_first: Annotated[
+        bool,
+        typer.Option(
+            "--new-first",
+            help="Read the news first, then articles naming no tracked campus, newest first.",
+        ),
+    ] = False,
+    screen_headlines: Annotated[
+        bool,
+        typer.Option(
+            "--screen/--no-screen",
+            help="Have a model read the headlines first and set aside what cannot be "
+            "campus news (`tracker queue screen`).",
+        ),
+    ] = False,
+    prompt_name: _Prompt = "extract-v1",
+    browser: _Browser = False,
+    dry_run: _DryRun = False,
+    no_cache: _NoCache = False,
+    verify_identity: _VerifyIdentity = True,
+    llm_provider: _LlmProvider = None,
+) -> None:
+    """Read what `tracker discover` queued: the nightly loop's read of the news.
 
-    cache_dir = None if no_cache else article_cache("articles")
-    if cached_only and cache_dir is None:
-        _fail("--cached-only and --no-cache ask for opposite things")
-        return
-    console.print(f"[dim]crawling {len(url_list)} URL(s) from {source_label}[/dim]")
+    Before choosing anything, the queue is tidied (`discover.prepare_queue`, which
+    `tracker sync` shares): pages on a publisher closed to us or refusing every read,
+    with nothing cached, are discarded, and put back once their publisher is readable
+    again; pages no campus story can be in, and every other copy of a story, are set
+    aside; and once a week a refusing publisher has one page read first, to see
+    whether it still refuses. Each step is reported. That tidying is committed before
+    the queue is read, so a dry run reports the queue as it stood.
 
-    from tracker import keys as keys_mod
+    Then the queue is read in order — the news-watch results that decide a flag, the
+    weekly checks, then with `--new-first` the recent news and the articles naming no
+    tracked campus — up to `--limit`. `--screen` first has a model read the headlines
+    and set aside what cannot be campus news; the limit then counts what it kept.
+    """
+    _use_llm(llm_provider)
+    from tracker.ingest import discover as disc
 
-    started = time.monotonic()
-    with session_scope(engine) as session:
-        report = crawl.run(
+    engine, _ = init_db(_db_path())
+    cache = None if no_cache else article_cache("articles")
+    with session_scope(engine, commit=not dry_run) as session:
+        prep = disc.prepare_queue(session, cache, probe=True, limit=limit)
+    _print_prepared(prep, dry_run=dry_run)
+    # Its own transaction, after the preparation's has committed: the headline screen
+    # waits on a model, and nothing should hold the write lock while it does.
+    with session_scope(engine, commit=screen_headlines and not dry_run) as session:
+        queued = disc.pending(
             session,
-            url_list,
-            prompt_name=prompt_name,
-            extractor=extractor,
-            escalate=escalate,
-            settings=settings,
-            dry_run=dry_run,
-            force=force,
-            cache_dir=cache_dir,
-            cached_only=cached_only,
-            existing_only=existing_only,
-            # A re-read of an article rows already cite goes back to the row it names,
-            # spelling aside — see `keys.citing_route`.
-            route=keys_mod.citing_route(session) if existing_only else None,
-            arbiter=_identity_arbiter(verify_identity, label="ingest crawl"),
+            limit=None if screen_headlines else limit,
+            new_first=new_first,
+            unreadable=prep.unreadable,
+            probes=frozenset(prep.probes),
         )
-    _report_arbiter("ingest crawl")
+        if screen_headlines:
+            queued = _screen_headlines(session, queued, want=limit, apply=not dry_run)
+        url_list = [row.url for row in queued]
+    if not url_list:
+        console.print("[green]queue is empty[/green] — run `tracker discover` to look for articles")
+        return
+    # A queued URL is `discovered`, not `ok`, so crawl would process it
+    # anyway; forcing makes that explicit and independent of the skip rule.
+    _read(
+        "queue",
+        engine,
+        url_list,
+        source_label="queue",
+        force=True,
+        how=_Reading(prompt_name, browser, dry_run, no_cache, verify_identity),
+    )
 
-    from tracker import runlog
 
-    if not dry_run:
-        runlog.record_ingest(
-            _db_path(),
-            command="ingest crawl",
-            report=report,
-            seconds=time.monotonic() - started,
-            model=getattr(settings, "minimax_model", None),
-        )
+def _print_prepared(prep, *, dry_run: bool) -> None:
+    """Say what the queue's preparation set aside, discarded, put back and checked."""
+    from tracker.ingest import discover as disc
 
-    _print_report(report, title=f"ingest crawl: {source_label}{' (dry run)' if dry_run else ''}")
-    if report.llm_calls:
+    would = "would be" if dry_run else "were"
+    if prep.not_news:
+        from tracker.ingest import screen
+
         console.print(
-            f"[dim]{report.llm_calls} model call(s), {report.tokens:,} tokens "
-            f"({report.prompt_tokens:,} in, {report.completion_tokens:,} out). "
-            f"Logged to data/runs/{runlog.LOG_NAME}.[/dim]"
+            f"[dim]{len(prep.not_news)} queued page(s) {would} "
+            "set aside before reading, as no campus story can be in them: "
+            f"{escape(screen.summary(prep.not_news))} "
+            "(`tracker queue aside` lists them)[/dim]"
         )
+    if prep.unset:
+        console.print(
+            f"[dim]{prep.unset} page(s) set aside earlier are back in the queue: no rule "
+            "names them any more[/dim]"
+        )
+    if prep.back:
+        console.print(
+            f"[dim]{prep.back} article(s) set aside as another copy are back in the queue: "
+            "the copy kept could not be read[/dim]"
+        )
+    if prep.copies:
+        console.print(
+            f"[dim]{prep.copies} queued article(s) {would} "
+            "set aside as another copy of a story already read or queued[/dim]"
+        )
+    if prep.requeued:
+        console.print(
+            f"[dim]{prep.requeued} discarded article(s) are back in the queue: their "
+            "publisher answered its weekly check, or had a page read[/dim]"
+        )
+    if prep.refusing:
+        worst = sorted(prep.refusing.values(), key=lambda r: (-r.pages, r.host))[:5]
+        console.print(
+            f"[dim]{len(prep.refusing)} publisher(s) refused every read lately, the last "
+            f"{disc.REFUSING_AFTER} or more of their pages on {disc.REFUSING_DAYS} or "
+            "more days: "
+            + escape(", ".join(f"{r.host} ({r.pages})" for r in worst))
+            + (", …" if len(prep.refusing) > len(worst) else "")
+            + " (`tracker queue unreadable` lists them)[/dim]"
+        )
+    if prep.discarded:
+        console.print(
+            f"[dim]{prep.discarded} queued article(s) {would} "
+            "discarded: on publishers marked closed in seed/feeds.toml or refusing "
+            "every read, with nothing cached[/dim]"
+        )
+    if prep.probes:
+        console.print(
+            f"[dim]{len(prep.probes)} weekly check(s): one page each of "
+            + escape(", ".join(sorted({disc.publisher_of(url) for url in prep.probes})))
+            + " is read first, to see whether the publisher still refuses[/dim]"
+        )
+
+
+@ingest_app.command("reread")
+def ingest_reread(
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Re-read at most this many articles.")
+    ] = None,
+    cached_only: _CachedOnly = False,
+    existing_only: _ExistingOnly = False,
+    prompt_name: _Prompt = "extract-v1",
+    browser: _Browser = False,
+    dry_run: _DryRun = False,
+    no_cache: _NoCache = False,
+    verify_identity: _VerifyIdentity = True,
+    llm_provider: _LlmProvider = None,
+) -> None:
+    """Re-read sources extracted by an older version of the prompt.
+
+    Articles this database has already read, read again with the prompt as it stands
+    today. The gate has been tightened repeatedly and each improvement only ever
+    applied to rows written after it landed — so a row extracted before migration
+    `0007` has no per-field quote, not because nothing supported it but because there
+    was nowhere to record the sentence. Those rows read as established ever since.
+    Served from the article cache by default, which makes it a re-read rather than a
+    re-fetch: `--no-cache` would confound "the prompt improved" with "the page
+    changed".
+
+    **Pair it with `--existing-only`.** An article this database already cites also
+    names other things — re-reading Hyperion's coverage yields "Project Everest" and a
+    parish's generating units — and a repair pass that quietly adds campuses is an
+    ingest with no worklist and no review. The refusals are counted and logged, so a
+    genuinely new campus can be added deliberately afterwards. With `--cached-only`
+    only what the cache can serve is chosen, so the limit is not spent on the same
+    refusals every night.
+    """
+    _use_llm(llm_provider)
+    how = _Reading(
+        prompt_name, browser, dry_run, no_cache, verify_identity, cached_only, existing_only
+    )
+    _cache_flags_agree(how)
+    from tracker import policy as policy_mod
+    from tracker.ingest import crawl
+    from tracker.prompts import load_prompt
+
+    engine, _ = init_db(_db_path())
+    stamp = load_prompt(prompt_name).stamp
+    with session_scope(engine, commit=False) as session:
+        url_list = crawl.stale_by_prompt(
+            session,
+            stamp=stamp,
+            limit=limit,
+            readable_in=None if (no_cache or not cached_only) else article_cache("articles"),
+            policy=policy_mod.load() if cached_only else None,
+        )
+    if not url_list:
+        console.print(f"[green]every extracted source is on {stamp}[/green] — nothing to re-read")
+        return
+    # Every one of these is already `ok`, so the skip rule would drop all of them.
+    # Re-reading an article we have already read, under a prompt that has since been
+    # tightened, is the entire point of this command.
+    _read(
+        "reread",
+        engine,
+        url_list,
+        source_label=f"prompts superseded by {stamp}",
+        force=True,
+        how=how,
+    )
+
+
+@ingest_app.command("recheck")
+def ingest_recheck(
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Re-read at most this many articles.")
+    ] = None,
+    cached_only: _CachedOnly = False,
+    existing_only: _ExistingOnly = False,
+    prompt_name: _Prompt = "extract-v1",
+    browser: _Browser = False,
+    dry_run: _DryRun = False,
+    no_cache: _NoCache = False,
+    verify_identity: _VerifyIdentity = True,
+    llm_provider: _LlmProvider = None,
+) -> None:
+    """Re-read what the evidence gate refused before its last revision, most first.
+
+    Sources holding a value, milestone or party the gate refused, read again under the
+    gate as it stands now. The same re-read as `tracker ingest reread`, for a change to the gate rather than
+    to the prompt — which does not move the prompt's stamp and so is invisible to
+    `reread`: articles holding a refusal from before `crawl.GATE_REVISED_AT` that no
+    crawl has tried since. Each is taken once. Articles behind an announcement,
+    expansion, filing or delay the tense check filed as a forecast before
+    `crawl.TENSE_CHECK_REVISED_AT` go first.
+
+    Pair it with `--existing-only` and `--cached-only`, for the reasons `tracker ingest
+    reread --help` gives.
+    """
+    _use_llm(llm_provider)
+    how = _Reading(
+        prompt_name, browser, dry_run, no_cache, verify_identity, cached_only, existing_only
+    )
+    _cache_flags_agree(how)
+    from tracker import policy as policy_mod
+    from tracker.ingest import crawl
+
+    engine, _ = init_db(_db_path())
+    with session_scope(engine, commit=False) as session:
+        url_list = crawl.refused_before_gate(
+            session,
+            limit=limit,
+            readable_in=None if (no_cache or not cached_only) else article_cache("articles"),
+            policy=policy_mod.load() if cached_only else None,
+        )
+    if not url_list:
+        console.print(
+            "[green]no refusal from before the gate's last revision is left to re-read[/green]"
+        )
+        return
+    _read(
+        "recheck",
+        engine,
+        url_list,
+        source_label=f"refusals from before {crawl.GATE_REVISED_AT:%Y-%m-%d %H:%M} UTC",
+        force=True,
+        how=how,
+    )
 
 
 @ingest_app.command("pjm")

@@ -16,7 +16,7 @@ so the screen pays for itself if it sets aside one page in a few hundred.
 **What it must not do is lose a campus**, so it is measured before it is trusted:
 `tracker queue screen --measure` puts the past reads' headlines through it and
 counts how many reads that found a campus it would have set aside, listing each. It
-is off in the crawl until switched on (`ingest crawl --from-queue --screen`), and the
+is off in the crawl until switched on (`ingest queue --screen`), and the
 nightly loop switches it on only with `--screen`.
 
 **A headline that names a US place is never asked about** (:func:`names_us_place`).

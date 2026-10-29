@@ -39,6 +39,9 @@ LLM_COMMANDS: frozenset[str] = frozenset(
         "prospect",
         "logic check",
         "ingest crawl",
+        "ingest queue",
+        "ingest reread",
+        "ingest recheck",
         "ingest edgar",
         "backfill",
         # Both spend one call per item by default, and `audit resolve` can also
@@ -227,7 +230,16 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("The loop", ("sync", "discover", "news", "prospect", "enrich", "search", "point")),
     (
         "Load data",
-        ("ingest manual", "ingest pjm", "ingest crawl", "ingest edgar", "ingest geo"),
+        (
+            "ingest manual",
+            "ingest pjm",
+            "ingest crawl",
+            "ingest queue",
+            "ingest reread",
+            "ingest recheck",
+            "ingest edgar",
+            "ingest geo",
+        ),
     ),
     (
         "Inspect",

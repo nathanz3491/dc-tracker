@@ -739,7 +739,7 @@ def sync(
     # read lately, with no body cached, leaves the queue before it is read — see
     # `discover.discard_unreadable`, and `requeue_reopened` for the way back. The
     # weekly check of a refusing publisher rides the nightly crawl
-    # (`ingest crawl --from-queue`), not this.
+    # (`ingest queue`), not this.
     with session_scope(engine, commit=not dry_run) as session:
         reopened = disc.reopened_names(session)
         refusing = disc.refusing_publishers(session, reopened=reopened)
@@ -1640,7 +1640,7 @@ def discover(
     if report.queued and not dry_run:
         console.print(
             "\n[dim]next:[/dim] tracker queue        [dim]# review what was found[/dim]\n"
-            "[dim]then:[/dim] tracker ingest crawl --from-queue"
+            "[dim]then:[/dim] tracker ingest queue"
         )
 
 
