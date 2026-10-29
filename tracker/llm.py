@@ -612,7 +612,7 @@ def cache_counts(usage: dict[str, Any]) -> tuple[int | None, int | None]:
 # --- the spend ledger ---------------------------------------------------------
 #
 # One line per paid call, written at the one place every paid call passes through.
-# `scripts/overnight.sh` sums it to enforce its token ceiling, and it used to sum
+# The nightly loop (`tracker/overnight.py`) sums it to enforce its ceilings, and it used to sum
 # something else: the `~N tokens` lines three commands happen to print. Five of the
 # loop's paid phases printed none — duplicate pairs, audit, risks, enrich's article
 # reads and its settle step — so the ceiling could not see most of what a round

@@ -11,8 +11,9 @@ about *what the sentence was about*, which only a reader catches. This puts ever
 change in front of one, with the sentence beside it, so reviewing a night takes a few
 minutes rather than a forensic audit.
 
-It reads; it never writes. The snapshot is the one `scripts/overnight.sh` takes with
-`VACUUM INTO` before round 1, or any other copy of the database.
+It reads; it never writes. The snapshot is the one the nightly loop
+(`tracker/overnight.py`) takes with `VACUUM INTO` before round 1, or any other copy of
+the database.
 """
 
 from __future__ import annotations

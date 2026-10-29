@@ -6,7 +6,7 @@ alone, a ruling the rails refused, an audit finding the model declined, an obsta
 judged unclear: each was selected again next round, in the same order, and paid for
 again. (The enrich agent's version of the same waste — fields nobody has published —
 is `tracker.attempts`, in the row's notes, because there the thing remembered is a
-fact about a row a reader should see.) `scripts/overnight.sh` stops
+fact about a row a reader should see.) The nightly loop stops
 after two rounds in a row fail to move a count, so the waste was bounded by the stop
 rule rather than by anything that knew the answer was already in.
 
