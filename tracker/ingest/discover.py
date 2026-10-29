@@ -2030,15 +2030,20 @@ def drop_same_story(
                 return url
         return None
 
-    def note(row: IngestUrl) -> None:
-        pages.setdefault(_page_key(row.url), row.url)
-        words, cut = _headline(row.title)
+    def note(url: str, title: str | None) -> None:
+        pages.setdefault(_page_key(url), url)
+        words, cut = _headline(title)
         if len(words) >= SAME_STORY_WORDS:
-            headlines[words].append((site(row.url), row.url))
-            starts[words[:SAME_STORY_WORDS]].append((words, cut, site(row.url), row.url))
+            here = site(url)
+            headlines[words].append((here, url))
+            starts[words[:SAME_STORY_WORDS]].append((words, cut, here, url))
 
-    for row in session.scalars(select(IngestUrl).where(IngestUrl.status.in_(("ok", "no_project")))):
-        note(row)
+    # Every page ever read, so two columns rather than whole rows: it is the largest
+    # set this reads (15,600 rows on 2026-10-29), and nothing of it is written.
+    for url, title in session.execute(
+        select(IngestUrl.url, IngestUrl.title).where(IngestUrl.status.in_(("ok", "no_project")))
+    ):
+        note(url, title)
 
     def best_first(row: IngestUrl) -> tuple:
         return (
@@ -2053,7 +2058,7 @@ def drop_same_story(
     for row in sorted(queued, key=best_first):
         kept = copy_of(row)
         if kept is None:
-            note(row)
+            note(row.url, row.title)
             continue
         dropped.append((row, kept))
         if apply:
