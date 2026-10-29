@@ -50,6 +50,8 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, Final
 
+from tracker import overnight
+
 log = logging.getLogger(__name__)
 
 #: The public addresses, in the order the page lists them, and the path each is
@@ -371,9 +373,11 @@ class Prober(threading.Thread):
 
 # --- the nightly log --------------------------------------------------------------
 
-_STAMPED = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (.*)$")
-_PHASE = re.compile(r"^--- (\d\d:\d\d:\d\d)  ")
-_MINUTES = re.compile(r"overnight complete — (\d+)m")
+# The words and line shapes are the loop's own constants, so what it prints and what
+# this reads cannot drift apart (`tracker/overnight.py`, THE LOG IS A CONTRACT).
+_STAMPED = overnight.STAMPED
+_PHASE = overnight.PHASE_LINE
+_MINUTES = overnight.MINUTES
 
 
 @dataclass
@@ -410,23 +414,23 @@ def parse_nights(lines: Iterable[str], *, tz: dt.tzinfo, running: bool = False) 
         if stamped:
             at = dt.datetime.strptime(stamped[1], "%Y-%m-%d %H:%M:%S").replace(tzinfo=tz)
             text = stamped[2]
-            if text.startswith("overnight starting"):
+            if text.startswith(overnight.STARTING):
                 nights.append(Night(started_at=at, last_seen_at=at))
                 continue
             if not nights:
                 continue
             night = nights[-1]
             night.last_seen_at = at
-            if text.startswith("overnight complete"):
+            if text.startswith(overnight.COMPLETE):
                 night.ended_at = at
                 night.outcome = "complete"
                 minutes = _MINUTES.search(text)
                 night.minutes = int(minutes[1]) if minutes else None
-            elif "spend ceiling reached" in text or "token ceiling reached" in text:
+            elif overnight.SPEND_CEILING in text or overnight.TOKEN_CEILING in text:
                 night.stop = "spend_limit"
-            elif "wall-clock ceiling" in text:
+            elif overnight.WALL_CLOCK in text:
                 night.stop = "time_limit"
-            elif "fixed point" in text or "everything settled" in text:
+            elif overnight.FIXED_POINT in text or overnight.SETTLED in text:
                 night.stop = night.stop or "settled"
             continue
         phase = _PHASE.match(line)
@@ -488,9 +492,10 @@ def _ledger_last(runs_dir: Path, night: Night) -> dt.datetime | None:
     """
     local = night.started_at
     best: Path | None = None
-    for path in runs_dir.glob(f"overnight-{local:%Y%m%d}-*.spend"):
+    prefix = overnight.LEDGER_PREFIX
+    for path in runs_dir.glob(f"{prefix}{local:%Y%m%d}-*{overnight.LEDGER_SUFFIX}"):
         try:
-            named = dt.datetime.strptime(path.stem[len("overnight-") :], "%Y%m%d-%H%M%S")
+            named = dt.datetime.strptime(path.stem[len(prefix) :], overnight.LEDGER_STAMP)
         except ValueError:
             continue
         if abs((named.replace(tzinfo=local.tzinfo) - local).total_seconds()) <= 300:
