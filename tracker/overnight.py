@@ -612,23 +612,11 @@ class Counts(NamedTuple):
 
 
 def progress_counts(session) -> Counts:
-    """The night's three counts, from one session."""
-    from tracker import clean, logic
-    from tracker.audit import settled_codes
-    from tracker.capex import duplicate_groups, suspected_duplicates
-    from tracker.models import Project
+    """The night's three counts, from one session (`quality.night_counts`, which
+    loads the rows once for all three)."""
+    from tracker.quality import night_counts
 
-    settled: dict[int, set[str]] = {}
-    todo = 0
-    for finding in logic.review(session).findings:
-        if finding.project_id not in settled:
-            row = session.get(Project, finding.project_id)
-            settled[finding.project_id] = settled_codes(row) if row else set()
-        if finding.code not in settled[finding.project_id]:
-            todo += 1
-    pairs = [p for p in suspected_duplicates(session) if set(p.kinds) - {"name"}]
-    below = sum(1 for card in clean.scan(session).cards if card.tier < 2)
-    return Counts(todo, len(duplicate_groups(pairs)), below)
+    return Counts(*night_counts(session))
 
 
 def count(db_path: Path) -> Counts:

@@ -98,7 +98,7 @@ BASIC_SOURCED_FIELDS: Final[frozenset[str]] = frozenset({"phase"})
 #: complaint, and `tracker clean --plan` renders these as runnable lines.
 REMEDIES: Final[dict[str, str]] = {
     "has_source": "tracker point '<name>'",
-    "no_silent_defect": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
+    "no_silent_defect": "tracker ingest reread --cached-only --limit 50",
     "no_errors": "tracker logic resolve --project {id}",
     "audit_clear": "tracker audit resolve --project {id} --llm",
     # Not `logic resolve --auto`: that re-derives a value that differs from its own
@@ -107,13 +107,13 @@ REMEDIES: Final[dict[str, str]] = {
     "no_inversions": "tracker logic conflicts {id} --apply",
     "duplicates_answered": "tracker duplicates  # then merge or park",
     "fields_present": "tracker enrich {id} --target 0",
-    "values_backed": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
+    "values_backed": "tracker ingest reread --cached-only --limit 50",
     "basics_defined": "tracker enrich {id} --basics",
     "fields_published": "tracker point '<name>' --url <page>  # a page stating it fills it",
     "warnings_settled": "tracker logic resolve --project {id}",
     "blocks_settled": "tracker blocks {id}",
     "risks_confirmed": "tracker risks confirm --project {id}",
-    "vintage_current": "tracker ingest crawl --stale-prompt --cached-only --limit 50",
+    "vintage_current": "tracker ingest reread --cached-only --limit 50",
 }
 
 
