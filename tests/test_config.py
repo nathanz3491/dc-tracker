@@ -78,8 +78,12 @@ def test_without_a_checkout_it_is_the_platform_data_directory(monkeypatch, tmp_p
     monkeypatch.delenv("TRACKER_HOME", raising=False)
     monkeypatch.setattr("tracker.config.Path.cwd", staticmethod(lambda: tmp_path))
     monkeypatch.setattr("tracker.config.__file__", str(tmp_path / "nowhere" / "config.py"))
+    # One per platform: Windows reads LOCALAPPDATA, Linux XDG_DATA_HOME, and macOS —
+    # where production runs — the home directory, which went unredirected until the
+    # suite first ran there (2026-10-29) and found this test reading the real one.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "share"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     home.cache_clear()
 
     got = home()

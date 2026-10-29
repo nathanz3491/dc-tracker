@@ -1086,6 +1086,13 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The test of where an installed `tracker` keeps its data now holds on macOS, where
+  production runs** (`tests/test_config.py`
+  `test_without_a_checkout_it_is_the_platform_data_directory`). It redirected the
+  Windows and Linux data folders but not the macOS one, which hangs off the home
+  directory. On a Mac it therefore read the real home, and it had only ever run on
+  Windows. The suite's first run on the host found it. The code was right; the test
+  now redirects the home directory as well.
 - **A cancelled campus is no longer asked for an online date** (`tracker/gaps.py`
   `for_project`, `measure`; `docs/design-decisions.md`, `docs/workflows/enrich.md`,
   reader docs *Where a value came from*, en and zh; `tests/test_clean.py`,
