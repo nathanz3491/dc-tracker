@@ -318,9 +318,7 @@ def test_the_per_item_judgements_do_not_pay_the_per_project_price():
         source = inspect.getsource(command)
         # `_model("judgement")` is the shared spelling of the same factory call
         # (`cli._shared._model`), moved out of each command with the paid-pass runner.
-        assert "judgement_extractor" in source or '_model("judgement")' in source, (
-            command.__name__
-        )
+        assert "judgement_extractor" in source or '_model("judgement")' in source, command.__name__
         assert "reasoning_extractor" not in source, command.__name__
     shared = inspect.getsource(_shared._model)
     assert "judgement_extractor" in shared and "reasoning_extractor" not in shared
