@@ -25,10 +25,14 @@ from tracker.cli._shared import (
     _fail,
     _fmt_mw,
     _location,
+    _print_ceiling,
+    _print_held,
     _print_report_rows,
     _read_engine,
     _use_llm,
+    _workers,
     _writable,
+    again_flag,
     app,
     console,
     duplicates_app,
@@ -386,11 +390,7 @@ def duplicates_resolve(
         ),
     ] = None,
     again: Annotated[
-        bool,
-        typer.Option(
-            "--again",
-            help="Also ask pairs the agent already left undecided on the same evidence.",
-        ),
+        bool, again_flag("Also ask pairs the agent already left undecided on the same evidence.")
     ] = False,
     dry_run: Annotated[
         bool,
@@ -547,14 +547,7 @@ def duplicates_resolve(
         if use_agent:
             from tracker import triage as triage_mod
 
-            def held_back(count: int) -> None:
-                if count and not json_mode():
-                    console.print(
-                        f"[dim]holding back {count} pair(s) the agent already left "
-                        "undecided on the same evidence; --again asks them.[/dim]"
-                    )
-
-            decisions = triage_mod.resolve_pairs(
+            got = triage_mod.settle_pairs(
                 session,
                 extractor=extractor,
                 limit=limit,
@@ -563,11 +556,16 @@ def duplicates_resolve(
                 min_confidence=min_confidence,
                 again=again,
                 # Per pair, so the write lock is not held across a run of agent
-                # calls. A dry run is one transaction that is never committed.
+                # calls. A dry run is one transaction that is never committed, and
+                # asks one pair at a time (see `triage.settle_pairs`).
                 commit_each=not dry_run,
-                on_held=held_back,
                 pairs=twins,
+                workers=_workers("agent"),
+                on_start=lambda run, _chosen: _print_held(
+                    run.held, "pair(s)", "the agent already left undecided"
+                ),
             )
+            decisions = got.results
         else:
             decisions = dupresolve.resolve(
                 session,
@@ -578,6 +576,8 @@ def duplicates_resolve(
                 ask=keyboard,
             )
 
+    if use_agent:
+        _print_ceiling(got)
     if json_mode():
         emit(
             {

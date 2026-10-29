@@ -50,6 +50,7 @@ def map_ordered(
     *,
     limit: int,
     label: str = "task",
+    stop: Callable[[], bool] | None = None,
 ) -> Iterator[tuple[T, R]]:
     """Apply `fn` to every item with at most `limit` calls in flight.
 
@@ -73,10 +74,20 @@ def map_ordered(
     lazy load from a worker is a race that presents as corrupt data rather than as
     an error. Callers pass plain values — `crawl.extract_one` takes a `FetchResult`
     and returns an `ExtractionOutcome`, neither of which knows a database exists.
+
+    `stop`, asked before each result is handed over, ends the run **without
+    throwing away what is already paid for**: every task not yet started is
+    cancelled, and the ones already running or finished are still yielded, in
+    order, before the iterator ends. That is the spend ceiling's shape
+    (`tracker.spend.ceiling_reached`) — a call in flight costs the same whether its
+    answer is kept or not, so it is kept. Serially, `stop` is asked before each
+    call, and a true answer starts nothing more.
     """
     ordered = list(items)
     if limit <= 1 or len(ordered) <= 1:
         for item in ordered:
+            if stop is not None and stop():
+                return
             yield item, fn(item)
         return
 
@@ -85,7 +96,14 @@ def map_ordered(
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"tracker-{label}") as pool:
         futures = [pool.submit(fn, item) for item in ordered]
         try:
+            stopped = False
             for item, future in zip(ordered, futures, strict=True):
+                if not stopped and stop is not None and stop():
+                    stopped = True
+                    dropped = sum(1 for f in futures if f.cancel())
+                    log.info("%s: stopped; %d task(s) not started", label, dropped)
+                if future.cancelled():
+                    continue
                 yield item, future.result()
         finally:
             # Before the executor's own shutdown, which waits. Cancelling the

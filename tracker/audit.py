@@ -860,6 +860,26 @@ def decline_evidence(project: Project, finding: UnitFinding) -> str:
     return declines.fingerprint(finding.code, finding.summary, evidence_block(project, finding))
 
 
+def model_context(project: Project, finding: UnitFinding) -> dict[str, str]:
+    """Everything the model is shown about one figure, as plain prompt variables.
+
+    Built on the main thread from the row as it is now; the call itself (`ask_context`)
+    then needs no database, so it can run beside others.
+    """
+    options = actions_for(finding.code)
+    return {
+        "project_id": str(project.id),
+        "company": project.company or "unknown",
+        "name": project.name or "unknown",
+        "location": f"{project.city or project.county or 'unknown'}, {project.state}",
+        "phase": project.phase or "unknown",
+        "summary": finding.summary,
+        "remedy": finding.remedy,
+        "evidence": evidence_block(project, finding),
+        "options": "\n".join(f"  {a.key}  {a.label}" for a in options),
+    }
+
+
 def ask_model(
     project: Project,
     finding: UnitFinding,
@@ -876,35 +896,44 @@ def ask_model(
     contain the answer" is a *useful* reply, and it is what sends the question to
     the open web instead of forcing a guess out of what is already stored.
     """
+    return ask_context(
+        model_context(project, finding),
+        finding.code,
+        extractor=extractor,
+        found_online=found_online,
+        prompt_name=prompt_name,
+    )
+
+
+def ask_context(
+    context: dict[str, str],
+    code: str,
+    *,
+    extractor,
+    found_online: str = "",
+    prompt_name: str = "audit-resolve-v1",
+) -> Verdict:
+    """`ask_model` on a context already built: the call and the reading of its reply."""
     from tracker.llm import LLMError, LLMJsonError, parse_json_object
     from tracker.prompts import load_prompt
 
-    options = actions_for(finding.code)
+    options = actions_for(code)
     prompt = load_prompt(prompt_name)
-    context = {
-        "project_id": str(project.id),
-        "company": project.company or "unknown",
-        "name": project.name or "unknown",
-        "location": f"{project.city or project.county or 'unknown'}, {project.state}",
-        "phase": project.phase or "unknown",
-        "summary": finding.summary,
-        "remedy": finding.remedy,
-        "evidence": evidence_block(project, finding),
-        "found_online": found_online or "  (nothing was searched for yet)",
-        "options": "\n".join(f"  {a.key}  {a.label}" for a in options),
-    }
+    shown = {**context, "found_online": found_online or "  (nothing was searched for yet)"}
     try:
         reply = extractor.complete(
-            system=prompt.system, user=prompt.render_user(**context), max_tokens=MAX_TOKENS
+            system=prompt.system, user=prompt.render_user(**shown), max_tokens=MAX_TOKENS
         )
     except LLMError as exc:
-        log.warning("audit resolve failed for project %s: %s", project.id, exc)
+        log.warning("audit resolve failed for project %s: %s", context.get("project_id"), exc)
         return Verdict("s", 0.0, "", outcome="rejected", note=f"call failed: {exc}", failed=True)
 
     try:
         payload = parse_json_object(reply.text)
     except (LLMJsonError, ValueError):
-        return Verdict("s", 0.0, "", outcome="rejected", note="unusable reply")
+        # No answer at all, so a failed look rather than a decline: held for the
+        # night, not for the month (see `held_back_as`).
+        return Verdict("s", 0.0, "", outcome="rejected", note="unusable reply", failed=True)
 
     key = str(payload.get("key") or "").strip().lower()[:1]
     reason = str(payload.get("reason") or "").strip()
@@ -966,7 +995,7 @@ class Searched:
         return "\n\n".join(self.passages)
 
 
-def search_queries(project: Project, finding: UnitFinding) -> list[str]:
+def search_queries(project: Any, finding: UnitFinding) -> list[str]:
     """What to ask the web about this figure, most specific first."""
     where = project.city or project.county or ""
     base = f"{project.company} {project.name}".strip()
@@ -978,7 +1007,7 @@ def search_queries(project: Project, finding: UnitFinding) -> list[str]:
     return [q for q in dict.fromkeys(q.strip() for q in queries) if q]
 
 
-def find_online(project: Project, finding: UnitFinding, *, settings=None) -> Searched:
+def find_online(project: Any, finding: UnitFinding, *, settings=None) -> Searched:
     """Search, fetch, and keep the sentences that mention a capacity or a sum.
 
     Reads pages and stores nothing. That is worth being explicit about: everything
@@ -1048,7 +1077,7 @@ _FIGURE = re.compile(
 )
 
 
-def relevant_passage(article: str, project: Project) -> str:
+def relevant_passage(article: str, project: Any) -> str:
     """The sentences in one page that carry a figure and name this project."""
     name = (project.name or "").lower()
     company = (project.company or "").lower().split()[0] if project.company else ""
@@ -1089,6 +1118,9 @@ class Resolution:
     #: for a figure it wanted more on, a search, four fetches and a second call —
     #: every round.
     declined: bool = False
+    #: The look itself failed — the call, its reply, or the search — so nothing was
+    #: judged. Held for the night only; see `held_back_as`.
+    failed: bool = False
 
     @property
     def acted(self) -> bool:
@@ -1126,55 +1158,112 @@ def record(project: Project, code: str, what: str, *, by: str, detail: str = "")
     record_decision(project, code, what, by=by, detail=detail)
 
 
-def resolve_one(
-    session: Session,
-    project: Project,
-    finding: UnitFinding,
-    *,
-    extractor=None,
-    ask=None,
-    allow_search: bool = True,
-    settings=None,
-) -> Resolution:
-    """Walk one finding down the ladder until something answers it.
+@dataclass(frozen=True)
+class Place:
+    """The parts of a row a web search for its figure is built from, as plain values."""
 
-    Args:
-        extractor: the reasoning model. None stops the ladder after the operator.
-        ask: called with (project, finding, options) and returns a key, "s" to
-            skip, or None to hand the question down to the model. The CLI supplies
-            the keyboard; a script supplies nothing.
-        allow_search: whether a model that says "not in this row" may spend a
-            search and four fetches on it.
+    id: int
+    name: str
+    company: str
+    city: str | None
+    county: str | None
+    state: str
+
+
+@dataclass
+class Question:
+    """What `prepare` found, for one finding: a free answer, a person's, or a model question.
+
+    Exactly one of `free`, `operator` and `context` is set, or none when nobody
+    could decide and no model is configured (`note` says so).
     """
-    got = Resolution(finding=finding)
 
-    # 1. arithmetic
+    finding: UnitFinding
+    free: tuple[str, str] | None = None
+    operator: str = ""
+    context: dict[str, str] | None = None
+    place: Place | None = None
+    note: str = ""
+
+
+@dataclass
+class Asked:
+    """What the model rungs came back with, before anything is written."""
+
+    first: Verdict | None = None
+    searched: Searched | None = None
+    second: Verdict | None = None
+
+
+def prepare(project: Project, finding: UnitFinding, *, extractor=None, ask=None) -> Question:
+    """Rungs 1 and 2, and the model's question if they do not answer it. Main thread."""
+    got = Question(finding)
     free = free_answer(project, finding)
     if free is not None:
-        key, why = free
+        got.free = free
+        return got
+    if ask is not None:
+        answer = ask(project, finding, actions_for(finding.code))
+        if answer:
+            got.operator = answer
+            return got
+    if extractor is None:
+        got.note = "nobody decided, and no model was configured"
+        return got
+    got.context = model_context(project, finding)
+    got.place = Place(
+        project.id, project.name, project.company, project.city, project.county, project.state
+    )
+    return got
+
+
+def ask_ladder(question: Question, *, extractor, allow_search: bool = True, settings=None) -> Asked:
+    """Rungs 3 to 5: the model on the row, then the open web and the model again.
+
+    Touches no database — `question` carries the evidence as text and the row's
+    name and place as plain values — so it can run on a worker thread.
+    """
+    got = Asked()
+    if question.context is None:
+        return got
+    code = question.finding.code
+    got.first = ask_context(question.context, code, extractor=extractor)
+    if got.first.acted or got.first.outcome != "needs_evidence" or not allow_search:
+        return got
+    got.searched = find_online(question.place, question.finding, settings=settings)
+    if got.searched.passages:
+        got.second = ask_context(
+            question.context, code, extractor=extractor, found_online=got.searched.text
+        )
+    return got
+
+
+def settle(session: Session, project: Project, question: Question, asked: Asked) -> Resolution:
+    """Write what the ladder decided, and say at which rung. Main thread."""
+    finding = question.finding
+    got = Resolution(finding=finding)
+
+    if question.free is not None:
+        key, why = question.free
         got.stage, got.key, got.reason, got.confidence = "arithmetic", key, why, 1.0
         got.changed = apply_action(session, project, finding, key)
         record(project, finding.code, got.changed, by="rule", detail=why)
         return got
 
-    # 2. the person at the keyboard
-    if ask is not None:
-        answer = ask(project, finding, actions_for(finding.code))
-        if answer == "s":
-            got.stage, got.note = "unresolved", "skipped at the keyboard"
-            return got
-        if answer:
-            got.stage, got.key, got.confidence = "operator", answer, 1.0
-            got.changed = apply_action(session, project, finding, answer)
-            record(project, finding.code, got.changed, by="operator")
-            return got
-
-    if extractor is None:
-        got.note = "nobody decided, and no model was configured"
+    if question.operator == "s":
+        got.stage, got.note = "unresolved", "skipped at the keyboard"
+        return got
+    if question.operator:
+        got.stage, got.key, got.confidence = "operator", question.operator, 1.0
+        got.changed = apply_action(session, project, finding, question.operator)
+        record(project, finding.code, got.changed, by="operator")
         return got
 
-    # 3. the model, on what the row holds
-    verdict = ask_model(project, finding, extractor=extractor)
+    verdict = asked.first
+    if verdict is None:
+        got.note = question.note or "nobody decided, and no model was configured"
+        return got
+
     if verdict.acted:
         got.stage, got.key = "model", verdict.key
         got.reason, got.confidence = verdict.reason, verdict.confidence
@@ -1188,13 +1277,10 @@ def resolve_one(
         )
         return got
 
-    # 4 and 5. the open web, then the model again
-    if verdict.outcome == "needs_evidence" and allow_search:
-        got.searched = find_online(project, finding, settings=settings)
-        if got.searched.passages:
-            second = ask_model(
-                project, finding, extractor=extractor, found_online=got.searched.text
-            )
+    if asked.searched is not None:
+        got.searched = asked.searched
+        second = asked.second
+        if second is not None:
             if second.acted:
                 got.stage, got.key = "model-after-search", second.key
                 got.reason, got.confidence = second.reason, second.confidence
@@ -1208,16 +1294,150 @@ def resolve_one(
                 )
                 return got
             got.note = second.note or "the model declined again after reading"
+            got.failed = second.failed
             got.declined = not second.failed
             return got
         got.note = got.searched.error or "the search found nothing about this figure"
         # A search that broke judged nothing; one that came back empty did.
+        got.failed = got.searched.failed
         got.declined = not got.searched.failed
         return got
 
     got.note = verdict.note or "the model declined"
+    got.failed = verdict.failed
     got.declined = not verdict.failed
     return got
+
+
+def resolve_one(
+    session: Session,
+    project: Project,
+    finding: UnitFinding,
+    *,
+    extractor=None,
+    ask=None,
+    allow_search: bool = True,
+    settings=None,
+) -> Resolution:
+    """Walk one finding down the ladder until something answers it.
+
+    `prepare`, `ask_ladder` and `settle` in a row, which is what `resolve_all` runs
+    for many findings with the calls overlapping.
+
+    Args:
+        extractor: the reasoning model. None stops the ladder after the operator.
+        ask: called with (project, finding, options) and returns a key, "s" to
+            skip, or None to hand the question down to the model. The CLI supplies
+            the keyboard; a script supplies nothing.
+        allow_search: whether a model that says "not in this row" may spend a
+            search and four fetches on it.
+    """
+    question = prepare(project, finding, extractor=extractor, ask=ask)
+    asked = ask_ladder(question, extractor=extractor, allow_search=allow_search, settings=settings)
+    return settle(session, project, question, asked)
+
+
+def stood(got: Resolution) -> bool:
+    """A resolution that struck a citation and left the value where it was.
+
+    `investment_usd 1,200,000,000 -> 1,200,000,000`: another citation states the same
+    figure, so the re-derivation put it back. Not a dismissal — that is a judgement the
+    figure is right, recorded as one — and not a settlement either: `settled_codes`
+    leaves the finding open.
+    """
+    return got.acted and got.key != DISMISS.key and left_as_it_was(got.changed)
+
+
+def held_back_as(got: Resolution) -> str | None:
+    """The outcome a resolution is remembered under in `model_decline`, if any.
+
+    Three, and none of them is a decision — a decision is in the row's notes
+    (`record`), which `settled_codes` reads:
+
+    * **declined** — the model read the evidence and favoured no edit: held until
+      the evidence changes, or a month passes.
+    * **ruling changed nothing** — a ruling that left the value where it was leaves
+      the finding open (`stood`), and on the same evidence the next round asked the
+      same question and got the same answer: QTS Richmond 5 (#1193) was ruled six
+      times on 2026-10-21, "mw_planned 1434 -> 1434 (nothing left to rule against)"
+      each time, because the figure came from tranches, which no citation ruling
+      reaches. Held the same way.
+    * **error** — the call failed, the reply was unusable, or the search broke: held
+      for the night only (`declines.ERROR`). It used to be held nowhere, so a
+      finding whose call timed out was paid for again in the next round.
+    """
+    from tracker import declines
+
+    if got.failed:
+        return declines.ERROR
+    if got.declined:
+        return "declined after search" if got.searched else "declined"
+    if stood(got):
+        return "ruling changed nothing"
+    return None
+
+
+def resolve_all(
+    session: Session,
+    pending: list[tuple[Project, UnitFinding]],
+    *,
+    extractor=None,
+    ask=None,
+    allow_search: bool = True,
+    settings=None,
+    limit: int | None = None,
+    again: bool = False,
+    workers: int = 1,
+    on_each=None,
+    on_start=None,
+):
+    """Walk many findings down the ladder through `judged.run`. Returns its `Run`.
+
+    Held-back findings (declined on the same evidence block) are skipped before the
+    limit; each resolution is committed as it is written; one that raises is rolled
+    back and the rest go on. Rungs 1 and 2 run on the main thread as each finding is
+    prepared, rungs 3 to 5 off it. With a person at the keyboard (`ask`) the pass is
+    serial whatever `workers` says: one question on screen at a time.
+    """
+    from tracker import judged
+
+    def prepared(pair: tuple[Project, UnitFinding]) -> Question:
+        return prepare(pair[0], pair[1], extractor=extractor, ask=ask)
+
+    def asked(question: Question, _db) -> Asked:
+        return ask_ladder(
+            question, extractor=extractor, allow_search=allow_search, settings=settings
+        )
+
+    def written(pair: tuple[Project, UnitFinding], question: Question, answer: Asked):
+        got = settle(session, pair[0], question, answer)
+        why = held_back_as(got)
+        return judged.Done(
+            got, decline=why or "", reason=got.note if (got.declined or got.failed) else got.changed
+        )
+
+    def failed(pair: tuple[Project, UnitFinding], error: BaseException) -> Resolution:
+        got = Resolution(finding=pair[1], note=f"failed: {error}", failed=True)
+        return got
+
+    return judged.run(
+        session,
+        pending,
+        kind="audit",
+        subject=lambda pair: decline_subject(pair[1]),
+        fingerprint=lambda pair: decline_evidence(pair[0], pair[1]),
+        projects=lambda pair: [pair[1].project_id],
+        prepare=prepared,
+        ask=asked,
+        apply=written,
+        failed=failed,
+        limit=limit,
+        again=again,
+        workers=1 if ask is not None else workers,
+        on_each=on_each,
+        on_start=on_start,
+        label="audit",
+    )
 
 
 __all__ = [
@@ -1230,23 +1450,34 @@ __all__ = [
     "USD_PER_MW_CEILING",
     "USD_PER_MW_FLOOR",
     "Action",
+    "Asked",
+    "Place",
+    "Question",
     "Resolution",
     "Searched",
     "UnitFinding",
     "Verdict",
     "actions_for",
     "apply_action",
+    "ask_context",
+    "ask_ladder",
     "ask_model",
     "check_project",
     "evidence_block",
     "find_online",
     "fmt_value",
     "free_answer",
+    "held_back_as",
     "left_as_it_was",
+    "model_context",
+    "prepare",
     "record",
     "relevant_passage",
+    "resolve_all",
     "resolve_one",
     "run",
     "search_queries",
+    "settle",
     "settled_codes",
+    "stood",
 ]

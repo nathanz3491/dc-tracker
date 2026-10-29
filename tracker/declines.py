@@ -32,7 +32,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, Final
 
 from sqlalchemy import select
@@ -111,7 +111,7 @@ def load(session: Session, kind: str) -> dict[str, ModelDecline]:
 def holds(
     known: dict[str, ModelDecline],
     subject: str,
-    print_: str,
+    print_: str | Callable[[], str],
     *,
     now: dt.datetime | None = None,
     cooldown_days: int = COOLDOWN_DAYS,
@@ -119,7 +119,10 @@ def holds(
     """Whether `subject` was declined on exactly this evidence, recently enough.
 
     Takes the mapping :func:`load` returns rather than a session, so a caller
-    filtering hundreds of candidates reads the table once.
+    filtering hundreds of candidates reads the table once. `print_` may be a
+    function, called only when the answer depends on it — a subject never declined,
+    or declined tonight, or whose last look failed, is decided without it. That is
+    what lets `riskcheck` leave an article unread unless a decline makes it matter.
     """
     row = known.get(subject)
     if row is None or row.decided_at is None:
@@ -127,7 +130,11 @@ def holds(
     now = now or utcnow()
     if now - row.decided_at < dt.timedelta(hours=TONIGHT_HOURS):
         return True
-    if row.fingerprint != print_ or row.outcome == ERROR:
+    if row.outcome == ERROR:
+        return False
+    if callable(print_):
+        print_ = print_()
+    if row.fingerprint != print_:
         return False
     return _fresh(row, now=now, cooldown_days=cooldown_days)
 
@@ -199,6 +206,38 @@ def split(
     return kept, held
 
 
+def pick(
+    items: Iterable[Any],
+    known: dict[str, ModelDecline],
+    subject: Callable[[Any], str],
+    print_: Callable[[Any], str],
+    *,
+    limit: int | None = None,
+    again: bool = False,
+) -> tuple[list[Any], int, int]:
+    """Up to `limit` items still worth asking: `(kept, held back, examined)`.
+
+    :func:`split`, made lazy for a selection whose fingerprints are dear. Held-back
+    items are still skipped *before* the limit, so the limit buys fresh questions
+    exactly as it always has — but an item's fingerprint is computed only when a
+    recorded decline makes it matter (:func:`holds`), and nothing after the limit
+    is filled is examined at all. So `held` counts what was passed over on the way,
+    not every held item in `items`; `examined` says how far the walk went.
+    """
+    kept: list[Any] = []
+    held = examined = 0
+    now = utcnow()
+    for item in items:
+        if limit is not None and len(kept) >= limit:
+            break
+        examined += 1
+        if not again and holds(known, subject(item), lambda item=item: print_(item), now=now):
+            held += 1
+            continue
+        kept.append(item)
+    return kept, held, examined
+
+
 __all__ = [
     "COOLDOWN_DAYS",
     "ERROR",
@@ -209,6 +248,7 @@ __all__ = [
     "forget",
     "holds",
     "load",
+    "pick",
     "record",
     "split",
 ]

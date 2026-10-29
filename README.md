@@ -192,7 +192,12 @@ work shares the OpenCode Go plan, so the tracker keeps to 85% of its $80 month:
 and the console's AI panels write `data/runs/daytime-YYYYMM.spend` beside the nights'
 ledgers. A night gets a thirtieth of the month, ¥16.09, less a seventh of whatever the
 last 29 days spent over their share; unspent money is not carried over. `--cny N` sets a flat ceiling instead. It is
-checked before every paid phase and counts every paid model call: each one
+checked before every paid phase, and inside each one too: a command reads
+`TRACKER_SPEND_CEILING_CNY` (and `TRACKER_SPEND_CEILING_TOKENS`; unset is no ceiling)
+and asks `tracker.spend.ceiling_reached` before every item or wave it starts — every
+judgement pass and the crawl's article reads — so a pass that begins under the
+ceiling stops near it, keeps what it did, and prints `spend ceiling reached`. It
+counts every paid model call: each one
 appends a line to the night's spend ledger (`TRACKER_SPEND_LEDGER`, which the script
 sets), `tracker/spend.py` prices it at the published rate for the hour it was made,
 and the morning report breaks the total down by command and stage. The ceiling also
@@ -268,11 +273,20 @@ prefix cannot hit, so the obvious "shorten old messages" saving reverses. The
 first run cost ~221k a finding before the reasoning-effort tier was split out
 (`TRACKER_DEEPSEEK_AGENT_EFFORT`). Later rounds cost less again. An answered finding
 is recorded in the row's notes. A question a model looked at and could not decide is
-recorded with a hash of what it was shown: a pair, a refused ruling, an audit
-finding, an unclear obstacle. It is not asked again until that evidence changes or a
-month passes (`tracker/declines.py`; `--again` on each command asks anyway). The
-enrich agent's fields nobody has published are the same idea, kept in the row's
-notes by `tracker/attempts.py`.
+recorded with a hash of what it was shown: a pair or a finding the agent left alone, a
+refused ruling, an audit finding, an unclear obstacle, an obstacle with no article to
+read. It is not asked again until that evidence changes or a month passes
+(`tracker/declines.py`; `--again` on each command asks anyway). A look that failed —
+the call, its reply, the search — is held for the night only. The enrich agent's
+fields nobody has published are the same idea, kept in the row's notes by
+`tracker/attempts.py`.
+
+Every paid judgement pass — `duplicates resolve`, `audit resolve`, `risks confirm`,
+`logic resolve`, `tranches review` and enrich's settle and agent steps — runs through
+one loop, `tracker/judged.py`: each answer is committed as it lands, one item's
+failure is rolled back while the rest go on, the money ceiling is asked before each
+wave, and the model calls overlap — `TRACKER_LLM_CONCURRENCY` at once (one for a local
+model), never two about the same row at a time.
 
 Asking publishers for dates (`tracker backfill dates --refetch`) is the one free phase
 that is not cheap —

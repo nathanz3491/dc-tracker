@@ -5007,3 +5007,29 @@ def test_a_write_that_would_break_a_held_relationship_is_refused_alone(
     row = session.scalar(select(IngestUrl))
     assert row.status == "parse_error" and "write refused" in (row.error or "")
     assert session.scalar(select(func.count()).select_from(Project)) == 0
+
+
+def test_a_read_stops_at_the_spend_ceiling_and_says_so(session, tmp_path, monkeypatch, caplog):
+    """The night's money is asked about before each article; once spent, nothing
+    more is read, and the run says how many it left."""
+    ledger = tmp_path / "night.spend"
+    ledger.write_text(
+        "2026-09-26T12:00:00Z\t1\tingest\tdeepseek-flash\t0\t9000000\t0\t0\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("TRACKER_SPEND_LEDGER", str(ledger))
+    monkeypatch.setenv("TRACKER_SPEND_CEILING_CNY", "1")
+    get_settings.cache_clear()
+    second = URL + "?b"
+    llm = FakeLLM([canned("llm_response_microsoft_wi.json")] * 2)
+    with caplog.at_level("WARNING"):
+        report = crawl.run(
+            session,
+            [URL, second],
+            fetcher=FakeFetcher({URL: fetched(), second: fetched(second)}),
+            extractor=llm,
+            settings=get_settings(),
+        )
+    assert llm.seen == [], "nothing was read past the ceiling"
+    assert report.not_read_ceiling == 2
+    assert ("not read: spend ceiling reached", 2) in report.as_rows()
+    assert "spend ceiling reached" in caplog.text

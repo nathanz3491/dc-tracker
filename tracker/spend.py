@@ -49,16 +49,22 @@ Run as a module for the shell script that reads it::
 shares the plan; the tracker keeps to 85% of it (:func:`monthly_budget`). The nightly
 loop reads its ceiling from :func:`allowance`, over every ledger in its directory, so
 a dear night is paid back by the next ones.
+
+**Mid-run.** Every paid pass asks :func:`ceiling_reached` before each item, against
+`TRACKER_SPEND_CEILING_CNY` (and `TRACKER_SPEND_CEILING_TOKENS`), so a pass that
+starts under the ceiling stops near it instead of spending its whole batch past it.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
+import threading
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 #: Yuan to the dollar, for OpenCode Go's dollar prices below.
 CNY_PER_USD: Final = 7.1
@@ -374,6 +380,96 @@ def report(calls: Sequence[Call]) -> list[str]:
     return lines
 
 
+@dataclass
+class _Tally:
+    """A ledger read so far: where the last whole line ended, and what it summed to."""
+
+    offset: int = 0
+    cny: float = 0.0
+    tokens: int = 0
+
+
+#: One running tally per ledger path. See :func:`ledger_spent`.
+_TALLIES: dict[str, _Tally] = {}
+_TALLY_LOCK = threading.Lock()
+
+
+def ledger_spent(path: Path | str | None) -> tuple[float, int]:
+    """What a ledger's model calls have cost so far: (yuan, tokens).
+
+    The same sum :func:`total` makes over :func:`read` — searches and fetched pages
+    are another bill and count for neither — but **read incrementally**, because a
+    paid pass asks before every item and a night's ledger grows to thousands of
+    lines. The ledger is append-only, so each call parses only the whole lines
+    written since the last one; a file that shrank (a new night, a rotated ledger)
+    is read again from the start. A missing or unreadable ledger has spent nothing.
+    """
+    if path is None:
+        return 0.0, 0
+    key = str(path)
+    with _TALLY_LOCK:
+        tally = _TALLIES.setdefault(key, _Tally())
+        try:
+            size = os.stat(key).st_size
+        except OSError:
+            _TALLIES[key] = _Tally()
+            return 0.0, 0
+        if size < tally.offset:
+            tally = _TALLIES[key] = _Tally()
+        if size > tally.offset:
+            try:
+                with open(key, "rb") as handle:
+                    handle.seek(tally.offset)
+                    chunk = handle.read(size - tally.offset)
+            except OSError:
+                return tally.cny, tally.tokens
+            # Only whole lines: a writer may be half way through one.
+            end = chunk.rfind(b"\n") + 1
+            for raw in chunk[:end].decode("utf-8", errors="replace").splitlines():
+                call = parse(raw)
+                if call is None or call.model in _TOOLS:
+                    continue
+                tally.cny += call.cost()
+                tally.tokens += call.tokens
+            tally.offset += end
+        return tally.cny, tally.tokens
+
+
+def ceiling_reached(settings: Any = None) -> str:
+    """Why the night's money is spent, or "" while there is room.
+
+    Compares the current ledger (`TRACKER_SPEND_LEDGER`) against
+    `TRACKER_SPEND_CEILING_CNY` and `TRACKER_SPEND_CEILING_TOKENS`; either set and
+    reached stops. Neither set, or no ledger, is never reached. Cheap enough to ask
+    before every item: see :func:`ledger_spent`.
+
+    **Checked before work starts, never during it.** A call already in flight is
+    paid for whatever happens next, so a pass that finds the ceiling reached keeps
+    everything it has done and starts nothing new — the overshoot is bounded by the
+    calls already running, one wave of a pass, instead of by the pass's whole batch.
+    """
+    if settings is None:
+        from tracker.config import get_settings
+
+        settings = get_settings()
+    cny_cap = getattr(settings, "spend_ceiling_cny", None)
+    token_cap = getattr(settings, "spend_ceiling_tokens", None)
+    if cny_cap is None and token_cap is None:
+        return ""
+    cny, tokens = ledger_spent(getattr(settings, "spend_ledger", None))
+    if cny_cap is not None and cny >= cny_cap:
+        return f"¥{cny:.2f} spent against a ¥{cny_cap:.2f} ceiling"
+    if token_cap is not None and tokens >= token_cap:
+        return f"~{tokens:,} tokens spent against a {token_cap:,}-token ceiling"
+    return ""
+
+
+#: The words every command prints when it stops for :func:`ceiling_reached`. The
+#: nightly loop and a person reading a log both look for them; one constant, so no
+#: command can say it differently.
+CEILING_REACHED: Final = "spend ceiling reached"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """`total`, `report`, `searches` or `summary` of a ledger, or tonight's
     `allowance` from a directory of them.
@@ -411,6 +507,7 @@ if __name__ == "__main__":
 __all__ = [
     "BEIJING",
     "CATCH_UP_DAYS",
+    "CEILING_REACHED",
     "CNY_PER_USD",
     "FETCH_CNY",
     "FETCH_MODEL",
@@ -427,8 +524,10 @@ __all__ = [
     "PhaseSpend",
     "allowance",
     "by_phase",
+    "ceiling_reached",
     "fetches",
     "is_peak",
+    "ledger_spent",
     "monthly_budget",
     "next_off_peak",
     "parse",

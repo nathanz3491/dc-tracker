@@ -448,3 +448,113 @@ def _print_report(report, *, title: str) -> None:
         err.print(
             f"[yellow]{report.rejected} record(s) rejected[/yellow] — see the log lines above."
         )
+
+
+# --- the paid passes ---------------------------------------------------------
+#
+# `duplicates resolve`, `audit resolve`, `risks confirm`, `logic resolve`,
+# `tranches review` and `enrich` each put a batch of questions to a model through
+# `tracker.judged.run`. What they print about that — what was held back, where the
+# money ran out, what the batch came to — is said here once, so no two of them say
+# it differently.
+
+
+def again_flag(help: str):
+    """The `--again` option every paid pass carries: ask what was already put to it."""
+    return typer.Option("--again", help=help)
+
+
+def _model(tier: str = "judgement"):
+    """The extractor a paid pass asks, or the command ends saying why there is none.
+
+    `judgement` is the per-item pick from a closed menu (`llm.judgement_extractor`,
+    `TRACKER_DEEPSEEK_JUDGEMENT_EFFORT`, `TRACKER_JUDGEMENT_PROVIDER`); `agent` is
+    the tool-using loop (`llm.agent_extractor`, `TRACKER_DEEPSEEK_AGENT_EFFORT`).
+    """
+    from tracker.llm import LLMUnavailable, agent_extractor, judgement_extractor
+
+    build = agent_extractor if tier == "agent" else judgement_extractor
+    try:
+        return build(get_settings())
+    except LLMUnavailable as exc:
+        _fail(str(exc))
+        raise
+
+
+def _workers(tier: str = "judgement") -> int:
+    """How many of a pass's questions may be in flight at once.
+
+    The provider that will actually answer that tier decides it
+    (`Settings.llm_workers`): the judgement tier can be sent to a local model on its
+    own (`judgement_provider`), and a local model wants one.
+    """
+    settings = get_settings()
+    provider = settings.llm_provider
+    if tier != "agent":
+        provider = settings.judgement_provider or provider
+    return settings.llm_workers(provider)
+
+
+def _print_held(
+    count: int, what: str, why: str = "already put to the model", *, out: Console | None = None
+) -> None:
+    """`holding back 3 pair(s) ... on the same evidence; --again asks them.`"""
+    if count and not json_mode():
+        (out or console).print(
+            f"[dim]holding back {count} {what} {why} on the same evidence; --again asks them.[/dim]"
+        )
+
+
+def _print_ceiling(run) -> bool:
+    """Say that the night's money stopped a pass, in the words the loop looks for.
+
+    One line, on stdout — on stderr under `--json`, which must stay a payload. The
+    command then ends normally: stopping at the ceiling is the ceiling working, and
+    everything done before it is committed.
+    """
+    from tracker.spend import CEILING_REACHED
+
+    if not run.ceiling:
+        return False
+    out = err if json_mode() else console
+    out.print(
+        f"[yellow]{CEILING_REACHED}[/yellow] [dim]— {escape(run.ceiling)}; "
+        f"{len(run.unreached)} item(s) not started, everything before them kept.[/dim]"
+    )
+    return True
+
+
+def _print_tally(
+    parts: list[tuple[int, str, str]],
+    tokens=None,
+    *,
+    beyond: int = 0,
+    out: Console | None = None,
+) -> None:
+    """A pass's closing line and its prompt-cache rate.
+
+    `parts` is `(count, phrase, style)`: a `bold` part is always shown, any other
+    only when it is not zero — `3 ruled, 2 left alone, 1 errored, 4 beyond --limit
+    ~45,000 tokens`. `tokens` is a `judged.Tokens`.
+    """
+    shown = [
+        f"[{style}]{count}[/{style}] {phrase}"
+        for count, phrase, style in parts
+        if count or style == "bold"
+    ]
+    if beyond:
+        shown.append(f"{beyond} beyond --limit")
+    line = "\n" + ", ".join(shown)
+    if tokens is not None:
+        line += f"  [dim]~{tokens.total:,} tokens[/dim]"
+    out = out or console
+    out.print(line)
+    if tokens is not None and (tokens.cache_hit or tokens.cache_miss):
+        # The number that decides what a night costs: a cached prompt token is a
+        # fiftieth of an uncached one, and an agent loop re-sends its history every
+        # turn. A low rate here means the prefix is being disturbed.
+        rate = tokens.cache_hit / (tokens.cache_hit + tokens.cache_miss)
+        out.print(
+            f"  [dim]prompt cache: {rate:.0%} hit ({tokens.cache_hit:,} cached, "
+            f"{tokens.cache_miss:,} not)[/dim]"
+        )

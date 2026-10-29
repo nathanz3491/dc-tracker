@@ -244,9 +244,72 @@ def test_an_unreadable_reply_is_an_error_not_a_verdict(session):
 
 def test_a_row_with_no_article_text_is_reported_rather_than_guessed(session):
     _, risk, _ = _seed(session, excerpt="")
-    (outcome,) = riskcheck.confirm(session, [risk], extractor=_Model("{}"))
+    model = _Model("{}")
+    (outcome,) = riskcheck.confirm(session, [risk], extractor=model)
 
     assert outcome.result == "no_article"
+    assert model.prompts == [], "nothing to read, so nothing was asked"
+
+
+def test_no_article_is_remembered_until_the_article_arrives(session):
+    """It was recorded nowhere, so the same obstacle was offered again every round.
+    Deliberate change: it is now held like `unclear`, on a hash that covers the
+    article text, so the day the page is cached it is a new question."""
+    from tracker import declines
+    from tracker.models import ModelDecline, utcnow
+
+    _, risk, source = _seed(session, excerpt="")
+    riskcheck.confirm(session, [risk], extractor=_Model("{}"))
+    row = session.query(ModelDecline).filter_by(kind="risk", subject=str(risk.id)).one()
+    assert row.outcome == "no_article"
+
+    row.decided_at = utcnow() - dt.timedelta(hours=declines.TONIGHT_HOURS + 1)
+    session.flush()
+    assert riskcheck.fresh(session, [risk]) == ([], 1), "still nothing to read"
+    source.excerpt = ARTICLE
+    session.flush()
+    assert riskcheck.fresh(session, [risk]) == ([risk], 0), "the article is new evidence"
+
+
+def test_a_failed_call_is_kept_and_the_batch_goes_on(session):
+    """One obstacle's failure no longer ends the batch, and what came before stays."""
+    _, first, _ = _seed(session)
+    second = Risk(
+        project_id=first.project_id,
+        category="water",
+        severity="watch",
+        status="open",
+        summary="Cooling water.",
+        unconfirmed="no_quote",
+        source_id=first.source_id,
+    )
+    session.add(second)
+    session.flush()
+
+    class Flaky(_Model):
+        def complete(self, *, system, user, max_tokens):
+            if len(self.prompts) == 1:
+                self.prompts.append(user)
+                raise RuntimeError("socket closed")
+            return super().complete(system=system, user=user, max_tokens=max_tokens)
+
+    model = Flaky('{"verdict": "refuted", "confidence": 0.9, "reason": "not in this article"}')
+    outcomes = riskcheck.confirm(session, [second, first], extractor=model)
+    assert [o.result for o in outcomes] == ["refuted", "error"]
+    assert second.status == riskcheck.REFUTED_STATUS, "the first answer is committed"
+
+
+def test_only_an_obstacle_with_a_decline_has_its_article_read(session, monkeypatch):
+    """`fresh` hashed every candidate's whole article each round to compare with a
+    decline most of them did not have."""
+    _, risk, _ = _seed(session)
+    read: list[int] = []
+    real = riskcheck.article_for
+    monkeypatch.setattr(
+        riskcheck, "article_for", lambda source, **kw: read.append(1) or real(source, **kw)
+    )
+    assert riskcheck.fresh(session, [risk]) == ([risk], 0)
+    assert read == []
 
 
 def test_the_prompt_carries_the_other_obstacles_on_the_row(session):
