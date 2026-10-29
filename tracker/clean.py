@@ -295,7 +295,9 @@ class _Shared:
     stamp: str = ""
 
 
-def _shared(session: Session, project_ids: list[int] | None = None) -> _Shared:
+def _shared(
+    session: Session, project_ids: list[int] | None = None, *, suspected: list | None = None
+) -> _Shared:
     from tracker import blockcheck, capex, quality
 
     got = _Shared(stamp=_current_stamp())
@@ -307,7 +309,7 @@ def _shared(session: Session, project_ids: list[int] | None = None) -> _Shared:
         got.block_groups.setdefault(group.project_id, []).append(group.verdict)
     # Parked pairs are already excluded — `suspected_duplicates` drops them — so a
     # pair an operator has answered with "these are different" stops counting.
-    for pair in capex.suspected_duplicates(session):
+    for pair in capex.suspected_duplicates(session) if suspected is None else suspected:
         got.suspected.add(pair.a_id)
         got.suspected.add(pair.b_id)
     return got
@@ -512,8 +514,15 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
     return CleanCard(project_id=project.id, name=project.name, conditions=tuple(checks))
 
 
-def scan(session: Session, *, project_ids: list[int] | None = None) -> Sweep:
-    """Every row's card. About 4.5 seconds over the whole database."""
+def scan(
+    session: Session, *, project_ids: list[int] | None = None, suspected: list | None = None
+) -> Sweep:
+    """Every row's card. About 4.5 seconds over the whole database.
+
+    `suspected` is `capex.suspected_duplicates(session)` when the caller already has
+    it — the nightly counts need the pairs themselves too, and they are the same
+    pairs whoever asks for them in one read-only session.
+    """
     query = select(Project)
     if project_ids:
         query = query.where(Project.id.in_(project_ids))
@@ -524,7 +533,7 @@ def scan(session: Session, *, project_ids: list[int] | None = None) -> Sweep:
     # for one sweep. A read-only sweep sees the same rows either way; this only
     # stops it reading them five times.
     projects = session.scalars(query.options(*preload_options())).all()
-    got = _shared(session, project_ids)
+    got = _shared(session, project_ids, suspected=suspected)
 
     cards: list[CleanCard] = []
     failures: collections.Counter[str] = collections.Counter()
