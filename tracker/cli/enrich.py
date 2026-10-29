@@ -1041,6 +1041,19 @@ def _article_router(session, point_mod, extractor):
     return route
 
 
+def _point_ladder() -> list:
+    """The fetch ladder `point` reads with: the one every other reading command climbs.
+
+    It read with the plain client alone, so a page answering 403 was recorded as failed
+    without the browser-like client, the browser or DeepSeek's fetch having tried it.
+    A refusal recorded counts against its publisher now
+    (`discover.refusing_publishers`), so it has to be the ladder's last word.
+    """
+    from tracker.ingest.fetch import escalation_ladder
+
+    return escalation_ladder(get_settings())
+
+
 def _point_read(name: str, point_mod, urls: list[str], *, extractor) -> None:
     """`--url`: read exactly these links, and file each where the article says.
 
@@ -1068,6 +1081,7 @@ def _point_read(name: str, point_mod, urls: list[str], *, extractor) -> None:
         report = crawl_mod.run(
             session,
             urls,
+            escalate=_point_ladder(),
             cache_dir=cache_dir,
             route=_article_router(session, point_mod, extractor),
         )
@@ -1101,7 +1115,7 @@ def _point_enrich(project_id: int) -> None:
 
     console.rule("[bold]enrich[/bold]", align="left")
     with _explain_db_locks(), session_scope(engine) as session:
-        report = enrich_mod.run(session, project_id)
+        report = enrich_mod.run(session, project_id, escalate=_point_ladder())
     _print_report(report, title=f"enrich #{project_id}")
 
 
@@ -1161,6 +1175,7 @@ def _point_build(name: str, point_mod, settings, max_articles: int, *, extractor
         crawl_report = crawl_mod.run(
             session,
             urls,
+            escalate=_point_ladder(),
             cache_dir=cache_dir,
             route=_article_router(session, point_mod, extractor),
         )

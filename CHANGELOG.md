@@ -1153,6 +1153,13 @@ initial build of the v1 PRD.
   only re-derives a value its own sources no longer support, while an inverted value
   is exactly what they support. It now names `logic conflicts <id> --apply`, where a
   model rules which claim is the superseded one.
+- **`tracker point` reads a page through the whole fetch ladder, like every other
+  reading command** (`tracker/cli/enrich.py` `_point_ladder`; `tests/test_cli.py`). It
+  read with the plain client alone, so a page the browser-like client or the browser
+  gets past — a press release behind a firewall that fingerprints the connection — was
+  recorded as unreadable. A refusal recorded now counts against its publisher when the
+  nightly read decides which publishers refuse every read, so it has to be the ladder's
+  last word.
 - **A go-live check reads a late campus's listing pages again**
   (`tracker/ingest/watch.py` `relist`, `LISTING_STALE`; `tracker/ingest/discover.py`
   `deciding`; `docs/workflows/sync.md` + `sync.svg`; `tests/test_news_watch.py`).

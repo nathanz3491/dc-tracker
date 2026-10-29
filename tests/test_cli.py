@@ -789,6 +789,30 @@ def test_crawl_from_queue_sets_aside_a_refusing_publisher_but_checks_one_page(
         assert (older.status, older.error) == ("skipped", discover.DISCARDED_REFUSING)
 
 
+def test_point_reads_a_link_through_the_whole_fetch_ladder(initialized: Path, monkeypatch):
+    """`point` read with the plain client alone, so a page answering 403 was recorded as
+    failed with no other rung having tried it -- and a refusal recorded counts against
+    its publisher now (`discover.refusing_publishers`)."""
+    from tracker.ingest import crawl, fetch
+    from tracker.ingest.records import IngestReport
+
+    ladder = [object()]
+    monkeypatch.setattr(fetch, "escalation_ladder", lambda *_args, **_kw: ladder)
+    seen: dict = {}
+
+    def fake_run(session, urls, **kwargs):
+        seen.update(kwargs, urls=list(urls))
+        return IngestReport()
+
+    monkeypatch.setattr(crawl, "run", fake_run)
+    set_key(monkeypatch)
+    result = invoke(initialized, "point", "Some Campus", "--url", "https://a.test/story/")
+
+    assert result.exit_code == 0, result.output
+    assert seen["urls"] == ["https://a.test/story/"]
+    assert seen["escalate"] is ladder
+
+
 def test_discover_reports_a_broken_feed_config(initialized: Path, tmp_path: Path):
     bad = tmp_path / "feeds.toml"
     bad.write_text('[[feed]]\nurl = "https://a.test/rss"\n', encoding="utf-8")
