@@ -21,9 +21,12 @@ from tracker.cli._shared import (
     _db_path,
     _explain_db_locks,
     _fail,
+    _print_ceiling,
     _print_report,
     _print_report_rows,
+    _print_tally,
     _use_llm,
+    _workers,
     app,
     console,
     err,
@@ -450,7 +453,17 @@ def enrich(
         _fail(str(exc))
         raise
 
-    if agent and not dry_run:
+    if batch.ceiling:
+        # The harvest stopped between projects; the agent pass would stop before
+        # its first row, so it is not started at all.
+        from tracker.spend import CEILING_REACHED
+
+        console.print(
+            f"[yellow]{CEILING_REACHED}[/yellow] [dim]— {escape(batch.ceiling)}; "
+            f"{len(wanted) - len(batch.reports)} project(s) not started, everything "
+            "before them kept.[/dim]"
+        )
+    if agent and not dry_run and not batch.ceiling:
         # After the cheap rung, not instead of it. `_FIELD_QUERIES` finds the
         # fields somebody wrote a query template for, and finds them for a few
         # hundred tokens; the agent costs ~77,000 a row. So it is pointed only at
@@ -489,12 +502,6 @@ def enrich(
     _render_batch(batch, target=target_fields or enrich_mod.DEFAULT_TARGET_FIELDS, dry_run=dry_run)
 
 
-#: What one row of the agent pass typically costs. Used only to decide whether the
-#: NEXT row fits in what is left of `--token-budget`, before any run has measured a
-#: real figure. See `README.md` for where the number comes from.
-TYPICAL_ROW_TOKENS = 77_000
-
-
 def _gapfill_batch(
     session,
     project_ids: list[int],
@@ -513,9 +520,10 @@ def _gapfill_batch(
     is how a self-built Meta campus got Meta written in as its own customer — a field
     the tier deliberately does not demand, because its absence is usually the truth.
 
-    Committed per project, so a provider failure on row 20 keeps the first 19.
-    Rows with nothing left to fill cost nothing at all — `gapfill.fill` returns
-    before making a call.
+    The rows go through `gapfill.fill_rows` (`judged.run`): committed per row, a row
+    that raises rolled back while the rest go on, the spend ceiling asked before
+    each wave, and the runs overlapping across rows. Rows with nothing left to fill
+    cost nothing at all.
 
     Three things keep the bill down, and all three work by *not asking*:
 
@@ -529,7 +537,8 @@ def _gapfill_batch(
       is here to prevent rather than a way to prevent it.
     """
     from tracker import gapfill
-    from tracker.llm import LLMUnavailable, agent_extractor, spend_stage
+    from tracker.judged import Tokens
+    from tracker.llm import LLMUnavailable, agent_extractor
 
     try:
         extractor = agent_extractor(get_settings())
@@ -538,96 +547,43 @@ def _gapfill_batch(
         return {}
 
     console.print("\n[bold]agent pass[/bold] — what the harvest could not find")
-    filled = nothing = errored = 0
-    settled_already = 0
-    spent = cache_hit = cache_miss = called = 0
-    unreached: list[int] = []
+    tally = {"filled": 0, "nothing": 0, "errored": 0, "asked_nothing": 0}
+    tokens = Tokens()
     landed_by_row: dict[int, tuple[str, ...]] = {}
 
-    for index, project_id in enumerate(project_ids):
-        project = session.get(Project, project_id)
-        if project is None:
-            continue
-        head = f"#{project.id} {escape(project.name[:34])}"
-
-        # Which fields this row may be asked about: empty, wanted, and not already
-        # asked about to exhaustion.
-        empty = {f for f in gapfill.FILLABLE_FIELDS if getattr(project, f, None) is None}
-        if only_fields is not None:
-            empty &= set(only_fields)
-        if t2_only:
-            from tracker.ingest.enrich import t2_gaps
-
-            empty &= t2_gaps(project)
-        askable = sorted(empty - attempts_mod.exhausted(project, max_attempts=max_attempts))
-        if not askable:
-            settled_already += 1
-            continue
-
-        # Before the call, never during one. `expected` is what a row has actually
-        # cost this run; the constant only stands in until a row has been measured.
-        expected = spent // called if called else TYPICAL_ROW_TOKENS
-        if token_budget and spent + expected > token_budget:
-            unreached = project_ids[index:]
-            break
-
-        try:
-            with spend_stage("agent"):
-                out = gapfill.fill(session, project, extractor=extractor, gaps=askable)
-        except Exception as exc:
-            session.rollback()
-            errored += 1
-            console.print(f"  {head}  [red]failed[/red] [dim]— {escape(str(exc)[:110])}[/dim]")
-            continue
-
-        spent += out.prompt_tokens + out.completion_tokens
-        cache_hit += out.cache_hit_tokens
-        cache_miss += out.cache_miss_tokens
-        called += 1
-
-        # A fact can be "stored" and still not reach the row: attached to a citation
-        # whose claim about that field an earlier ruling struck, it stays struck.
-        # COL4 re-found the same ruled-out $150M on two nights running and reported
-        # it as gained both times. What counts is whether the field is filled now.
-        landed = {f for f in askable if getattr(project, f, None) is not None}
-        unlanded = [f for f in askable if f not in landed and f not in out.missed]
-
-        # Only a run that reached an answer is evidence about the field. An error
-        # or an unusable shape says something about the call, not about whether
-        # anybody published the figure, and retiring a field on that would be a
-        # silent loss. A fact that did not land is an answer that changed nothing,
-        # and is recorded the same way, so the next night does not pay to re-find it.
-        if out.verdict in {"filled", "nothing"} and (out.missed or unlanded):
-            attempts_mod.record(project, [*out.missed, *unlanded])
-
-        if out.verdict == "filled" and landed:
-            session.commit()
-            filled += 1
-            landed_by_row[project.id] = tuple(sorted(landed))
+    def announce(row) -> None:
+        head = f"#{row.project_id} {escape(row.name[:34])}"
+        out = row.filled
+        if out is None:
+            if row.error:
+                tally["errored"] += 1
+                console.print(f"  {head}  [red]failed[/red] [dim]— {escape(row.error[:110])}[/dim]")
+            else:
+                tally["asked_nothing"] += 1
+            return
+        tokens.add(out)
+        if out.verdict == "filled" and row.landed:
+            tally["filled"] += 1
+            landed_by_row[row.project_id] = tuple(sorted(row.landed))
             for line in out.stored:
-                if line.split(" = ", 1)[0].strip() in landed:
+                if line.split(" = ", 1)[0].strip() in row.landed:
                     console.print(f"  {head}  [green]{escape(line)}[/green]")
-            for field in unlanded:
+            for field in row.unlanded:
                 console.print(
                     f"  {head}  [dim]{field}: found, but an earlier ruling struck that claim — "
                     "not stored[/dim]"
                 )
         elif out.verdict == "filled":
-            session.commit()
-            nothing += 1
+            tally["nothing"] += 1
             console.print(
-                f"  {head}  [dim]found {', '.join(unlanded) or 'a fact'} again, but an earlier "
-                "ruling struck that claim — not stored[/dim]"
+                f"  {head}  [dim]found {', '.join(row.unlanded) or 'a fact'} again, but an "
+                "earlier ruling struck that claim — not stored[/dim]"
             )
         elif out.verdict == "nothing":
-            # Commits the attempt note even though no fact landed: that note is the
-            # entire saving, and rolling it back would re-ask this row forever.
-            session.commit()
-            nothing += 1
+            tally["nothing"] += 1
             console.print(f"  {head}  [dim]nothing published — {escape(out.note[:90])}[/dim]")
         else:
-            session.rollback()
-            errored += 1
+            tally["errored"] += 1
             console.print(f"  {head}  [yellow]{out.verdict}[/yellow]")
         # Printed even on success: a refusal is the evidence gate working, and a
         # run that quietly dropped four of five facts should look different from
@@ -635,28 +591,41 @@ def _gapfill_batch(
         for line in out.refused:
             console.print(f"      [dim]refused: {escape(line[:120])}[/dim]")
 
-    console.print(
-        f"\n[bold]{filled}[/bold] row(s) gained a cited fact, "
-        f"[bold]{nothing}[/bold] had nothing published"
-        + (f", [red]{errored}[/red] failed" if errored else "")
-        + f"  [dim]~{spent:,} tokens[/dim]"
+    got = gapfill.fill_rows(
+        session,
+        project_ids,
+        extractor=extractor,
+        only_fields=only_fields,
+        token_budget=token_budget,
+        max_attempts=max_attempts,
+        t2_only=t2_only,
+        workers=_workers("agent"),
+        on_each=announce,
     )
-    if cache_hit or cache_miss:
-        rate = cache_hit / (cache_hit + cache_miss)
-        console.print(f"  [dim]prompt cache: {rate:.0%} hit[/dim]")
-    if settled_already:
+
+    _print_ceiling(got)
+    _print_tally(
+        [
+            (tally["filled"], "row(s) gained a cited fact", "bold"),
+            (tally["nothing"], "had nothing published", "bold"),
+            (tally["errored"], "failed", "red"),
+        ],
+        tokens,
+        out=console,
+    )
+    if tally["asked_nothing"]:
         console.print(
-            f"  [dim]{settled_already} row(s) asked nothing — every field either "
+            f"  [dim]{tally['asked_nothing']} row(s) asked nothing — every field either "
             f"filled or already looked for {max_attempts}x without success[/dim]"
         )
-    if unreached:
+    if got.stopped:
         console.print(
-            f"[yellow]token budget spent[/yellow] — {len(unreached)} row(s) not "
+            f"[yellow]token budget spent[/yellow] — {len(got.unreached)} row(s) not "
             f"reached. Raise --token-budget to continue."
             + (
-                f"\n[dim]nothing was attempted: a row costs about {TYPICAL_ROW_TOKENS:,} "
+                f"\n[dim]nothing was attempted: a row costs about {gapfill.TYPICAL_ROW_TOKENS:,} "
                 f"tokens and the budget is {token_budget:,}[/dim]"
-                if not called
+                if not tokens.calls
                 else ""
             )
         )

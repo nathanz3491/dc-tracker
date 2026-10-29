@@ -1571,7 +1571,18 @@ def _agent_ready(monkeypatch, fake):
     from tracker import gapfill
     from tracker.cli import enrich as cli_enrich
 
-    monkeypatch.setattr(gapfill, "fill", fake)
+    # The pass runs a row in two steps -- the agent run (`investigate`, which may be
+    # off the main thread) and storing what it found (`conclude`) -- so a fake
+    # `fill` stands in for both: the run hands back its question, and concluding
+    # asks the fake with the fields that question named.
+    monkeypatch.setattr(gapfill, "investigate", lambda asked, **kw: asked)
+    monkeypatch.setattr(
+        gapfill,
+        "conclude",
+        lambda session, project, asked, result: fake(
+            session, project, extractor=None, gaps=list(asked.wanted)
+        ),
+    )
     monkeypatch.setattr(cli_enrich, "get_settings", lambda: object())
     monkeypatch.setattr("tracker.llm.agent_extractor", lambda settings: object())
     return cli_enrich
@@ -1819,6 +1830,29 @@ def test_a_refused_dispute_is_not_asked_again_on_the_same_claims(session):
     third = SettleLLM(refuse)
     run(session, project.id, settle_extractor=third, target_fields=0)
     assert third.calls == 1
+
+
+def test_a_failed_settle_call_is_held_for_the_night_only(session):
+    """Deliberate change: a provider failure was not remembered at all, and an
+    unusable reply was held for a month as though the model had refused. Both are a
+    failed look now, held for the night as in every other paid pass."""
+    from tracker import declines
+    from tracker.llm import LLMError
+
+    class Down:
+        calls = 0
+
+        def complete(self, **_):
+            Down.calls += 1
+            raise LLMError("HTTP 503")
+
+    project = _contested(session)
+    run(session, project.id, settle_extractor=Down(), target_fields=0)
+    row = declines.load(session, "settle")[f"{project.id}:mw_planned"]
+    assert row.outcome == declines.ERROR
+
+    report = run(session, project.id, settle_extractor=Down(), target_fields=0)
+    assert report.settle_held == 1, "not asked again tonight"
 
 
 # --- what the 2026-09-30 audit of the night's writes found -----------------------

@@ -47,6 +47,7 @@ from tracker.gaps import FILLED, NOT_APPLICABLE, FieldState, for_project
 from tracker.llm import LLMUnavailable, spend_stage
 from tracker.llm import judgement_extractor as _judgement_extractor
 from tracker.models import IngestUrl, Project, Source
+from tracker.spend import CEILING_REACHED, ceiling_reached
 from tracker.vocab import TRACKED_FIELDS
 
 if TYPE_CHECKING:
@@ -631,8 +632,10 @@ def _settle(
     question came back every round — the overnight loop re-selected the same fifteen
     rows each time and re-asked every dispute they carried. A new claim, a superseded
     one or a re-read that changes a quote is a different question and is asked; so is
-    anything after the cooldown. An unusable reply is remembered the same way; a
-    provider failure is not, because it says nothing about the question.
+    anything after the cooldown. A failed look — the request failed, or the reply
+    was unusable — is held for the night only (`declines.ERROR`): it says nothing
+    about the question, and an unusable reply used to be held for a month as though
+    the model had refused.
 
     **It writes**, unlike `tracker logic conflicts`, which proposes. That is the
     command's nature rather than an inconsistency: `enrich` exists to change the
@@ -642,7 +645,8 @@ def _settle(
     Bounded by construction: at most seven tracked fields can be contested once
     identity is excluded, so at most fourteen calls for one project.
 
-    **Each answer is committed as it is applied.** It was flushed and left for the
+    **Each answer is committed as it is applied** (`judged.run`, which also rolls
+    back a dispute that raises and goes on, and stops at the spend ceiling). It was flushed and left for the
     caller, and the caller is not always the next thing to touch the session: `sync`
     hands the same session to the agent pass, which rolls back on its first error —
     and took the paid-for decisions with it (measured on a copy of production: 36
@@ -650,16 +654,12 @@ def _settle(
     it open was also a lock: the next field's question is a model call, and it ran
     with the last answer's writes still holding SQLite's single write lock.
     """
-    from tracker import conflicts, declines
+    from tracker import conflicts, declines, judged
 
-    known = declines.load(session, "settle")
-    for dispute in conflicts.disputes(project):
-        subject, print_ = settle_key(dispute)
-        if declines.holds(known, subject, print_):
-            report.settle_held += 1
-            continue
-        with spend_stage("settle"):
-            outcome = conflicts.solve(dispute, extractor=extractor)
+    def ask(dispute: object, _db: object) -> object:
+        return conflicts.solve(dispute, extractor=extractor)
+
+    def settle(dispute: object, _same: object, outcome: object) -> judged.Done:
         report.settle_calls += outcome.calls
         if outcome.verdict == "resolved" and outcome.chosen is not None:
             report.settled.append(
@@ -667,26 +667,33 @@ def _settle(
             )
             if not dry_run:
                 conflicts.apply_outcome(session, project, outcome)
-                declines.forget(session, "settle", subject)
-                session.commit()
-            continue
+            return judged.Done(outcome, forget=True)
         if outcome.verdict == "refused":
             report.refused.append(f"{dispute.field}: {outcome.reason}")
-        else:
-            log.warning("settle failed on #%d %s: %s", project.id, dispute.field, outcome.reason)
-        if not dry_run and (outcome.verdict == "refused" or outcome.calls):
-            # `calls` is zero only when the request itself failed, which is about the
-            # provider rather than the question and must not hold it back.
-            declines.record(
-                session,
-                "settle",
-                subject,
-                print_,
-                outcome="refused" if outcome.verdict == "refused" else "unusable",
-                reason=outcome.reason,
-                by="model",
-            )
-            session.commit()
+            return judged.Done(outcome, decline="refused", reason=outcome.reason)
+        log.warning("settle failed on #%d %s: %s", project.id, dispute.field, outcome.reason)
+        return judged.Done(outcome, decline=declines.ERROR, reason=outcome.reason)
+
+    got = judged.run(
+        session,
+        conflicts.disputes(project),
+        kind="settle",
+        subject=lambda dispute: settle_key(dispute)[0],
+        fingerprint=lambda dispute: settle_key(dispute)[1],
+        projects=lambda dispute: [dispute.project_id],
+        prepare=lambda dispute: dispute,
+        ask=ask,
+        apply=settle,
+        # One project's disputes all name that project, so no two share a wave and
+        # a second worker would never be used.
+        workers=1,
+        commit=not dry_run,
+        stage="settle",
+        label="settle",
+    )
+    report.settle_held += got.held
+    if got.ceiling:
+        report.skipped.append(("settle", f"{CEILING_REACHED} — {got.ceiling}"))
 
 
 def settle_key(dispute: object) -> tuple[str, str]:
@@ -982,6 +989,8 @@ class BatchReport:
     reports: list[EnrichReport] = dc_field(default_factory=list)
     sweep_note: str | None = None
     budget_exhausted: bool = False
+    #: Why the night's money stopped the batch before every project ran, or "".
+    ceiling: str = ""
 
     @property
     def articles_read(self) -> int:
@@ -1234,6 +1243,13 @@ def run_many(
     spent = 0
     unreached = list(project_ids)
     for project_id in project_ids:
+        # Every project reads articles through the model, and settles what it
+        # finds with another: the night's money is asked about before each one.
+        why = ceiling_reached(settings)
+        if why:
+            batch.ceiling = why
+            log.warning("%s (%s): %d project(s) never ran", CEILING_REACHED, why, len(unreached))
+            break
         remaining = max_articles - spent
         if remaining <= 0:
             batch.budget_exhausted = True

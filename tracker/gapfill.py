@@ -438,9 +438,29 @@ def fill(
 
     `gaps` defaults to every `FILLABLE_FIELDS` column that is empty on the row.
     Passing it narrows the run — `enrich` knows which fields it cares about.
+    `question`, `investigate` and `conclude` in a row, which is what `fill_rows`
+    runs for many rows with the runs overlapping.
     """
-    from tracker import agent
+    asked = question(project, gaps)
+    if isinstance(asked, Filled):
+        return asked
+    result = investigate(
+        asked, extractor=extractor, db=session, allow_search=allow_search, on_step=on_step
+    )
+    return conclude(session, project, asked, result)
 
+
+@dataclass(frozen=True)
+class Question:
+    """One row's question as plain values: which fields, and the agent's task."""
+
+    project_id: int
+    wanted: tuple[str, ...]
+    task: str
+
+
+def question(project: Any, gaps: list[str] | None = None) -> Question | Filled:
+    """The question for one row, or the `Filled` that needs no question."""
     # `gaps is not None`, not `if gaps`: an empty list is a caller saying "this row
     # needs nothing", and falling through to auto-detection there spends a call it
     # was explicitly told not to.
@@ -452,9 +472,6 @@ def fill(
     if not wanted:
         return Filled(verdict="nothing", note="no fillable field is empty on this row")
 
-    tools = agent.evidence_toolkit(session, allow_search=allow_search)
-    tools += [record_facts_tool(sorted(wanted)), nothing_found_tool()]
-
     where = ", ".join(p for p in (project.city, project.county, project.state) if p)
     task = (
         f"Project #{project.id}: {project.name} — {project.company}\n"
@@ -464,8 +481,25 @@ def fill(
         "Find what you can. Reporting nothing for a field nobody has published is "
         "correct; reporting a figure you cannot quote is not."
     )
+    return Question(project.id, tuple(sorted(wanted)), task)
 
-    result = agent.run(task, tools=tools, extractor=extractor, system=SYSTEM, on_step=on_step)
+
+def investigate(
+    asked: Question, *, extractor: Any, db: Any, allow_search: bool = True, on_step: Any = None
+) -> Any:
+    """The agent run for one row. Writes nothing; `db` is what its evidence tools read."""
+    from tracker import agent
+
+    tools = agent.evidence_toolkit(db, allow_search=allow_search)
+    tools += [record_facts_tool(list(asked.wanted)), nothing_found_tool()]
+    return agent.run(asked.task, tools=tools, extractor=extractor, system=SYSTEM, on_step=on_step)
+
+
+def conclude(session: Any, project: Any, asked: Question, result: Any) -> Filled:
+    """Store what the run found, under the evidence gate. Main thread."""
+    from tracker import agent
+
+    wanted = set(asked.wanted)
     out = Filled(
         verdict="error",
         note=result.note,
@@ -515,13 +549,156 @@ def fill(
     return out
 
 
+#: What one row of the agent pass typically costs. Used only to decide whether the
+#: NEXT row fits in what is left of a token budget, before any run has measured a
+#: real figure. See `README.md` for where the number comes from.
+TYPICAL_ROW_TOKENS = 77_000
+
+
+@dataclass
+class Row:
+    """One row of the agent pass, for the report."""
+
+    project_id: int
+    name: str
+    #: The fields it was asked about; empty when it was asked nothing.
+    asked: tuple[str, ...] = ()
+    filled: Filled | None = None
+    #: Fields filled on the row now — what reached it, not what was "stored".
+    landed: tuple[str, ...] = ()
+    #: Fields found again but struck by an earlier ruling, so not stored.
+    unlanded: tuple[str, ...] = ()
+    error: str = ""
+
+
+def fill_rows(
+    session: Any,
+    project_ids: list[int],
+    *,
+    extractor: Any,
+    only_fields: tuple[str, ...] | None = None,
+    token_budget: int = 0,
+    max_attempts: int = 2,
+    t2_only: bool = False,
+    workers: int = 1,
+    on_each: Any = None,
+) -> Any:
+    """The agent pass over many rows, through `judged.run`. Returns its `Run` of `Row`.
+
+    Which fields each row is asked about: empty, wanted (`only_fields`, and with
+    `t2_only` only the gaps that hold it below T2), and not already asked about to
+    exhaustion (`tracker.attempts`). A row with nothing left to ask costs nothing.
+
+    Each row is committed as it is concluded — the facts it stored, and the attempt
+    note for the fields it looked for and did not find, which is the whole saving
+    and must not be rolled back. A run that errored or answered unusably is rolled
+    back: it says something about the call, not about whether anybody published the
+    figure. It is not held back for the night the way the other passes' failures
+    are — `model_decline` has no kind for this pass, and adding one is a migration —
+    so the next round asks it again.
+
+    `token_budget` stops the pass between rows, never mid-row: aborting a run in
+    flight would spend the tokens and store nothing. With several workers a wave
+    starts only as many rows as the budget still has room for, at what a row has
+    cost so far.
+    """
+    from tracker import attempts as attempts_mod
+    from tracker import judged
+    from tracker.models import Project
+
+    spent = {"tokens": 0, "called": 0}
+
+    def askable(project: Any) -> list[str]:
+        empty = {f for f in FILLABLE_FIELDS if getattr(project, f, None) is None}
+        if only_fields is not None:
+            empty &= set(only_fields)
+        if t2_only:
+            from tracker.ingest.enrich import t2_gaps
+
+            empty &= t2_gaps(project)
+        return sorted(empty - attempts_mod.exhausted(project, max_attempts=max_attempts))
+
+    def prepare(project_id: int) -> Any:
+        project = session.get(Project, project_id)
+        if project is None:
+            return judged.Done(result=None)
+        wanted = askable(project)
+        if not wanted:
+            return judged.Done(Row(project.id, project.name))
+        asked = question(project, wanted)
+        return asked if isinstance(asked, Question) else judged.Done(Row(project.id, project.name))
+
+    def ask(asked: Question, db: Any) -> Any:
+        return investigate(asked, extractor=extractor, db=db)
+
+    def settle(project_id: int, asked: Question, result: Any) -> Any:
+        project = session.get(Project, project_id)
+        out = conclude(session, project, asked, result)
+        spent["tokens"] += out.prompt_tokens + out.completion_tokens
+        spent["called"] += 1
+        # A fact can be "stored" and still not reach the row: attached to a citation
+        # whose claim about that field an earlier ruling struck, it stays struck.
+        # COL4 re-found the same ruled-out $150M on two nights running and reported
+        # it as gained both times. What counts is whether the field is filled now.
+        landed = tuple(f for f in asked.wanted if getattr(project, f, None) is not None)
+        unlanded = tuple(f for f in asked.wanted if f not in landed and f not in out.missed)
+        row = Row(project.id, project.name, asked.wanted, out, landed, unlanded)
+        # Only a run that reached an answer is evidence about the field. A fact that
+        # did not land is an answer that changed nothing, and is recorded the same
+        # way, so the next night does not pay to re-find it.
+        if out.verdict in {"filled", "nothing"}:
+            if out.missed or unlanded:
+                attempts_mod.record(project, [*out.missed, *unlanded])
+        else:
+            session.rollback()
+        return judged.Done(row)
+
+    def failed(project_id: int, error: BaseException) -> Row:
+        project = session.get(Project, project_id)
+        return Row(project_id, project.name if project is not None else "", error=str(error))
+
+    def room() -> int | None:
+        if not token_budget:
+            return None
+        # `expected` is what a row has actually cost this run; the constant only
+        # stands in until a row has been measured.
+        expected = spent["tokens"] // spent["called"] if spent["called"] else TYPICAL_ROW_TOKENS
+        return max(0, (token_budget - spent["tokens"]) // max(1, expected))
+
+    return judged.run(
+        session,
+        project_ids,
+        kind=None,
+        subject=str,
+        fingerprint=str,
+        projects=lambda project_id: [project_id],
+        prepare=prepare,
+        ask=ask,
+        apply=settle,
+        failed=failed,
+        workers=workers,
+        reads_db=True,
+        stage="agent",
+        room=room,
+        on_each=on_each,
+        label="gapfill",
+    )
+
+
 __all__ = [
     "FILLABLE_FIELDS",
     "MIN_QUOTE_CHARS",
     "SYSTEM",
+    "TYPICAL_ROW_TOKENS",
     "Filled",
+    "Question",
+    "Row",
     "apply_facts",
+    "conclude",
     "fill",
+    "fill_rows",
+    "investigate",
     "nothing_found_tool",
+    "question",
     "record_facts_tool",
 ]
