@@ -46,8 +46,9 @@ READ: Final = ("ok", "no_project", "thin_content")
 FAILED: Final = ("fetch_error", "parse_error", "llm_error")
 
 #: What a queued article taken out of the queue unread ends as: another copy of a
-#: story already read or queued, a page on a publisher closed to us, a headline with
-#: no article behind it, a page not in English. Each carries its reason in `error`.
+#: story already read or queued, a page on a publisher closed to us or refusing every
+#: read, a headline with no article behind it, a page not in English. Each carries its
+#: reason in `error`.
 SET_ASIDE: Final = "skipped"
 
 
@@ -99,7 +100,8 @@ class Desk:
             out.append(
                 f"    {read:,} read; {failed:,} failed — the page would not load, or rarely "
                 f"the model's reply was unusable; {aside:,} set aside unread — a second "
-                "copy of a story, a publisher closed to us, a headline with no article"
+                "copy of a story, a publisher closed to us or refusing every read, a "
+                "headline with no article"
             )
         if self.delays:
             ordered = sorted(self.delays)

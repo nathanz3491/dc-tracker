@@ -476,7 +476,11 @@ def queue_duplicates(
     engine = _writable("queue duplicates") if drop else _read_engine()
     with session_scope(engine, commit=drop) as session:
         reopened = disc.reopened_names(session)
-        unreadable = disc.unreadable_test(article_cache("articles"), reopened=reopened)
+        unreadable = disc.unreadable_test(
+            article_cache("articles"),
+            reopened=reopened,
+            refusing=disc.refusing_publishers(session, reopened=reopened),
+        )
         found, back = disc.drop_same_story(session, unreadable, apply=drop)
         pairs = [(row.url, kept) for row, kept in found]
 
@@ -733,13 +737,17 @@ def queue_unreadable(
     ] = False,
     limit: Annotated[int, typer.Option("--limit", help="Examples to print.")] = 10,
 ) -> None:
-    """Queued pages on publishers marked closed in `seed/feeds.toml`, with nothing cached.
+    """Queued pages no fetch will read, with nothing cached: on publishers marked closed
+    in `seed/feeds.toml`, or learned as refusing every read.
 
-    No fetch will read them: those publishers refuse every client this project is
-    willing to be. `ingest crawl --from-queue` and `sync` discard them before reading
-    the queue anyway; this does it on demand and shows what goes. Discarded is
-    `skipped` with a reason that marks it, not deleted: when a publisher's weekly
-    check answers again, its pages are put back.
+    A closed publisher refuses every client this project is willing to be. A refusing
+    one has refused the last `discover.REFUSING_AFTER` pages asked of it, on at least
+    `discover.REFUSING_DAYS` days, after every rung of the fetch ladder, with none read
+    since; they are listed with that record. `ingest crawl --from-queue` and `sync`
+    discard such pages before reading the queue anyway; this does it on demand and
+    shows what goes. Discarded is `skipped` with a reason that marks it, not deleted:
+    when a closed publisher's weekly check answers again, or a page of a refusing one is
+    read, its pages are put back.
     """
     from collections import Counter
 
@@ -749,13 +757,51 @@ def queue_unreadable(
     engine = _writable("queue unreadable") if drop else _read_engine()
     with session_scope(engine, commit=drop) as session:
         reopened = disc.reopened_names(session)
-        unreadable = disc.unreadable_test(article_cache("articles"), reopened=reopened)
+        refusing = disc.refusing_publishers(session, reopened=reopened)
+        unreadable = disc.unreadable_test(
+            article_cache("articles"), reopened=reopened, refusing=refusing
+        )
         found = [row.url for row in disc.pending(session) if unreadable(row.url)]
-        removed = disc.discard_unreadable(session, unreadable) if drop else 0
+        removed = disc.discard_unreadable(session, unreadable, refusing=refusing) if drop else 0
+    queued = Counter(disc.publisher_of(url) for url in found)
+    ranked = sorted(refusing.values(), key=lambda r: (-r.pages, r.host))
 
     if json_mode():
-        emit({"unreadable": found, "discarded": removed})
+        emit(
+            {
+                "unreadable": found,
+                "discarded": removed,
+                "refusing": [
+                    {
+                        "host": r.host,
+                        "refused_in_a_row": r.pages,
+                        "days": r.days,
+                        "last_tried": r.last_tried.isoformat(),
+                        "queued": queued.get(r.host, 0),
+                    }
+                    for r in ranked
+                ],
+            }
+        )
         return
+    if ranked:
+        console.print(
+            f"[yellow]{len(ranked)}[/yellow] publisher(s) refused every read lately: the "
+            f"last {disc.REFUSING_AFTER} or more of their pages, on {disc.REFUSING_DAYS} or "
+            "more days, with none read since\n"
+        )
+        console.print(f"  {'refused':>7}  {'days':>4}  {'queued':>6}  last tried  host")
+        for r in ranked[: max(limit, 20)]:
+            console.print(
+                f"  {r.pages:>7}  {r.days:>4}  {queued.get(r.host, 0):>6}  "
+                f"{r.last_tried:%Y-%m-%d}  {escape(r.host)}"
+            )
+        if len(ranked) > max(limit, 20):
+            console.print(f"  [dim]…and {len(ranked) - max(limit, 20)} more[/dim]")
+        console.print(
+            "\n[dim]one page of each is read once a week; a page read by any rung puts "
+            "the rest back[/dim]\n"
+        )
     if not found:
         console.print("[green]nothing queued is unreadable[/green]")
         return

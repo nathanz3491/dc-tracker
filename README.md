@@ -233,7 +233,12 @@ The first round also reads the news and adds campuses (`--discover`, default 900
 polls the feeds, which costs nothing, and reads that many queued articles through
 the crawl's identity check (`ingest crawl --from-queue --new-first`). A model reads
 their headlines first and sets aside the pages about a place abroad (`--no-screen` to
-skip it): measured on past reads, the one kind that loses next to no campus. Everything
+skip it): measured on past reads, the one kind that loses next to no campus. Pages on a
+publisher that has refused every read lately — its last four pages tried, on two days or
+more, after every rung of the fetch ladder, with none read since — are set aside unread
+too, about one read in seven on the nights to 10-28; once a week one of its pages is read
+first, so a publisher that relents, or that DeepSeek's fetch can read once its account
+has a balance, comes back with its pages ([how](docs/workflows/sync.md#a-publisher-that-refuses-every-read-is-learned-not-listed)). Everything
 published within the email's two-month window goes first, newest first, so what the
 email reports is days old rather than weeks; then articles naming no tracked campus.
 Enrich reads for one row and creates none, so without this step nothing in the loop
@@ -458,7 +463,10 @@ account needs a balance; model calls never spend it, since every one goes to Ope
 Go (`TRACKER_RESERVE_WHEN=always`). With no balance, the first refusal stands the rung
 down for the run. Each page is a line in the night's
 spend ledger, apart from the model's money, and the morning report prices the pages
-beside it.
+beside it. A publisher every rung has refused lately is learned and its pages set aside
+(`tracker queue unreadable` lists them); one of its pages is read once a week through
+the whole ladder, so within about a week of the account being topped up, every such
+publisher the fetch can read is back with its queued pages.
 
 Nothing here defeats an access control, and the distinction is the whole
 justification: those sites' `robots.txt` files permit crawling —

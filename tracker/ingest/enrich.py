@@ -751,7 +751,12 @@ def run(
     picks one with a reason or refuses. `skip_settle` turns it off.
     """
     from tracker.ingest import crawl
-    from tracker.ingest.discover import readable_first, unreadable_test
+    from tracker.ingest.discover import (
+        readable_first,
+        refusing_publishers,
+        reopened_names,
+        unreadable_test,
+    )
 
     settings = settings or get_settings()
     project = session.get(Project, project_id)
@@ -780,7 +785,10 @@ def run(
     assert project is not None
 
     tried: set[str] = project_urls(session, project_id)
-    unreadable = unreadable_test(cache_dir)
+    reopened = reopened_names(session)
+    unreadable = unreadable_test(
+        cache_dir, reopened=reopened, refusing=refusing_publishers(session, reopened=reopened)
+    )
     #: Every query this run has sent, with its hits. See `harvest_search`.
     searched: dict[str, list] = {}
     spent = 0
@@ -861,9 +869,9 @@ def run(
             break
 
         room = max_articles if budget is None else min(max_articles, budget - spent)
-        # A page on a publisher closed to us, with no body cached, goes after every
-        # page that can be read: a fetch that fails still spends the budget, which
-        # is this row's share of the night's.
+        # A page on a publisher closed to us or refusing every read, with no body
+        # cached, goes after every page that can be read: a fetch that fails still
+        # spends the budget, which is this row's share of the night's.
         batch = readable_first(fresh, unreadable)[:room]
         spent += len(batch)
         tried.update(batch)

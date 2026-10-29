@@ -609,7 +609,15 @@ def _screened(hits: list[Any], query: Query, *, now: dt.datetime):
     refused every read. The watch had queued 125 such pages by 2026-10-19 -- 45
     stock-chatter pages, 34 PDFs, 16 ZIP-code pages, 15 on sites that refuse every
     read -- and of the 42 tried, one produced a citation. The queue sets the waiting
-    ones aside (`discover.set_aside_not_news`); these are never queued at all."""
+    ones aside (`discover.set_aside_not_news`); these are never queued at all.
+
+    **A page on a publisher learned as refusing every read is still queued**
+    (`discover.refusing_publishers`). The watch's finds are most of a night's failed
+    reads -- 365 of the 400 on 2026-10-27 -- but what wastes a slot is reading one, and
+    the crawl sets a refusing publisher's pages aside before it reads
+    (`discover.discard_unreadable`). A result dropped here is gone for good, since the
+    next search starts where this one ended; one queued and set aside comes back when
+    its publisher is read again."""
     from tracker.ingest import screen
     from tracker.ingest.discover import _news_date
     from tracker.ingest.search import is_useful_host

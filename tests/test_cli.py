@@ -722,6 +722,73 @@ def test_crawl_from_queue_needs_a_key_and_says_so(initialized: Path):
     )
 
 
+def test_crawl_from_queue_sets_aside_a_refusing_publisher_but_checks_one_page(
+    initialized: Path, monkeypatch
+):
+    """A publisher whose last pages were all refused, on two days, has its queued pages
+    set aside before the limit is cut -- except one, read first once a week: how one
+    that relents, or that DeepSeek's fetch can read again, is noticed."""
+    from sqlalchemy import select
+
+    from tracker.db import init_db, session_scope
+    from tracker.ingest import crawl, discover
+    from tracker.ingest.records import IngestReport
+    from tracker.models import IngestUrl, utcnow
+
+    engine, _ = init_db(initialized)
+    long_ago = utcnow() - dt.timedelta(days=10)
+    with session_scope(engine) as session:
+        for n in range(4):
+            when = long_ago + dt.timedelta(days=n // 2, minutes=n)
+            session.add(
+                IngestUrl(
+                    url=f"https://refuses.test/old/{n}/",
+                    run_id="r",
+                    status="fetch_error",
+                    http_status=403,
+                    via="httpx",
+                    error="HTTP 403",
+                    attempts=1,
+                    first_seen_at=when,
+                    last_tried_at=when,
+                )
+            )
+        for url in (
+            "https://refuses.test/2026/10/older/",
+            "https://refuses.test/2026/10/newer/",
+            "https://reads.test/2026/10/story/",
+        ):
+            session.add(
+                IngestUrl(
+                    url=url,
+                    run_id="w",
+                    status="discovered",
+                    title="A 900MW data center campus",
+                    feed="watch:#1",
+                    attempts=0,
+                )
+            )
+    asked: list[list[str]] = []
+
+    def fake_run(session, urls, **_kw):
+        asked.append(list(urls))
+        return IngestReport()
+
+    monkeypatch.setattr(crawl, "run", fake_run)
+    set_key(monkeypatch)
+    result = invoke(initialized, "ingest", "crawl", "--from-queue", "--limit", "10")
+
+    assert result.exit_code == 0, result.output
+    assert asked == [["https://refuses.test/2026/10/newer/", "https://reads.test/2026/10/story/"]]
+    assert "1 publisher(s) refused every read lately" in result.output
+    assert "weekly check" in result.output
+    with session_scope(engine, commit=False) as session:
+        older = session.scalar(
+            select(IngestUrl).where(IngestUrl.url == "https://refuses.test/2026/10/older/")
+        )
+        assert (older.status, older.error) == ("skipped", discover.DISCARDED_REFUSING)
+
+
 def test_discover_reports_a_broken_feed_config(initialized: Path, tmp_path: Path):
     bad = tmp_path / "feeds.toml"
     bad.write_text('[[feed]]\nurl = "https://a.test/rss"\n', encoding="utf-8")

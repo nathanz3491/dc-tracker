@@ -333,12 +333,16 @@ def test_an_unreadable_page_leaves_the_queue_and_returns_when_its_publisher_does
     assert status[cached] == status[readable] == PENDING_URL_STATUS
     assert blocked not in {row.url for row in discover.pending(session)}
 
-    assert discover.requeue_reopened(session, frozenset(), path=config) == 0
-    assert discover.requeue_reopened(session, frozenset({"refused"}), path=config) == 0, (
-        "its archive is still closed"
-    )
+    assert discover.requeue_reopened(session, unreadable) == 0
+    feed_only = discover.unreadable_test(cache, path=config, reopened=frozenset({"refused"}))
+    assert discover.requeue_reopened(session, feed_only) == 0, "its archive is still closed"
     reopened = frozenset({"refused", "refused-archive"})
-    assert discover.requeue_reopened(session, reopened, path=config) == 1
+    assert (
+        discover.requeue_reopened(
+            session, discover.unreadable_test(cache, path=config, reopened=reopened)
+        )
+        == 1
+    )
     status = {row.url: row.status for row in session.scalars(select(IngestUrl))}
     assert status[blocked] == PENDING_URL_STATUS
     assert status[other] == "skipped", "skipped for another reason, so it stays skipped"
@@ -461,6 +465,354 @@ def test_priority_publishers_still_lead_among_the_readable_pages(tmp_path: Path)
 def test_readable_first_without_a_test_changes_nothing():
     urls = ["https://refused.test/1", "https://a.test/2"]
     assert discover.readable_first(urls, None) == urls
+
+
+# --- Publishers that refuse every read ----------------------------------------------
+#
+# On 2026-10-27 a third of the night's reads failed to load, most on publishers no file
+# marks closed: bizjournals.com alone refused 63. They are learned from the last answer
+# each page gave, after the whole fetch ladder; set aside like a closed publisher's; and
+# checked once a week with one of their pages, so one that relents comes back.
+
+DAY = dt.timedelta(days=1)
+T0 = dt.datetime(2026, 10, 20, 10, 30)
+
+
+def _answered(
+    session,
+    url: str,
+    *,
+    at: dt.datetime,
+    status: str = "fetch_error",
+    http_status: int | None = 403,
+    via: str | None = "httpx",
+    error: str | None = None,
+) -> IngestUrl:
+    """A page whose last try ended `status` at `at`; a 403 by default."""
+    if error is None and status == "fetch_error" and http_status is not None:
+        error = f"HTTP {http_status}"
+    row = IngestUrl(
+        url=url,
+        run_id="r",
+        status=status,
+        http_status=http_status,
+        via=via,
+        error=error,
+        attempts=1,
+        failures=0,
+        first_seen_at=at,
+        last_tried_at=at,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _refused(session, host: str, *, days: int, per_day: int = 2, start: dt.datetime = T0) -> None:
+    """`per_day` pages of `host` refused on each of `days` days in a row."""
+    for day in range(days):
+        for n in range(per_day):
+            when = start + day * DAY + n * dt.timedelta(minutes=1)
+            _answered(session, f"https://{host}/day{day}/page{n}/", at=when)
+
+
+def _queue_on(session, *urls: str) -> None:
+    queue_candidates(
+        session,
+        [Candidate(url, "A 100MW data center campus", "watch:#1") for url in urls],
+        run_id="w",
+        report=DiscoverReport(),
+    )
+
+
+def test_four_pages_refused_on_two_days_make_a_refusing_publisher(session):
+    """Four pages in a row, on two days: the rule measured to spare the most failed
+    reads for the fewest that would have read."""
+    _refused(session, "www.refuses.test", days=2)
+    _refused(session, "three.test", days=1, per_day=2)
+    _answered(session, "https://three.test/next-day/", at=T0 + DAY)
+    _refused(session, "one-evening.test", days=1, per_day=6)
+
+    refusing = discover.refusing_publishers(session)
+
+    assert set(refusing) == {"refuses.test"}, "three pages, or one bad evening, are not enough"
+    entry = refusing["refuses.test"]
+    assert (entry.pages, entry.days) == (4, 2)
+    assert entry.last_tried == T0 + DAY + dt.timedelta(minutes=1)
+
+
+@pytest.mark.parametrize("rung", ["httpx", "curl_cffi", "playwright", "deepseek-fetch"])
+def test_a_page_read_by_any_rung_clears_its_publisher(session, rung):
+    """A publisher some rung can read is never learned as refusing, however many of its
+    pages were refused before: DeepSeek's fetch, topped up, reads where the others are
+    refused."""
+    _refused(session, "refuses.test", days=3)
+    _answered(
+        session,
+        "https://refuses.test/read/",
+        at=T0 + 3 * DAY,
+        status="ok",
+        http_status=200,
+        via=rung,
+    )
+    assert discover.refusing_publishers(session) == {}
+
+
+def test_a_read_before_the_refusals_does_not_clear_them(session):
+    _answered(session, "https://refuses.test/old/", at=T0 - DAY, status="no_project", via="httpx")
+    _refused(session, "refuses.test", days=2)
+    assert set(discover.refusing_publishers(session)) == {"refuses.test"}
+
+
+def test_a_page_too_thin_or_failed_at_the_model_was_still_read(session):
+    """The fetch answered: a rung can read the publisher."""
+    for status in ("thin_content", "parse_error"):
+        host = f"{status}.test"
+        _refused(session, host, days=2)
+        _answered(session, f"https://{host}/read/", at=T0 + 2 * DAY, status=status, http_status=200)
+    assert discover.refusing_publishers(session) == {}
+
+
+def test_a_cached_read_is_not_a_read_and_a_lost_page_is_not_a_refusal(session):
+    """A page served from the cache asked the publisher nothing; a 404, a PDF or a
+    timeout is about one page or one evening, not the publisher."""
+    _refused(session, "refuses.test", days=2)
+    _answered(session, "https://refuses.test/cached/", at=T0 + 2 * DAY, status="ok", via="cache")
+    _answered(session, "https://refuses.test/gone/", at=T0 + 2 * DAY, http_status=404)
+    assert discover.refusing_publishers(session)["refuses.test"].pages == 4
+
+    _answered(session, "https://lossy.test/a/", at=T0, http_status=404)
+    _answered(session, "https://lossy.test/b/", at=T0, http_status=None, error="timed out")
+    _answered(
+        session,
+        "https://lossy.test/c/",
+        at=T0 + DAY,
+        http_status=200,
+        error="a PDF, not a web page: no text is taken from one",
+    )
+    _answered(session, "https://lossy.test/d/", at=T0 + DAY, http_status=503)
+    assert "lossy.test" not in discover.refusing_publishers(session)
+
+
+def test_every_refusing_answer_counts(session):
+    """401, 402 (Gannett's papers), 403, 429 and 451, and robots.txt saying no or not
+    answering at all: every rung asks it first, so none can do better."""
+    from tracker import robots
+
+    _answered(session, "https://mixed.test/a/", at=T0, http_status=402)
+    _answered(session, "https://mixed.test/b/", at=T0, http_status=429)
+    _answered(
+        session,
+        "https://mixed.test/c/",
+        at=T0 + DAY,
+        http_status=None,
+        via="robots",
+        error=robots.UNREACHABLE,
+    )
+    _answered(
+        session,
+        "https://mixed.test/d/",
+        at=T0 + DAY,
+        http_status=None,
+        via="robots",
+        error=robots.REFUSED,
+    )
+    # The wording of "could not be read" has changed; the start has not.
+    _answered(
+        session,
+        "https://mixed.test/e/",
+        at=T0 + DAY,
+        http_status=None,
+        via="robots",
+        error="robots.txt could not be read (no answer, a timeout or a server error), so",
+    )
+    _answered(session, "https://mixed.test/f/", at=T0 + DAY, http_status=451)
+    _answered(session, "https://mixed.test/g/", at=T0 + DAY, http_status=401)
+    assert discover.refusing_publishers(session)["mixed.test"].pages == 7
+
+
+def test_a_failed_reread_of_a_page_read_before_counts_when_refused(session):
+    """A failed re-read keeps the good read's status and HTTP status
+    (`crawl.record_url`), so the refusal is in its error."""
+    _refused(session, "refuses.test", days=1, per_day=3)
+    _answered(
+        session,
+        "https://refuses.test/cited/",
+        at=T0 + DAY,
+        status="ok",
+        http_status=200,
+        via="curl_cffi",
+        error="HTTP 403",
+    )
+    assert discover.refusing_publishers(session)["refuses.test"].pages == 4
+
+
+def test_a_page_queued_again_and_set_aside_is_not_a_read(session):
+    """`watch.relist` queues a page read before, keeping its `via`, and the crawl may
+    then set it aside, which moves its time: nothing asked the publisher anything."""
+    _refused(session, "refuses.test", days=2)
+    _answered(
+        session,
+        "https://refuses.test/listing/",
+        at=T0 + 5 * DAY,
+        status="skipped",
+        http_status=200,
+        error=discover.DISCARDED_REFUSING,
+    )
+    entry = discover.refusing_publishers(session)["refuses.test"]
+    assert entry.last_tried == T0 + DAY + dt.timedelta(minutes=1), "not a try either"
+
+
+def test_a_closed_publisher_is_left_to_its_own_rule(session, tmp_path: Path):
+    """Its pages are already discarded, and its weekly check asks the feed."""
+    config = _closed_config(tmp_path)
+    _refused(session, "www.refused.test", days=2)
+    assert discover.refusing_publishers(session, path=config) == {}
+    reopened = frozenset({"refused", "refused-archive"})
+    assert set(discover.refusing_publishers(session, path=config, reopened=reopened)) == {
+        "refused.test"
+    }
+
+
+def test_a_publisher_is_its_host_not_its_registrable_domain(session):
+    """investors.ironmountain.com reads while ironmountain.com answers 429."""
+    _refused(session, "ironmountain.test", days=2)
+    _answered(session, "https://investors.ironmountain.test/release/", at=T0 + 3 * DAY, status="ok")
+    assert set(discover.refusing_publishers(session)) == {"ironmountain.test"}
+    assert discover.publisher_of("https://WWW.Ironmountain.test:443/x") == "ironmountain.test"
+
+
+def test_a_refusing_publishers_queued_pages_are_set_aside_but_a_cached_one_is_kept(
+    session, tmp_path: Path
+):
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    blocked = "https://refuses.test/2026/10/blocked/"
+    cached = "https://refuses.test/2026/10/cached/"
+    readable = "https://reads.test/2026/10/story/"
+    cache_path(cached, cache).write_text("a body cached before", encoding="utf-8")
+    _refused(session, "refuses.test", days=2)
+    _queue_on(session, blocked, cached, readable)
+
+    refusing = discover.refusing_publishers(session)
+    unreadable = discover.unreadable_test(cache, refusing=refusing)
+    assert discover.discard_unreadable(session, unreadable, refusing=refusing) == 1
+
+    rows = {row.url: row for row in session.scalars(select(IngestUrl))}
+    assert (rows[blocked].status, rows[blocked].error) == ("skipped", discover.DISCARDED_REFUSING)
+    assert rows[cached].status == rows[readable].status == PENDING_URL_STATUS, (
+        "a cached page is read from the cache"
+    )
+
+
+def test_a_refusing_publisher_comes_back_when_one_of_its_pages_is_read(session):
+    """The weekly check's page reads -- the publisher relented, or DeepSeek's fetch has a
+    balance again -- and the next time the queue is read its pages are back."""
+    _refused(session, "refuses.test", days=2)
+    _queue_on(session, "https://refuses.test/2026/10/a/", "https://refuses.test/2026/10/b/")
+    session.add(
+        IngestUrl(
+            url="https://refuses.test/2026/10/copy/",
+            run_id="r",
+            status="skipped",
+            error=f"{discover.SAME_STORY}https://reads.test/x",
+            attempts=0,
+        )
+    )
+    refusing = discover.refusing_publishers(session)
+    unreadable = discover.unreadable_test(None, refusing=refusing)
+    assert discover.discard_unreadable(session, unreadable, refusing=refusing) == 2
+    assert discover.requeue_reopened(session, unreadable) == 0, "still refusing"
+
+    _answered(
+        session,
+        "https://refuses.test/2026/10/check/",
+        at=T0 + 9 * DAY,
+        status="ok",
+        http_status=200,
+        via="deepseek-fetch",
+    )
+    refusing = discover.refusing_publishers(session)
+    assert refusing == {}
+    assert (
+        discover.requeue_reopened(session, discover.unreadable_test(None, refusing=refusing)) == 2
+    )
+    status = {row.url: row.status for row in session.scalars(select(IngestUrl))}
+    assert status["https://refuses.test/2026/10/a/"] == PENDING_URL_STATUS
+    assert status["https://refuses.test/2026/10/copy/"] == "skipped", "set aside for another reason"
+
+
+def test_the_weekly_check_puts_one_page_first(session, tmp_path: Path):
+    """The newest page with nothing cached, back in the queue and read before anything
+    else, through every rung: what notices a publisher that relents."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _refused(session, "refuses.test", days=2)
+    _queue_on(
+        session,
+        "https://refuses.test/2026/10/older/",
+        "https://refuses.test/2026/10/newer/",
+        "https://refuses.test/2026/10/report.pdf",
+        "https://refuses.test/2026/10/cached/",
+    )
+    cache_path("https://refuses.test/2026/10/cached/", cache).write_text("x", encoding="utf-8")
+    _queue_dated(session, ("https://reads.test/news/", dt.datetime(2026, 10, 27)))
+    refusing = discover.refusing_publishers(session)
+    unreadable = discover.unreadable_test(cache, refusing=refusing)
+    discover.discard_unreadable(session, unreadable, refusing=refusing)
+
+    soon = T0 + 3 * DAY
+    assert discover.probe_refusing(session, refusing, cache, now=soon) == [], "not due yet"
+    week = T0 + DAY + discover.PROBE_EVERY
+    probes = discover.probe_refusing(session, refusing, cache, now=week)
+
+    assert probes == ["https://refuses.test/2026/10/newer/"], "newest, uncached, not a PDF"
+    row = session.scalar(select(IngestUrl).where(IngestUrl.url == probes[0]))
+    assert (row.status, row.error) == (PENDING_URL_STATUS, None)
+    checking = discover.unreadable_test(cache, refusing=refusing, probing=frozenset(probes))
+    ordered = [r.url for r in pending(session, new_first=True, unreadable=checking, probes=probes)]
+    assert ordered[0] == probes[0], "a check that sat behind the limit would not be made"
+    assert set(ordered) == {
+        probes[0],
+        "https://refuses.test/2026/10/cached/",
+        "https://reads.test/news/",
+    }
+    assert [r.url for r in pending(session, limit=1, probes=probes)] == probes
+
+
+def test_the_weekly_check_is_due_by_the_calendar_day():
+    """A page refused at 10:48 is checked by the crawl that starts at 10:30 a week on."""
+    entry = discover.Refusing("refuses.test", 4, 2, dt.datetime(2026, 10, 21, 10, 48))
+    assert entry.due(dt.datetime(2026, 10, 28, 10, 30))
+    assert not entry.due(dt.datetime(2026, 10, 27, 23, 59))
+
+
+def test_a_refused_check_moves_the_clock_a_week(session):
+    _refused(session, "refuses.test", days=2)
+    later = T0 + 9 * DAY
+    _answered(session, "https://refuses.test/check/", at=later)
+    entry = discover.refusing_publishers(session)["refuses.test"]
+    assert entry.pages == 5
+    assert not entry.due(later + DAY)
+    assert entry.due(later + discover.PROBE_EVERY)
+
+
+def test_the_weekly_checks_are_capped_longest_unchecked_first(session):
+    """A small crawl is not all checks; the rest are due again the next run."""
+    _refused(session, "earlier.test", days=2, start=T0)
+    _refused(session, "later.test", days=2, start=T0 + DAY)
+    _refused(session, "nothing-queued.test", days=2, start=T0 - DAY)
+    _queue_on(session, "https://earlier.test/x/", "https://later.test/y/")
+    refusing = discover.refusing_publishers(session)
+    now = T0 + 30 * DAY
+
+    assert discover.probe_refusing(session, refusing, None, now=now, limit=1) == [
+        "https://earlier.test/x/"
+    ], "a publisher with nothing queued has nothing to check"
+    assert discover.probe_refusing(session, refusing, None, now=now) == [
+        "https://earlier.test/x/",
+        "https://later.test/y/",
+    ]
 
 
 # --- Parsing ----------------------------------------------------------------
@@ -1725,6 +2077,32 @@ def test_a_failed_search_leaves_the_headline_for_tomorrow(session, tmp_path: Pat
     )
     assert report.headlines_looked_up == 0
     assert session.scalar(select(IngestUrl).where(IngestUrl.feed == "dcd-headlines")) is None
+
+
+def test_a_headline_lead_on_a_refusing_publisher_is_passed_over(session, tmp_path: Path):
+    """The crawl would only set it aside; another copy of the story is queued instead."""
+    config = tmp_path / "feeds.toml"
+    config.write_text(_HEADLINE_CONFIG, encoding="utf-8")
+    _refused(session, "pennlive.test", days=2)
+    fetcher = FakeFeedFetcher({"https://news.example/rss?q=dcd": _GOOGLE_NEWS})
+    search = FakeSearch(
+        [
+            (
+                "https://www.pennlive.test/news/2026/10/aws-36-data-centers-homer-city.html",
+                "AWS files plans for 36 data center buildings at Homer City campus in Indiana County",
+                "Amazon Web Services plans a 36-building data center campus in Pennsylvania",
+            ),
+            (
+                "https://wjac.test/news/aws-homer-city-campus",
+                "AWS files plans for 36 data center buildings at Homer City campus, Indiana County",
+                "Amazon Web Services plans a 36-building data center campus in Pennsylvania",
+            ),
+        ]
+    )
+    _, queued = discover.run(
+        session, feeds_path=config, fetcher=fetcher, since_days=None, search_provider=search
+    )
+    assert [c.url for c in queued] == ["https://wjac.test/news/aws-homer-city-campus"]
 
 
 def test_a_headline_must_name_the_topic_or_a_capacity_and_not_be_a_survey():

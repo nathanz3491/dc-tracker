@@ -28,7 +28,7 @@ import logging
 import re
 import tomllib
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
@@ -1588,6 +1588,10 @@ def matches_known_project(
 # from one that would not: measured that day, six of the nightly crawl's next ten
 # slots, and all fifteen of a `tracker sync` extract, which reads `priority`
 # publishers first — and datacenterfrontier and datacenterdynamics are two.
+#
+# A publisher nobody marked closed can refuse every read all the same, and those are
+# learned from the crawl's own record rather than listed by hand: see "Publishers
+# that refuse every read" below. Both kinds are unreadable to the same test.
 
 T = TypeVar("T")
 
@@ -1622,19 +1626,29 @@ def unreadable_test(
     *,
     path: Path | None = None,
     reopened: frozenset[str] = frozenset(),
+    refusing: Collection[str] = (),
+    probing: Collection[str] = (),
 ) -> Callable[[str], bool]:
-    """A test for pages no fetch will read: on a closed publisher, nothing cached.
+    """A test for pages no fetch will read: on a closed publisher or one refusing every
+    read, with nothing cached.
 
     `cache_dir` is the cache the crawl will serve from. None means it will not
     serve from one — `--no-cache`, and the refresh phase, which re-reads on purpose
-    — and then every page on a closed publisher is unreadable.
+    — and then every page on such a publisher is unreadable.
+
+    `refusing` names the hosts learned as refusing every read
+    (:func:`refusing_publishers`), and `probing` the pages of theirs a weekly check
+    reads tonight (:func:`probe_refusing`), which count as readable.
     """
     from tracker.confidence import registrable_domain
 
     closed = closed_domains(path, reopened=reopened)
 
     def unreadable(url: str) -> bool:
-        if not closed or registrable_domain(url) not in closed:
+        if url in probing:
+            return False
+        on_closed = bool(closed) and registrable_domain(url) in closed
+        if not on_closed and (not refusing or publisher_of(url) not in refusing):
             return False
         return cache_dir is None or not cache_path(url, cache_dir).is_file()
 
@@ -1668,14 +1682,17 @@ def readable_first(
 DISCARDED_UNREADABLE: Final = "discarded: on a publisher closed to us, with nothing cached"
 
 
-def discard_unreadable(session: Session, unreadable: Callable[[str], bool]) -> int:
+def discard_unreadable(
+    session: Session, unreadable: Callable[[str], bool], *, refusing: Collection[str] = ()
+) -> int:
     """Take every queued page `unreadable` flags out of the queue. Returns how many.
 
     Sorting them last kept them from taking a crawl's slots, but not from sitting in
     the queue for good: 627 of 1,893 queued pages on 2026-10-14, every `tracker
     queue` count and every "held back" line inflated by pages nobody will read. They
     become `skipped` — terminal, never retried — with `DISCARDED_UNREADABLE` as the
-    reason, which is what lets `requeue_reopened` put them back if the block lifts.
+    reason, or `DISCARDED_REFUSING` for a page whose host is in `refusing`, which is
+    what lets `requeue_reopened` put them back if the block lifts.
     """
     rows = [
         row
@@ -1684,9 +1701,194 @@ def discard_unreadable(session: Session, unreadable: Callable[[str], bool]) -> i
     ]
     for row in rows:
         row.status = "skipped"
-        row.error = DISCARDED_UNREADABLE
+        row.error = (
+            DISCARDED_REFUSING
+            if refusing and publisher_of(row.url) in refusing
+            else DISCARDED_UNREADABLE
+        )
         row.last_tried_at = utcnow()
     return len(rows)
+
+
+# --- Publishers that refuse every read ---------------------------------------------
+#
+# A publisher can refuse every read without anybody marking it closed. On the night of
+# 2026-10-27 the crawl of the queue read 900 pages and 332 of them failed to load. Of
+# the 400 queued pages that failed that night, 289 answered HTTP 403 after every rung
+# of the fetch ladder had its turn, 44 answered 402, 28 found robots.txt unanswered and
+# 19 were told 429; bizjournals.com alone refused 63. Most were the news watch's finds,
+# which come from wherever a campus's news was published. Each was a read slot spent on
+# a page that could not be read.
+#
+# So those publishers are learned from what the crawl already records: `ingest_url`
+# holds the last answer each page gave, written once the ladder has had its turn
+# (`fetch.fetch_all` climbs it for a 403 or a page too thin to be an article, and
+# records a failure only when no rung read the page; `crawl.record_url` writes it). A
+# publisher learned this way is treated like one marked closed: its queued pages are
+# set aside unread unless a body is cached, and they come back the moment one of its
+# pages is read, by any rung.
+#
+# Nothing has to notice that by hand. Once a week each refusing publisher has one page
+# put through the night's crawl, first, through every rung (:func:`probe_refusing`).
+# One that relents, or that a rung can read again -- DeepSeek's fetch once its account
+# has a balance -- is read, which clears it, and :func:`requeue_reopened` puts its
+# pages back the next night.
+
+#: HTTP answers that refuse a page to this project rather than lose it: 401, 402
+#: (Gannett's papers -- the Canton Repository, the Columbus Dispatch, the Arizona
+#: Republic -- answer "payment required" to every client of ours), 403, 429 and 451.
+#: A 404 or a PDF says something about one page, and a timeout or a server error about
+#: one evening; those neither count against a publisher nor clear it.
+REFUSAL_STATUS: Final = frozenset({401, 402, 403, 429, 451})
+
+#: Pages in a row a publisher must refuse, with none of its pages read since, before
+#: its other pages stop being read; and the days those refusals must fall on, so that
+#: one bad evening -- a proxy down, a robots.txt that timed out -- is not a verdict.
+#:
+#: Measured on production's history to 2026-10-28 by replaying the ten nightly reads
+#: from 10-19, the rule learning night by night and a page a week checked: four pages
+#: on two days would have spared 629 of the 2,054 reads that failed (131 of 307 on
+#: 10-28) and held back 13 that would have read, 10 of which found a campus -- five on
+#: constructionreviewonline.com, which let pages through on one day between two weeks
+#: of 403s, four on newsfromthestates.com, which relented on 10-24. Three in a row
+#: spared 724 and held back 35; five spared 557 and held back 11. A page held back is
+#: not lost: it waits, set aside, for its publisher to be read again.
+REFUSING_AFTER: Final = 4
+REFUSING_DAYS: Final = 2
+
+#: The `error` a queued page carries once it is set aside for being on a publisher
+#: learned as refusing every read. A constant, like `DISCARDED_UNREADABLE`, because it
+#: is what `requeue_reopened` and `probe_refusing` look for.
+DISCARDED_REFUSING: Final = (
+    "discarded: on a publisher that refused every read lately, with nothing cached"
+)
+
+#: `ingest_url.status` of a page whose `last_tried_at` is a fetch: read and judged,
+#: refused as too thin, failed at the model, or failed to load. Not `discovered` or
+#: `skipped`: a page read once can be queued again (`watch.relist`) and then set aside,
+#: which moves its time without anybody asking the publisher for anything.
+_TRIED: Final = frozenset(
+    {"ok", "no_project", "thin_content", "parse_error", "llm_error", "fetch_error"}
+)
+
+#: A failed re-read of a page read before keeps the good read's status and `http_status`
+#: (`crawl.record_url`), so its refusal is read from the error, "HTTP 403".
+_HTTP_ERROR: Final = re.compile(r"^HTTP (\d{3})\b")
+
+
+def publisher_of(url: str) -> str:
+    """The site a page is on, as a refusing publisher is learned: its host, less `www.`.
+
+    A host and not the registrable domain `closed_domains` goes by, because the hosts
+    of one domain answer differently: investors.ironmountain.com reads while
+    ironmountain.com answers every page 429, and `registrable_domain` files every
+    Illinois town's site under il.us and every newsletter under substack.com.
+    """
+    return urlsplit(url).netloc.lower().split("@")[-1].split(":")[0].removeprefix("www.")
+
+
+def _refused(http_status: int | None, error: str | None) -> bool:
+    """Whether a failed fetch was refused rather than lost: a refusing HTTP answer, or
+    robots.txt saying no or not answering (which holds every rung back alike)."""
+    from tracker import robots
+
+    text = error or ""
+    if http_status is None and (match := _HTTP_ERROR.match(text)):
+        http_status = int(match.group(1))
+    # "could not be read" is matched by its start: the sentence after it has changed.
+    return http_status in REFUSAL_STATUS or text.startswith(
+        (robots.REFUSED, "robots.txt could not be read")
+    )
+
+
+def _what_it_said(
+    status: str, http_status: int | None, via: str | None, error: str | None
+) -> str | None:
+    """What a page's last try says about its publisher: "read", "refused", or None.
+
+    A page served from the cache asked the publisher nothing. A page read before whose
+    last re-read failed counts only if that re-read was refused: when it was read is
+    not recorded, so it cannot clear anything.
+    """
+    if via is None or via == "cache" or status not in _TRIED:
+        return None
+    if status == "fetch_error":
+        return "refused" if _refused(http_status, error) else None
+    if status in ("ok", "no_project") and error:
+        return "refused" if _refused(None, error) else None
+    return "read"
+
+
+@dataclass(frozen=True)
+class Refusing:
+    """A publisher learned as refusing every read, and what it was learned from."""
+
+    host: str
+    #: Its pages refused in a row since the last one read, each page counted once.
+    pages: int
+    #: The days those refusals fell on.
+    days: int
+    #: When one of its pages was last asked for, whatever came of it.
+    last_tried: dt.datetime
+
+    def due(self, now: dt.datetime) -> bool:
+        """Whether its weekly check is due: none of its pages asked for in `PROBE_EVERY`.
+
+        Counted in calendar days, so that a page refused at 10:48 one night is due when
+        the crawl starts at 10:30 a week later, rather than a day after that.
+        """
+        return now.date() - self.last_tried.date() >= PROBE_EVERY
+
+
+def refusing_publishers(
+    session: Session, *, path: Path | None = None, reopened: frozenset[str] = frozenset()
+) -> dict[str, Refusing]:
+    """Every host whose last `REFUSING_AFTER` pages tried were refused, on at least
+    `REFUSING_DAYS` days, with none of its pages read since. Keyed by host.
+
+    Read from each page's last answer in `ingest_url`, oldest first. A page read by
+    any rung -- the plain client, the browser-like one, the browser, DeepSeek's fetch --
+    clears its publisher, however many refusals came before, so a publisher some rung
+    can read is never on this list. A page answered from the cache is not a read, and a
+    404, a PDF or a timeout is neither a read nor a refusal.
+
+    A publisher marked closed in `seed/feeds.toml` is left to that rule (`reopened`
+    names the closed entries a weekly check found open, as for `closed_domains`).
+    """
+    from tracker.confidence import registrable_domain
+
+    closed = closed_domains(path, reopened=reopened)
+    streak: dict[str, list[dt.datetime]] = {}
+    tried: dict[str, dt.datetime] = {}
+    rows = session.execute(
+        select(
+            IngestUrl.url,
+            IngestUrl.status,
+            IngestUrl.http_status,
+            IngestUrl.via,
+            IngestUrl.error,
+            IngestUrl.last_tried_at,
+        )
+        .where(IngestUrl.via.is_not(None), IngestUrl.via != "cache", IngestUrl.status.in_(_TRIED))
+        .order_by(IngestUrl.last_tried_at.asc(), IngestUrl.id.asc())
+    )
+    for url, status, http_status, via, error, when in rows:
+        host = publisher_of(url)
+        tried[host] = when
+        answer = _what_it_said(status, http_status, via, error)
+        if answer == "read":
+            streak.pop(host, None)
+        elif answer == "refused":
+            streak.setdefault(host, []).append(when)
+    out: dict[str, Refusing] = {}
+    for host, refusals in streak.items():
+        days = len({when.date() for when in refusals})
+        if len(refusals) < REFUSING_AFTER or days < REFUSING_DAYS:
+            continue
+        if closed and registrable_domain(host) in closed:
+            continue
+        out[host] = Refusing(host, len(refusals), days, tried[host])
+    return out
 
 
 # --- One copy of a story ---------------------------------------------------------
@@ -1940,29 +2142,25 @@ def set_aside_not_news(
     return aside, restored
 
 
-def requeue_reopened(session: Session, reopened: frozenset[str], path: Path | None = None) -> int:
-    """Put back in the queue the discarded pages of every publisher found open again.
+def requeue_reopened(session: Session, unreadable: Callable[[str], bool]) -> int:
+    """Put back in the queue every discarded page that `unreadable` no longer flags.
 
-    The undo of :func:`discard_unreadable`, run where the queue is read, so a
-    publisher whose weekly check answers gets its backlog back without anybody
-    remembering it was there. Only pages discarded for being unreadable move; a page
-    skipped for any other reason stays skipped.
+    The undo of :func:`discard_unreadable`, by the same test, run where the queue is
+    read: a publisher whose weekly check answers, a refusing one that had a page read
+    since (:func:`refusing_publishers`), and a page whose body has been cached since all
+    get their pages back without anybody remembering they were there. Only pages
+    discarded for being unreadable move; a page skipped for any other reason stays
+    skipped. Returns how many came back.
     """
-    from tracker.confidence import registrable_domain
-
-    if not reopened:
-        return 0
-    opened = closed_domains(path) - closed_domains(path, reopened=reopened)
-    if not opened:
-        return 0
     rows = [
         row
         for row in session.scalars(
             select(IngestUrl).where(
-                IngestUrl.status == "skipped", IngestUrl.error == DISCARDED_UNREADABLE
+                IngestUrl.status == "skipped",
+                IngestUrl.error.in_((DISCARDED_UNREADABLE, DISCARDED_REFUSING)),
             )
         )
-        if registrable_domain(row.url) in opened
+        if not unreadable(row.url)
     ]
     for row in rows:
         row.status = PENDING_URL_STATUS
@@ -1978,6 +2176,7 @@ def pending(
     new_first: bool = False,
     spec: FilterSpec | None = None,
     unreadable: Callable[[str], bool] | None = None,
+    probes: Collection[str] = (),
 ) -> list[IngestUrl]:
     """Queued candidates.
 
@@ -2029,7 +2228,9 @@ def pending(
     **Before any of it, in every order, the results that decide a flag**
     (:func:`deciding`): the news watch's finds about a campus that is late by the
     record, which the console flags as a suspected delay until one of them says the
-    campus is running.
+    campus is running. **Then the weekly checks**, ``probes``: the one page each of
+    some refusing publishers that tonight's crawl reads to see whether it still refuses
+    (:func:`probe_refusing`). A check that sat behind the limit would not be made.
 
     ``unreadable`` (:func:`unreadable_test`) flags the pages no fetch will read,
     which then go after every other row, whichever order was asked for, before the
@@ -2121,10 +2322,13 @@ def pending(
                 len(risky),
             )
         ordered = risky + enriching + fresh
-    elif limit and unreadable is None:
+    elif limit and unreadable is None and not probes:
         ordered = list(session.scalars(stmt.limit(limit + len(first))))
     else:
         ordered = list(session.scalars(stmt))
+    if probes:
+        taken = {row.id for row in first}
+        first = first + [row for row in ordered if row.url in probes and row.id not in taken]
     if first:
         ahead = {row.id for row in first}
         ordered = first + [row for row in ordered if row.id not in ahead]
@@ -2687,6 +2891,66 @@ def probe_closed(
     return [record_probe(session, spec, by_url.get(spec.url), now=now) for spec in due]
 
 
+def probe_refusing(
+    session: Session,
+    refusing: Mapping[str, Refusing],
+    cache_dir: Path | None,
+    *,
+    now: dt.datetime | None = None,
+    limit: int | None = None,
+) -> list[str]:
+    """One page of each refusing publisher whose weekly check is due, back in the queue
+    for tonight's crawl to read first. Returns their addresses.
+
+    The check for a publisher learned from its reads (:func:`refusing_publishers`), as
+    :func:`probe_closed` is for one marked closed, and on the same clock: due once none
+    of its pages has been asked for in `PROBE_EVERY`. It reads a page and not a feed,
+    through the night's crawl and so through every rung of the ladder, because what is
+    in question is whether the crawl can read the publisher's pages -- and a publisher
+    learned this way usually has no feed here. A page read clears the publisher, and
+    :func:`requeue_reopened` brings back the rest the next time the queue is read; a
+    page refused moves its clock on a week. So a refusing publisher costs one read a
+    week, and comes back within a week of relenting, or of a rung that can read it
+    working again: DeepSeek's fetch, once its account has a balance.
+
+    The page is the publisher's most recently queued one, queued or set aside, with no
+    body cached -- a cached page is read from the cache and asks the publisher nothing --
+    and none of the forms no campus story is in (`screen.not_news`). A publisher with no
+    such page is not checked: there is nothing of it to read. `limit` caps the checks a
+    run makes, longest unchecked first, so that a small crawl is not all checks; the
+    rest are due again the next run.
+    """
+    from tracker.ingest import screen
+
+    now = now or utcnow()
+    wanted = {host for host, entry in refusing.items() if entry.due(now)}
+    if not wanted:
+        return []
+    found: dict[str, IngestUrl] = {}
+    for row in session.scalars(
+        select(IngestUrl)
+        .where(
+            or_(
+                IngestUrl.status == PENDING_URL_STATUS,
+                and_(IngestUrl.status == "skipped", IngestUrl.error == DISCARDED_REFUSING),
+            )
+        )
+        .order_by(IngestUrl.id.desc())
+    ):
+        host = publisher_of(row.url)
+        if host not in wanted or host in found or screen.not_news(row.url):
+            continue
+        if cache_dir is not None and cache_path(row.url, cache_dir).is_file():
+            continue
+        found[host] = row
+    chosen = sorted(found, key=lambda host: (refusing[host].last_tried, host))
+    if limit is not None:
+        chosen = chosen[:limit]
+    for host in chosen:
+        found[host].status, found[host].error = PENDING_URL_STATUS, None
+    return [found[host].url for host in chosen]
+
+
 def without_reopened(specs: list[T], reopened: frozenset[str]) -> list[T]:
     """`specs` with `closed` cleared on every entry a weekly check found open."""
     from dataclasses import replace
@@ -2967,6 +3231,7 @@ def follow_headlines(
     run_id: str,
     report: DiscoverReport,
     closed: frozenset[str],
+    refusing: Collection[str] = (),
     provider: Any = None,
     dry_run: bool = False,
 ) -> list[Candidate]:
@@ -2977,8 +3242,11 @@ def follow_headlines(
     crawl, which could not read it. Its search excludes every closed publisher,
     and a result has to share most of the headline's words to count as the same
     story — the operator's own release, the local paper, another trade outlet.
-    The leads are queued with the headline's publish date, so the nightly crawl's
-    news-first order treats them as the news they are.
+    A result on a host learned as refusing every read (`refusing`,
+    :func:`refusing_publishers`) is passed over too: the crawl would only set it
+    aside, and the story's two copies would be one or none. The leads are queued
+    with the headline's publish date, so the nightly crawl's news-first order
+    treats them as the news they are.
 
     A search that fails leaves the headline unrecorded, to be tried tomorrow.
     """
@@ -3021,6 +3289,7 @@ def follow_headlines(
             replace(c, published_at=headline.published_at)
             for c in found
             if registrable_domain(c.url) not in closed
+            and publisher_of(c.url) not in refusing
             and same_story(headline.title, c.title, snippets.get(c.url, ""))
             and not copies_headline(headline.title, c.title)
         ][:LEADS_PER_HEADLINE]
@@ -3180,6 +3449,7 @@ def run(
         run_id=run_id,
         report=report,
         closed=closed,
+        refusing=refusing_publishers(session, path=feeds_path, reopened=reopened),
         provider=search_provider,
         dry_run=dry_run,
     )
@@ -3335,6 +3605,7 @@ __all__ = [
     "CHALLENGE_NOTE",
     "COPY_MIN_WORDS",
     "DEAD_STATUS",
+    "DISCARDED_REFUSING",
     "DISCARDED_UNREADABLE",
     "DROPPED",
     "KNOWN",
@@ -3347,6 +3618,9 @@ __all__ = [
     "NEWSROOM_SURGE",
     "PROBE_EVERY",
     "QUEUED",
+    "REFUSAL_STATUS",
+    "REFUSING_AFTER",
+    "REFUSING_DAYS",
     "RETRYABLE_STATUSES",
     "SAME_STORY",
     "SAME_STORY_WORDS",
@@ -3363,6 +3637,7 @@ __all__ = [
     "ProjectIdentity",
     "PruneCandidate",
     "RecentWalkFetcher",
+    "Refusing",
     "RememberingFetcher",
     "SitemapSpec",
     "UrlVerdict",
@@ -3391,12 +3666,15 @@ __all__ = [
     "pending_risk_count",
     "pending_split",
     "probe_closed",
+    "probe_refusing",
     "project_identities",
+    "publisher_of",
     "queue_candidates",
     "readable_first",
     "record_probe",
     "record_seen",
     "refilter_pending",
+    "refusing_publishers",
     "rejudge",
     "reopened_names",
     "requeue_reopened",

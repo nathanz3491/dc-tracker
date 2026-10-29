@@ -12,6 +12,31 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The nightly read stops spending slots on publishers that refuse every read, and
+  notices when one stops refusing** (`tracker/ingest/discover.py`
+  `refusing_publishers`, `probe_refusing`, `publisher_of`, `REFUSING_AFTER`,
+  `REFUSING_DAYS`, `DISCARDED_REFUSING`, `requeue_reopened`; `tracker ingest crawl
+  --from-queue`, `tracker sync`, `tracker queue unreadable`, `tracker enrich`;
+  `docs/workflows/sync.md` and its diagram; `tests/test_discover.py`,
+  `tests/test_cli.py`). A third of each night's 900 reads failed to load — 332 on 10-27,
+  313 on 10-28 — mostly on publishers nobody had marked closed: bizjournals.com refused
+  63 in one night, and Reuters, Bloomberg, Axios, Business Wire and dozens of local
+  papers and stations answer every client of ours with 403, 402 or 429. The crawl now
+  learns them from its own record: a publisher (a host) whose last four pages tried were
+  all refused, on at least two days, after every rung of the fetch ladder, with none of
+  its pages read since. Its queued pages are set aside before the night's limit is cut —
+  a page with a cached copy is still read from it — and nothing is deleted. A page read
+  by any rung, DeepSeek's fetch included, clears the publisher and brings its pages back.
+  Once a week each refusing publisher has one page read first, so one that relents, or
+  that DeepSeek's fetch can read once its account has a balance, is back within a week.
+  Replayed over the ten nights to 10-28, the rule spares 629 of the 2,054 failed reads
+  (about 130 a night by the end, one read in seven) and holds back 13 reads that would
+  have worked, 10 of them finding a campus; those wait for their publisher's next good
+  read rather than being lost. On the 10-28 snapshot it marks 163 publishers and sets
+  aside 647 queued pages. The news watch still queues their finds, since a result it
+  drops is gone for good; a DCD or DCF headline's lead on one is passed over for another
+  copy of the story. `tracker queue unreadable` lists them with what each was learned
+  from.
 - **A model reads the queued headlines before the night pays to read the pages, and
   sets aside the ones about a place abroad — the one kind measured safe**
   (`tracker/ingest/headlines.py`; `tracker ingest crawl --from-queue --screen`;

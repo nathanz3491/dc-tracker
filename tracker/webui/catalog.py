@@ -89,7 +89,10 @@ DESTRUCTIVE: dict[str, str] = {
     "queue duplicates": "sets aside queued articles that are another copy of a story, with --drop.",
     "queue aside": "sets aside queued pages no campus story can be in, with --drop.",
     "queue screen": "sets aside queued pages whose headline a model rules out, with --drop.",
-    "queue unreadable": "takes queued pages on closed publishers out of the queue, with --drop.",
+    "queue unreadable": (
+        "takes queued pages on publishers that are closed or refuse every read out of the "
+        "queue, with --drop."
+    ),
 }
 
 #: Commands the console will not run at any cost, with the reason shown in the UI.

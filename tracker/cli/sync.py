@@ -735,14 +735,17 @@ def sync(
 
     # --- extract new --------------------------------------------------------
     step("extract new")
-    # A queued page on a publisher closed to us, with no body cached, leaves the
-    # queue before it is read — see `discover.discard_unreadable`, and
-    # `requeue_reopened` for the way back.
+    # A queued page on a publisher closed to us, or on one that has refused every
+    # read lately, with no body cached, leaves the queue before it is read — see
+    # `discover.discard_unreadable`, and `requeue_reopened` for the way back. The
+    # weekly check of a refusing publisher rides the nightly crawl
+    # (`ingest crawl --from-queue`), not this.
     with session_scope(engine, commit=not dry_run) as session:
         reopened = disc.reopened_names(session)
-        disc.requeue_reopened(session, reopened)
-        unreadable = disc.unreadable_test(cache_dir, reopened=reopened)
-        discarded = disc.discard_unreadable(session, unreadable)
+        refusing = disc.refusing_publishers(session, reopened=reopened)
+        unreadable = disc.unreadable_test(cache_dir, reopened=reopened, refusing=refusing)
+        disc.requeue_reopened(session, unreadable)
+        discarded = disc.discard_unreadable(session, unreadable, refusing=refusing)
         # A page no campus story can be in, then one copy of a story; see
         # `discover.set_aside_not_news` and `discover.drop_same_story`.
         disc.set_aside_not_news(session)
@@ -779,12 +782,10 @@ def sync(
         if prospect_urls:
             kept = prospect_urls + [url for url in kept if url not in set(prospect_urls)]
         # Last of all, after the priority ranks and prospect's jump: a page on a
-        # publisher closed to us, with no body cached, goes after every page that
-        # can be read. `priority` alone put such pages in all fifteen slots on
-        # 2026-10-02, because datacenterfrontier and datacenterdynamics rank there.
-        with session_scope(engine, commit=False) as session:
-            reopened = disc.reopened_names(session)
-        unreadable = disc.unreadable_test(cache_dir, reopened=reopened)
+        # publisher closed to us or refusing every read, with no body cached, goes
+        # after every page that can be read (the test made above). `priority` alone
+        # put such pages in all fifteen slots on 2026-10-02, because
+        # datacenterfrontier and datacenterdynamics rank there.
         kept = disc.readable_first(kept, unreadable)
         pending_urls = kept[:limit]
         deepening, _fresh = disc.pending_split(session)
@@ -819,7 +820,8 @@ def sync(
     if discarded:
         console.print(
             f"[dim]{discarded} candidate(s) {'would be' if dry_run else 'were'} discarded: "
-            "on publishers marked closed in seed/feeds.toml, with nothing cached[/dim]"
+            "on publishers marked closed in seed/feeds.toml or refusing every read, with "
+            "nothing cached[/dim]"
         )
 
     if not pending_urls:
@@ -867,13 +869,19 @@ def sync(
     else:
         step("refresh existing")
         with session_scope(engine, commit=False) as session:
-            # No cache here (see below), so every page on a closed publisher counts
-            # as unreadable and goes after the pages that can be re-read.
+            # No cache here (see below), so every page on a publisher closed to us or
+            # refusing every read counts as unreadable and goes after the pages that
+            # can be re-read.
+            reopened = disc.reopened_names(session)
             stale = crawl.stale_sources(
                 session,
                 older_than_days=refresh_days,
                 limit=refresh_limit,
-                unreadable=disc.unreadable_test(None, reopened=disc.reopened_names(session)),
+                unreadable=disc.unreadable_test(
+                    None,
+                    reopened=reopened,
+                    refusing=disc.refusing_publishers(session, reopened=reopened),
+                ),
             )
         if not stale:
             console.print(f"no source read more than {refresh_days} day(s) ago — all current")
@@ -1787,8 +1795,8 @@ def news_report(
 
     "found" is a read that changed something (`ok`). "failed" was tried and not read —
     the page would not load, or the model's reply was unusable — and "aside" left the
-    queue unread: a second copy of a story, a publisher closed to us, a headline with
-    no article. The delay is from publication to
+    queue unread: a second copy of a story, a publisher closed to us or refusing every
+    read, a headline with no article. The delay is from publication to
     the database, for what was read with a date. A line warns when no discovery ran,
     when a feed's newest entry is over 45 days old, when fresh news is still waiting
     in the queue, and when search credit will not last a fortnight at tonight's rate.

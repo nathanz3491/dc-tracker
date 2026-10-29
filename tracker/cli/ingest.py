@@ -293,18 +293,19 @@ def ingest_crawl(
     elif from_queue:
         from tracker.ingest import discover as disc
 
-        # A page on a publisher closed to us, with no body cached, is taken out of
-        # the queue: no fetch will read it, and sorted last it still sat there,
-        # 627 of 1,893 queued pages on 2026-10-14. A publisher a weekly check finds
-        # open again gets its discarded pages back first.
+        # A page on a publisher closed to us, or on one that has refused every read
+        # lately, with no body cached, is taken out of the queue: no fetch will read
+        # it, and sorted last it still sat there, 627 of 1,893 queued pages on
+        # 2026-10-14. A publisher found readable again -- by a weekly check, or by any
+        # of its pages being read -- gets its discarded pages back first.
+        cache = None if no_cache else article_cache("articles")
         with session_scope(engine, commit=False) as session:
             reopened = disc.reopened_names(session)
-        unreadable = disc.unreadable_test(
-            None if no_cache else article_cache("articles"), reopened=reopened
-        )
+            refusing = disc.refusing_publishers(session, reopened=reopened)
+        unreadable = disc.unreadable_test(cache, reopened=reopened, refusing=refusing)
         with session_scope(engine, commit=not dry_run) as session:
-            requeued = disc.requeue_reopened(session, reopened)
-            discarded = disc.discard_unreadable(session, unreadable)
+            requeued = disc.requeue_reopened(session, unreadable)
+            discarded = disc.discard_unreadable(session, unreadable, refusing=refusing)
             # A page no campus story can be in -- a PDF, a translated copy, a quote
             # page, a builder's post about Frankfurt -- is set aside first, so it is
             # never kept as the one copy of a story below.
@@ -312,6 +313,15 @@ def ingest_crawl(
             # One copy of a story is read: the others are set aside before the limit
             # is cut, and put back if the copy kept cannot be read.
             copies, back = disc.drop_same_story(session, unreadable)
+            # Once a week a refusing publisher has one page read first, through every
+            # rung: how one that relents, or that DeepSeek's fetch can read again once
+            # its account has a balance, is noticed. A tenth of the limit at most.
+            probes = disc.probe_refusing(
+                session, refusing, cache, limit=max(1, limit // 10) if limit else None
+            )
+        unreadable = disc.unreadable_test(
+            cache, reopened=reopened, refusing=refusing, probing=frozenset(probes)
+        )
         if not_news:
             from tracker.ingest import screen
 
@@ -339,13 +349,29 @@ def ingest_crawl(
         if requeued:
             console.print(
                 f"[dim]{requeued} discarded article(s) are back in the queue: their "
-                "publisher answered its weekly check[/dim]"
+                "publisher answered its weekly check, or had a page read[/dim]"
+            )
+        if refusing:
+            worst = sorted(refusing.values(), key=lambda r: (-r.pages, r.host))[:5]
+            console.print(
+                f"[dim]{len(refusing)} publisher(s) refused every read lately, the last "
+                f"{disc.REFUSING_AFTER} or more of their pages on {disc.REFUSING_DAYS} or "
+                "more days: "
+                + escape(", ".join(f"{r.host} ({r.pages})" for r in worst))
+                + (", …" if len(refusing) > len(worst) else "")
+                + " (`tracker queue unreadable` lists them)[/dim]"
             )
         if discarded:
             console.print(
                 f"[dim]{discarded} queued article(s) {'would be' if dry_run else 'were'} "
-                "discarded: on publishers marked closed in seed/feeds.toml, with nothing "
-                "cached[/dim]"
+                "discarded: on publishers marked closed in seed/feeds.toml or refusing "
+                "every read, with nothing cached[/dim]"
+            )
+        if probes:
+            console.print(
+                f"[dim]{len(probes)} weekly check(s): one page each of "
+                + escape(", ".join(sorted({disc.publisher_of(url) for url in probes})))
+                + " is read first, to see whether the publisher still refuses[/dim]"
             )
         with session_scope(engine, commit=screen_headlines and not dry_run) as session:
             queued = disc.pending(
@@ -353,6 +379,7 @@ def ingest_crawl(
                 limit=None if screen_headlines else limit,
                 new_first=new_first,
                 unreadable=unreadable,
+                probes=frozenset(probes),
             )
             if screen_headlines:
                 queued = _screen_headlines(session, queued, want=limit, apply=not dry_run)

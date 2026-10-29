@@ -182,7 +182,10 @@ already cited for the campus is read.
 Wall St, Seeking Alpha and the like; not stocktitan or investing.com's news, which
 read and cite), a job posting, a directory's ZIP-code page, a page on a site that has
 refused every read (datacenters.com, 0 of 192). By 10-19 the watch had queued 125
-such pages, and the 42 tried produced one citation. **Nor is local news about
+such pages, and the 42 tried produced one citation. A result on a publisher the crawl
+has [learned refuses every read](#a-publisher-that-refuses-every-read-is-learned-not-listed)
+is still queued, and set aside before it is read: dropped here, it would be gone for
+good. **Nor is local news about
 something else**: a result kept only because it names the campus is dropped when it
 reads as a game, an obituary, a killing or a restaurant and carries no data-center
 term (`screen.off_topic`). A campus's town and company were in a New Albany football
@@ -307,6 +310,78 @@ has held, delete the `closed` line. `tracker discover --probe-closed --dry-run`
 asks every one now. On 2026-10-07 all fourteen still answered with the challenge,
 from two networks and from a browser.
 
+## A publisher that refuses every read is learned, not listed
+
+Marking a publisher closed takes a person who has measured it. Most refusals come from
+publishers nobody has: on the night of 2026-10-27 the crawl of the queue read 900
+pages and 332 failed to load, and of the 400 queued pages that failed that night 289
+answered HTTP 403 after every rung of the fetch ladder had its turn, 44 answered 402,
+28 found robots.txt unanswered and 19 were told 429. bizjournals.com alone refused 63.
+365 of the 400 were the news watch's finds, which come from wherever a campus's news
+was published. Every one was a read slot spent on a page that could not be read.
+
+So the crawl now learns those publishers from what it already records
+(`discover.refusing_publishers`). `ingest_url` holds the last answer each page gave,
+written once the ladder has had its turn: `fetch.fetch_all` climbs it for a 403 or a
+page too thin to be an article, and records a failure only when no rung read the page.
+
+* **A publisher is refusing when the last four of its pages tried were all refused, on
+  at least two days, with none of its pages read since** (`REFUSING_AFTER`,
+  `REFUSING_DAYS`). Refused means HTTP 401, 402, 403, 429 or 451, or robots.txt saying
+  no or not answering, which holds every rung back alike (`REFUSAL_STATUS`). A 404, a
+  PDF, a timeout or a server error is about one page or one evening, and neither
+  counts nor clears. A page served from the cache asked the publisher nothing.
+* **A page read by any rung clears it** — the plain client, the browser-like one, the
+  browser, DeepSeek's fetch — however many refusals came before. So a publisher some
+  working rung can read is never on the list.
+* **A publisher is a host, not a domain** (`discover.publisher_of`):
+  investors.ironmountain.com reads while ironmountain.com answers every page 429, and
+  the registrable domain the closed rule goes by files every Illinois town's site under
+  il.us. A publisher marked closed in the file is left to that rule.
+* **Its queued pages are set aside unread, unless a body is cached**, exactly as for a
+  closed publisher, and come back the next time the queue is read once one of its pages
+  has been read (`discover.requeue_reopened` puts back every discarded page the same
+  test no longer flags). Nothing is deleted: a page held back waits.
+
+**Once a week each refusing publisher has one page read, first**
+(`discover.probe_refusing`): its most recently queued page with nothing cached, put
+back in the queue and read ahead of everything but a late campus's news, through
+every rung. It is due once none of its pages has been asked for in a week, counted in
+calendar days so that a page refused at 10:48 is checked by the crawl that starts at
+10:30 a week on. A page read clears the publisher; a page refused moves its clock a
+week. So a refusing publisher costs one read a week, and comes back within a week of
+relenting — or of a rung that can read it working again. That is what happens when the
+DeepSeek account has a balance again: its fetch is the one rung that gets past some of
+these 403s (one of four local-news pages in a trial on 10-19), though in the nightly
+loop every request it has made since 10-20 was answered 402, for an empty balance. Each
+publisher it can read comes back at its next check. The ladder climbs
+to DeepSeek only for a 403, a 503 or a shell of a page (`fetch.should_escalate`), so a
+publisher refusing with 402, 429, 451 or its robots.txt comes back only by relenting.
+To check one now, read one of its
+pages: `tracker ingest crawl --url <page>`. A run's checks are capped at a tenth of its
+`--limit`, longest unchecked first.
+
+**Measured** by replaying the ten nightly reads from 10-19 to 10-28 on production's
+history, the rule learning night by night and checking a page a week: four pages on
+two days would have spared 629 of the 2,054 reads that failed — 114, 137 and 131 on
+the last three nights, about one read in seven of a 900-read night — and held back 13
+that would have read, 10 of which found a campus. Nine of the 13 came from two
+publishers that relented between refusals: constructionreviewonline.com let five pages
+through on 10-21 between two weeks of 403s, and newsfromthestates.com read again from
+10-24. The other four were on nbc4i.com, ajc.com and archiwise.ai, which let a page
+through now and then. Three pages in a row spared 724 and held back 35, 19 of them on
+one host whose only refusals were robots.txt answers from before the fetchers' fixes of
+10-19 and 10-20; five spared 557 and held back 11. On the snapshot of 10-28, 163 hosts
+are refusing and 647 queued pages are on them; the first crawl sets those aside, less
+any whose body is cached.
+
+**The news watch still queues their results** (`watch._screened`). A result dropped
+there is gone for good, since the next search starts where this one ended; one queued
+and set aside costs nothing until it is read, and comes back when its publisher does.
+A DCD or DCF headline's lead on a refusing publisher is passed over for another copy of
+the story (`discover.follow_headlines`). `tracker queue unreadable` lists the refusing
+publishers with what they were learned from.
+
 ## Headlines from a publisher we cannot read
 
 **The headlines come from a news-search API since 2026-10-11.** They used to come
@@ -416,7 +491,10 @@ prioritising after would reorder a batch that was already chosen:
    (`discover.discard_unreadable`). That is not final: when the weekly check finds a
    publisher open again (feed and archive both), its discarded pages go back in the
    queue (`discover.requeue_reopened`), and a page skipped for any other reason
-   stays skipped.
+   stays skipped. **A publisher nobody marked closed is treated the same once it has
+   refused every read lately** — [learned from the crawl's own record](#a-publisher-that-refuses-every-read-is-learned-not-listed),
+   with `discover.DISCARDED_REFUSING` as the reason — except one page of it a week,
+   which is read first.
 5. **A page no campus story can be in is set aside before it is read**
    (`discover.set_aside_not_news`, the rules in `tracker/ingest/screen.py`). By its
    address: a PDF, which nothing here takes text from — the plain client handed the
@@ -493,7 +571,9 @@ record. The console flags such a campus as a suspected delay once its go-live se
 has run, and the search only queues what it found, so until those results are read a
 campus can be flagged with its opening sitting unread in the queue. That happened to
 all 13 campuses the first searches covered on 2026-10-22: 19 results queued, a crawl
-in the backlog's order read one. They are a few dozen a night at most.
+in the backlog's order read one. They are a few dozen a night at most. **Right after
+them come the night's weekly checks** of publishers refusing every read, one page each
+(`pending(probes=)`): a check that sat behind the limit would not be made.
 
 `ingest crawl --from-queue --new-first` asks a different question, and is what the
 nightly loop's discovery step runs. **The news goes first:** every article the
@@ -717,10 +797,11 @@ were never reached. Any try now moves the URL to the back.
   doubles its interval (`ingest_url.failures`), up to sixteen intervals, so a page
   behind a WAF the ladder cannot clear stops costing a try every run without being
   given up on.
-* **A page on a closed publisher goes last.** The backoff would retire one after a
-  few failed runs, but each of those runs spends a slot on it, and the publishers
-  closed on 2026-10-02 include the most-cited one in the database. The refresh reads
-  past the cache on purpose (below), so here every such page counts as unreadable.
+* **A page on a closed publisher, or one refusing every read, goes last.** The
+  backoff would retire one after a few failed runs, but each of those runs spends a
+  slot on it, and the publishers closed on 2026-10-02 include the most-cited one in
+  the database. The refresh reads past the cache on purpose (below), so here every
+  such page counts as unreadable.
 * **A failed re-read does not unread the URL.** It keeps the `ok` its good read
   earned — the citations still stand — and records the failure beside it. Demoting
   it had put 35 cited URLs into the pool `--retry-failed` works.
@@ -830,13 +911,14 @@ Touching any of these means the poster is in scope. Re-render with
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`, `SEARCH_CNY`, `FETCH_CNY`, `report`, `summary`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `scripts/overnight.sh` — the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
-| The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed` |
+| The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed`; for a refusing publisher, `probe_refusing` on the same clock |
 | Asking robots.txt before every request | `tracker/robots.py` — `allowed`, `allowed_async`, `interpret`, `crawl_delay`; `tracker/ingest/fetch.py` — `permitted`, `refused`, `PlaywrightFetcher.permitted`, `fetch_with_retry`, `should_escalate`, `fetch_all`; `tracker/ingest/discover.py` — `_RawFetcher`; `tracker/config.py` — `respect_robots` |
 | Headlines-only feeds | `tracker/seed/feeds.toml` — `headlines_of`, `news_search`, `news_pages`; `tracker/ingest/search.py` — `SerperProvider.news`; `tracker/ingest/discover.py` — `news_headlines`, `search_news`, `_poll_news`, `_news_date`, `parse_headlines`, `follow_headlines`, `same_story`, `copies_headline`, `MAX_HEADLINE_LOOKUPS` |
 | A page no campus story can be in is set aside | `tracker/ingest/screen.py` — `not_news`, `file_kind`, `translation`, `site_kind`, `_NOT_NEWS_HOSTS`, `_QUOTE_PAGES`, `_LISTINGS`, `builder_aside`, `abroad`, `us_places`, `post_year`, `_CAMPUS_EVENT`, `off_topic`, `SET_ASIDE`, `summary`; `tracker/ingest/discover.py` — `set_aside_not_news`; `tracker/ingest/watch.py` — `_screened`, `judge`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract); `tracker/cli/queue.py` — `queue aside` |
 | A page set aside by its headline (`--screen`) | `tracker/ingest/headlines.py` — `KINDS`, `SYSTEM`, `STAMP`, `ASIDE`, `BATCH`, `judge`, `names_us_place`, `places_held`, `screen_queue`, `measure`; `tracker/ingest/screen.py` — `us_places`, `UsPlaces`; `tracker/cli/ingest.py` — `crawl --from-queue --screen`, `_screen_headlines`; `tracker/cli/queue.py` — `queue screen`; `scripts/overnight.sh` — `SCREEN` |
 | A story's second copy is set aside | `tracker/ingest/discover.py` — `drop_same_story`, `SAME_STORY`, `SAME_STORY_WORDS`, `SAME_STORY_WORDS_ACROSS_SITES`, `_headline`, `_page_key`; `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/sync.py` — `sync` (extract); `tracker/cli/queue.py` — `queue duplicates` |
-| Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test`, `discard_unreadable`, `requeue_reopened`, `DISCARDED_UNREADABLE`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/enrich.py` — `run` |
+| Pages nothing can read leave the queue, or go last | `tracker/ingest/discover.py` — `closed_domains`, `unreadable_test` (`refusing=`, `probing=`), `discard_unreadable` (`refusing=`), `requeue_reopened`, `DISCARDED_UNREADABLE`, `DISCARDED_REFUSING`, `readable_first`, `pending(unreadable=)`, `retryable(unreadable=)`; `tracker/ingest/crawl.py` — `stale_sources(unreadable=)`; `tracker/cli/sync.py` — `sync` (extract, retry fill, refresh); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/cli/queue.py` — `queue unreadable`, `queue duplicates`; `tracker/ingest/enrich.py` — `run` |
+| Publishers that refuse every read, learned | `tracker/ingest/discover.py` — `refusing_publishers`, `Refusing`, `Refusing.due`, `publisher_of`, `_refused`, `_what_it_said`, `_TRIED`, `REFUSAL_STATUS`, `REFUSING_AFTER`, `REFUSING_DAYS`, `probe_refusing`, `pending(probes=)`, `follow_headlines(refusing=)`; `tracker/ingest/fetch.py` — `fetch_all`, `should_escalate` (what "after the ladder" means); `tracker/ingest/crawl.py` — `record_url`; `tracker/ingest/watch.py` — `_screened` (why the watch still queues them); `tracker/cli/ingest.py` — `crawl --from-queue`; `tracker/ingest/desk.py` — `Desk.lines` |
 | What search looks for | `tracker/ingest/search.py` — `_PLACE_TEMPLATES`, `rank_places`, `plan_queries`, `PlannedQuery.label`, `templates`; `tracker/normalize.py` — `state_name` |
 | Judging a template | `tracker/funnel.py` — `feed_group`, `survey`, `verdicts`; `tracker/ingest/search.py` — `LabelStat` |
 | Queue ordering and counts | `tracker/ingest/discover.py` — `deciding` (a late campus's watch finds, ahead of every order), `pending` (`known_first`, `new_first`; news first by `feed.REPORT_WINDOW_DAYS`, read in turn across sources by `in_turn` and `_source_of`, then the watch's finds in turn with builders' posts, a future date as none), `pending_split`, `pending_risk_count`, `failed`, `retryable`, `given_up`, `MAX_SAME_FAILURES`, `failure_summary` |
