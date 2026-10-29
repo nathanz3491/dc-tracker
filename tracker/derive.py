@@ -39,7 +39,7 @@ from dataclasses import field as dc_field
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from tracker.models import Project
 from tracker.vocab import WRITABLE_FIELDS
@@ -215,7 +215,23 @@ def run(session: Session, *, project_id: int | None = None) -> DeriveReport:
     """
     from tracker.upsert import recompute_from_sources
 
-    query = select(Project).order_by(Project.id.asc())
+    # Every collection the recompute reads off the row, loaded in one query each
+    # rather than one per row: 5 x 1,124 lazy loads, each with an autoflush, were a
+    # fifth of a whole-table run. Nothing here writes another row's children, so a
+    # collection read up front holds what a lazy load would have found later.
+    # `risks` is left out on purpose — the recompute queries those rather than
+    # reading the collection (see `upsert._open_risks`).
+    query = (
+        select(Project)
+        .options(
+            selectinload(Project.sources),
+            selectinload(Project.blocks),
+            selectinload(Project.parties),
+            selectinload(Project.nesting),
+            selectinload(Project.events),
+        )
+        .order_by(Project.id.asc())
+    )
     if project_id is not None:
         query = query.where(Project.id == project_id)
 
