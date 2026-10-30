@@ -1184,6 +1184,27 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A tranche from an article ruled a misread no longer sets a campus's stage, and a
+  cancelled campus is lifted only by a running building or newer news**
+  (`tracker/blocks.py` `lifting_blocks`, `settled_phase`, `reconcile`;
+  `tracker/gaps.py` `_phase_from_blocks`; `tracker/invariants.py`
+  `_phase_not_behind_tranches`; `docs/workflows/logic.md`;
+  `tests/test_phase_lift_rulings.py`).
+  - **Why:** Digital Gateway read "under construction" over seven articles saying QTS
+    had cancelled it. A 2018 article about QTS's separate Manassas campus had its stage
+    ruled a misread, but the "under construction" powered shell it named stayed on the
+    row and lifted the campus back up — a ruling strikes one field, and the tranche
+    was another.
+  - **What changed:** a planned or half-built tranche whose article's stage was
+    ruled a misread lifts nothing (a running one still does, and `logic rule-out ID
+    blocks` still takes a wrong article's tranches off outright); a campus the sources
+    call cancelled or paused is lifted only by a serving building or by a tranche
+    reported after the stop. A stage ruled *superseded* still
+    lets its tranches lift — the article was right in its day, and counting those
+    lowered five running campuses in the replay. On the 10-30 copy 11 campuses change:
+    4 to cancelled (King of Prussia, Digital Gateway, Project Nova, AWS Calvert County),
+    4 to paused, 3 down a step; with the county pass, capex goes to $2,772B and
+    358.3 GW.
 - **The test of where an installed `tracker` keeps its data now holds on macOS, where
   production runs** (`tests/test_config.py`
   `test_without_a_checkout_it_is_the_platform_data_directory`). It redirected the

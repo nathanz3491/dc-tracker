@@ -450,11 +450,12 @@ def _phase_from_blocks(project, value: str) -> FieldProvenance | None:
     source that mentioned the field and printed *its* sentence: "operational",
     marked quoted, over "Switch has unveiled plans".
     """
+    from tracker.blocks import lifting_blocks
     from tracker.vocab import BLOCK_STATUS_TO_PHASE
 
     lifting = [
         block
-        for block in getattr(project, "blocks", ()) or ()
+        for block in lifting_blocks(project, list(getattr(project, "blocks", ()) or ()))
         if not getattr(block, "generic", False) and BLOCK_STATUS_TO_PHASE.get(block.status) == value
     ]
     if not lifting:

@@ -272,6 +272,18 @@ Three stages before anything is put to a model:
    `announced`. The check and the recompute call the same function, so they cannot
    disagree about it.
 
+   Nor does a planned or half-built tranche lift the campus once its own citation's
+   stage claim has been ruled a misread on the row (a running one still does), and a
+   campus the claims call cancelled or paused is lifted only by a running
+   (`serving`) building or by a tranche reported after the stop
+   (`blocks.lifting_blocks`, since 2026-10-30). Digital Gateway read "under
+   construction" over seven articles saying QTS had cancelled it, because a 2018
+   article about QTS's separate Manassas campus — its stage already ruled a misread —
+   still carried an "under construction" powered shell. Replayed on the 10-30 copy,
+   11 campuses change stage: 4 to cancelled, 4 to paused, 3 down a step. A stage
+   ruled *superseded* rather than misread still lets its article's tranches lift: the
+   article was right in its day, and counting it lowered five running campuses.
+
    The same holds for capacity. A row is derived with two rules applied around the
    policy (2026-10-21): a figure of a gigawatt or more, about a thousand times one a
    quoted source gives and quoted by nothing itself, is kilowatts read as megawatts
@@ -555,7 +567,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field`, `claims_by_field` (the order), `stale_claims`, `STALE_AFTER` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `_drop_restated_delays`, `_clear_built`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news`; `tracker/delays.py` — `restates`, `period_end` |
-| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
+| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
 | The agent path | `tracker/triage.py` — `triage_findings`, `triage`, `investigate`, `conclude`, `finding_question`, `finding_subject`, `finding_evidence`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | One loop for every paid pass: per-item commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |

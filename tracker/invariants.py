@@ -183,10 +183,11 @@ def _phase_not_behind_tranches(projects: list[Any], _context: Any) -> list[Viola
         # Named tranches only, as `blocks.phase_after_blocks` reads them when it sets
         # the phase: an unnamed "Phase 1" says nothing about which facility it is,
         # and Switch's The Rock carries two from a city page that put another
-        # operator's building on it.
+        # operator's building on it. Nor one whose citation's stage was ruled out
+        # here (`blocks.lifting_blocks`), which may not set the phase either.
         live = [
             b
-            for b in (p.blocks or ())
+            for b in blocks_mod.lifting_blocks(p, list(p.blocks or ()))
             if b.status in blocks_mod.LIVE_STATUSES
             and not getattr(b, "generic", False)
             and not blocks_mod.is_generation(b.label, getattr(b, "parent", None))

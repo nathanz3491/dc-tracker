@@ -47,6 +47,7 @@ double-counted or the cited figure is stale, and arithmetic cannot say which.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -1894,9 +1895,10 @@ def phase_after_milestones(phase: str | None, events: list[Any], today: Any = No
     return best
 
 
-def settled_phase(phase: str | None, project: Any) -> str | None:
+def settled_phase(phase: str | None, project: Any, nested: Structure | None = None) -> str | None:
     """The phase the write path stores: the claims' answer, raised by the milestones
-    the campus has reached and then by its named tranches.
+    the campus has reached and then by the named tranches that may lift it
+    (`lifting_blocks`).
 
     One function for `reconcile` (the write) and `logic.check_collisions` (the drift
     check), so the nightly check expects exactly what a recompute stores.
@@ -1905,7 +1907,81 @@ def settled_phase(phase: str | None, project: Any) -> str | None:
     blocks = list(getattr(project, "blocks", ()) or ())
     if not blocks:
         return raised
-    return phase_after_blocks(raised, blocks, structure(project))
+    return phase_after_blocks(
+        raised,
+        lifting_blocks(project, blocks, phase),
+        nested if nested is not None else structure(project),
+    )
+
+
+def lifting_blocks(project: Any, blocks: list[Any], phase: str | None = None) -> list[Any]:
+    """The tranches whose status may raise the campus's phase above `phase`, the
+    claims' own answer.
+
+    Two kinds may not:
+
+    * **a planned or half-built tranche from a citation whose stage claim was ruled
+      a misread on this row.** A ruling strikes one field of one citation, so it
+      left the same article's tranches standing, and their status went on setting
+      the stage the ruling had just taken away. Digital Gateway (#79): a 2018 article
+      about QTS's separate Manassas campus had its `phase` ruled a misread, and the
+      "under construction" powered shell it named still read the campus as being
+      built — over seven articles saying QTS had cancelled it. A *running* building
+      from such a citation still lifts: a sentence misread about the stage does not
+      unmake a building in service, and when the building itself is another site's,
+      `logic rule-out ID blocks` takes the citation's tranches off the row outright.
+      A stage claim ruled *superseded* is not this either: the article was right in
+      its day — replayed on the 10-30 copy, counting those too lowered five running
+      campuses, ATL3's finished expansion among them.
+    * **for a campus the claims say is cancelled or paused, a tranche that is not
+      running and whose article is no newer than the first report of the stop.** A
+      running building still lifts it — "a campus with a serving building is not
+      cancelled, whatever one article said" (`raise_phase`) — but a planned or
+      half-built one reported years before the stop says nothing about the campus
+      since. A tranche on an undated page cannot show it is newer, so it does not
+      lift; nor does anything when no stop claim carries a date.
+
+    `phase` None asks only the first question, for readers that show what lifted a
+    stored phase without the claims' answer to hand.
+    """
+    from tracker.upsert import _published_day, claims_by_field, contenders
+    from tracker.vocab import PHASE_TERMINAL
+
+    if not blocks:
+        return []
+    sources = {s.id: s for s in getattr(project, "sources", ()) or ()}
+
+    def misread(block: Any) -> bool:
+        if block.status == "serving":
+            return False
+        source = sources.get(getattr(block, "source_id", None))
+        try:
+            reasons = json.loads(getattr(source, "unconfirmed_reasons", None) or "{}")
+        except (TypeError, ValueError):
+            return False
+        return isinstance(reasons, dict) and reasons.get("phase") == "misread"
+
+    out = [b for b in blocks if not misread(b)]
+    if phase not in PHASE_TERMINAL:
+        return out
+
+    stopped = [
+        day
+        for claim in contenders(claims_by_field(list(sources.values())).get("phase", []))
+        if claim.value in PHASE_TERMINAL
+        for day in [_published_day(claim)]
+        if day is not None
+    ]
+    stop = min(stopped) if stopped else None
+
+    def newer(block: Any) -> bool:
+        source = sources.get(getattr(block, "source_id", None))
+        published = getattr(source, "published_at", None)
+        if stop is None or published is None:
+            return False
+        return (published.date() if hasattr(published, "date") else published) > stop
+
+    return [b for b in out if b.status == "serving" or newer(b)]
 
 
 def phase_after_blocks(
@@ -2007,11 +2083,7 @@ def reconcile(project: Any) -> list[str]:
                 "double-count or the campus figure is stale"
             )
 
-    project.phase = phase_after_blocks(
-        phase_after_milestones(project.phase, list(getattr(project, "events", ()) or ())),
-        list(project.blocks),
-        nested,
-    )
+    project.phase = settled_phase(project.phase, project, nested)
 
     if project.customer is None and got.customer is not None:
         project.customer = got.customer
