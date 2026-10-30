@@ -486,9 +486,52 @@ def _blocks_not_counted(session: Session, project: Project, _f: UnitFinding) -> 
     )
 
 
-def _dismiss(session: Session, project: Project, _f: UnitFinding) -> str:
-    """Write nothing. The record of the decision is the point."""
-    return "left as it stands — the figure was judged correct"
+#: What a dismissal records: a judgement the figure is right, and — in brackets after
+#: it — the figures the finding was raised on, so `settled_codes` can tell when the
+#: judgement no longer covers the row.
+DISMISSED: Final = "left as it stands — the figure was judged correct"
+_JUDGED_ON = re.compile(r"\(judged on: ([^)]*)\)")
+_JUDGED_FIGURE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+#: How far a judged figure may move and still be the figure that was judged. Wide
+#: enough that a campus judged genuinely enormous at 9,000 MW is not asked again at
+#: 9,500; narrow enough that Astra North's dismissal — given to $475M of land — does
+#: not cover the $20M community fund that replaced it.
+JUDGED_TOLERANCE: Final = 0.10
+
+
+def judged_figures(finding: UnitFinding) -> tuple[float, ...]:
+    """The numbers in a finding's sentence, in order: what a dismissal was given to."""
+    return tuple(float(x.replace(",", "")) for x in _JUDGED_FIGURE.findall(finding.summary))
+
+
+def _dismiss(session: Session, project: Project, f: UnitFinding) -> str:
+    """Write nothing but the judgement, and the figures it was made on."""
+    figures = " ".join(str(int(x)) if x.is_integer() else str(x) for x in judged_figures(f))
+    return f"{DISMISSED} (judged on: {figures or 'no figures'})"
+
+
+def _same_figures(then: tuple[float, ...], now: tuple[float, ...]) -> bool:
+    if len(then) != len(now):
+        return False
+    return all(
+        abs(a - b) <= JUDGED_TOLERANCE * max(abs(a), abs(b)) for a, b in zip(then, now, strict=True)
+    )
+
+
+def _still_judged(sentence: str, code: str, firing: list[UnitFinding]) -> bool:
+    """Whether a dismissal still covers the figures its finding now fires on.
+
+    One recorded before dismissals named their figures covers nothing, so each of
+    those is asked once more and recorded properly. A finding that no longer fires
+    has nothing to reopen.
+    """
+    judged = _JUDGED_ON.search(sentence)
+    if judged is None:
+        return False
+    then = tuple(float(x.replace(",", "")) for x in _JUDGED_FIGURE.findall(judged.group(1)))
+    now = [judged_figures(f) for f in firing if f.code == code]
+    return not now or any(_same_figures(then, figures) for figures in now)
 
 
 #: finding code -> the edits that answer it. `d` (dismiss) is offered on every
@@ -664,16 +707,27 @@ def settled_codes(project: Project) -> set[str]:
     from then on. The row was the worst in the database and the check that would
     have said so had been switched off by its own repair.
 
-    A dismissal is different and stays settled: it records a judgement that the
-    figure is right, not an edit that could be reverted.
+    **A dismissal is settled while the figures it was given to stand**, within
+    `JUDGED_TOLERANCE`. It records a judgement that the figure is right, not an edit,
+    so nothing reverts it — but it used to settle forever, whatever replaced the
+    figure: Astra North (#404) was dismissed on 2026-09-30 for $475M of land, and the
+    check stayed silent when a $20M community fund became the campus's investment.
+    30 rows had a check silenced that way on 2026-10-30.
     """
     from tracker.logic import FREE_CODES
 
     settled: set[str] = set()
+    firing: list[UnitFinding] | None = None
     for code, what in _DECISION.findall(project.notes or ""):
         if code in FREE_CODES:
             # Answered for free whenever it fires, so a past answer settles nothing:
             # see `logic.FREE_CODES` for the obstacles this kept open.
+            continue
+        if what.strip().startswith(DISMISSED):
+            if firing is None:
+                firing = check_project(project)
+            if _still_judged(what, code, firing):
+                settled.add(code)
             continue
         edit = _EDIT.match(what.strip())
         if edit and _no_change(edit.group(2), edit.group(3)):

@@ -1184,6 +1184,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A dismissed plausibility check reopens when the figure it was given to changes**
+  (`tracker/audit.py` `_dismiss`, `DISMISSED`, `JUDGED_TOLERANCE`, `judged_figures`,
+  `settled_codes`; `docs/data-quality.md`; `tests/test_audit_resolve.py`).
+  - **Why:** "the figure is right as it stands" settled its check forever, whatever
+    replaced the figure. Astra North was dismissed on 09-30 for $475M of land, and the
+    check stayed silent when a $20M community fund became the 2 GW campus's
+    investment. 30 rows had a check silenced like that on 10-30.
+  - **What changed:** a dismissal records the figures it was given to and settles the
+    check only while they stay within 10%, so a campus judged genuinely enormous at
+    9,000 MW is not asked again at 9,500. Dismissals recorded before this name no
+    figures; each is asked once more, about 30 audit calls on the next night.
 - **A tranche from an article ruled a misread no longer sets a campus's stage, and a
   cancelled campus is lifted only by a running building or newer news**
   (`tracker/blocks.py` `lifting_blocks`, `settled_phase`, `reconcile`;

@@ -529,12 +529,12 @@ def test_a_tranche_a_re_crawl_re_confirms_re_opens_the_question(session):
     assert "block_out_of_scale" not in audit.settled_codes(project)
 
 
-def test_a_dismissal_survives_a_value_changing_under_it(session):
+def test_a_dismissal_survives_its_figure_moving_a_little(session):
     """A dismissal is a judgement, not an edit, so nothing can revert it.
 
     The counterpart to the test above, and the reason the check is not simply "does
     the finding still fire": an operator who has said the figure is right is
-    entitled to stop being asked, even as the figure moves.
+    entitled to stop being asked while the figure moves within `JUDGED_TOLERANCE`.
     """
     project = _project(session, name="Genuinely huge", mw_planned=9000.0)
     finding = next(
@@ -544,6 +544,32 @@ def test_a_dismissal_survives_a_value_changing_under_it(session):
     assert "campus_exceeds_worlds_largest" in audit.settled_codes(project)
 
     project.mw_planned = 9500.0
+    assert "campus_exceeds_worlds_largest" in audit.settled_codes(project)
+
+
+def test_a_dismissal_does_not_cover_a_different_figure(session):
+    """Astra North (#404) was dismissed for $475M of land, and the check stayed silent
+    when a $20M community fund replaced it. The judgement names its figures now."""
+    project = _project(session, name="Genuinely huge", mw_planned=9000.0)
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "campus_exceeds_worlds_largest"
+    )
+    audit.resolve_one(session, project, finding, ask=lambda *_: "d")
+    assert "(judged on: 9000)" in project.notes
+
+    project.mw_planned = 20000.0
+    assert "campus_exceeds_worlds_largest" not in audit.settled_codes(project)
+
+
+def test_a_dismissal_recorded_without_its_figures_is_asked_once_more(session):
+    project = _project(session, name="Old answer", mw_planned=9000.0)
+    audit.record(project, "campus_exceeds_worlds_largest", audit.DISMISSED, by="model")
+    assert "campus_exceeds_worlds_largest" not in audit.settled_codes(project)
+
+    finding = next(
+        f for f in audit.check_project(project) if f.code == "campus_exceeds_worlds_largest"
+    )
+    audit.resolve_one(session, project, finding, ask=lambda *_: "d")
     assert "campus_exceeds_worlds_largest" in audit.settled_codes(project)
 
 

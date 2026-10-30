@@ -80,6 +80,14 @@ Every edit is written into the row's notes naming who made it — `rule`, `opera
 unless you pass `--again`. `--no-ask`, `--no-llm` and `--no-search` each stop the
 ladder at that rung; `--no-llm --no-ask` does the free repairs and nothing else.
 
+An edit settles its finding while the row still holds what the edit wrote. A
+dismissal — "the figure is right as it stands" — writes no edit, so it records the
+figures the finding was raised on, `(judged on: 10204 20000000 2000)`, and settles
+the finding only while those figures stay within 10% (`audit.JUDGED_TOLERANCE`).
+Before 2026-10-30 a dismissal settled forever: Astra North was dismissed for $475M
+of land, and the check stayed silent when a $20M community fund became the campus's
+investment. A dismissal recorded without its figures is asked once more.
+
 ## One tranche wearing several names
 
 ```bash
