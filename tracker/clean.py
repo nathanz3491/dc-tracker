@@ -58,7 +58,17 @@ TIERS: Final[tuple[tuple[int, str, tuple[str, ...]], ...]] = (
     (0, "SOURCED", ("has_source", "no_silent_defect", "no_errors")),
     (1, "SOUND", ("audit_clear", "no_inversions", "duplicates_answered")),
     (2, "COMPLETE", ("fields_present", "values_backed")),
-    (3, "SETTLED", ("warnings_settled", "blocks_settled", "risks_confirmed", "vintage_current")),
+    (
+        3,
+        "SETTLED",
+        (
+            "warnings_settled",
+            "blocks_settled",
+            "risks_confirmed",
+            "vintage_current",
+            "twins_judged",
+        ),
+    ),
 )
 
 #: The fields that say what a project *is*: who, where, what stage, how big, when
@@ -114,6 +124,7 @@ REMEDIES: Final[dict[str, str]] = {
     "blocks_settled": "tracker blocks {id}",
     "risks_confirmed": "tracker risks confirm --project {id}",
     "vintage_current": "tracker ingest reread --cached-only --limit 50",
+    "twins_judged": "tracker duplicates resolve --limit 40",
 }
 
 
@@ -138,6 +149,7 @@ CONDITION_LABELS: Final[dict[str, str]] = {
     "warnings_settled": "an open logic warning",
     "blocks_settled": "tranches that may be one thing counted twice",
     "risks_confirmed": "an obstacle with no usable quote",
+    "twins_judged": "a candidate twin in the same county nobody has judged yet",
     "vintage_current": "last read by a superseded prompt",
 }
 
@@ -283,15 +295,19 @@ def _current_stamp() -> str:
 class _Shared:
     """Whole-database answers, computed once and reused for every card.
 
-    Three of the eleven conditions are only answerable across rows — a duplicate is
-    a statement about a pair, and `blockcheck.scan` and `recency_inversions` both
-    query. Computing them per card would turn a 4.5-second sweep into 1,171 of them.
+    Four of the conditions are only answerable across rows — a duplicate and a
+    candidate twin are statements about a pair, and `blockcheck.scan` and
+    `recency_inversions` both query. Computing them per card would turn a 4.5-second
+    sweep into 1,171 of them.
     """
 
     defects: set[int] = dc_field(default_factory=set)
     inversions: set[int] = dc_field(default_factory=set)
     block_groups: dict[int, list[str]] = dc_field(default_factory=dict)
     suspected: set[int] = dc_field(default_factory=set)
+    #: Rows in a pair raised on place alone (`DuplicatePair.holds_rows_out` False):
+    #: an open question, not a possible lie in a total, so it is asked at T3.
+    asked: set[int] = dc_field(default_factory=set)
     stamp: str = ""
 
 
@@ -309,9 +325,16 @@ def _shared(
         got.block_groups.setdefault(group.project_id, []).append(group.verdict)
     # Parked pairs are already excluded — `suspected_duplicates` drops them — so a
     # pair an operator has answered with "these are different" stops counting.
+    #
+    # A pair the county pass raised on place and a figure or a word alone holds no
+    # row out of a total until it is judged, so it cannot make a total wrong, and is
+    # asked as an open question at T3 instead. Counted at T1 when it shipped on
+    # 2026-10-30, it took 36 rows out of complete that night for questions that had
+    # simply not been asked yet.
     for pair in capex.suspected_duplicates(session) if suspected is None else suspected:
-        got.suspected.add(pair.a_id)
-        got.suspected.add(pair.b_id)
+        rows = got.suspected if getattr(pair, "holds_rows_out", True) else got.asked
+        rows.add(pair.a_id)
+        rows.add(pair.b_id)
     return got
 
 
@@ -477,6 +500,13 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
         }
     )
     add("vintage_current", not stale, f"read by {', '.join(stale)}" if stale else "")
+
+    add(
+        "twins_judged",
+        project.id not in got.asked,
+        "another row in the same county states the same figure or a distinctive name word; "
+        "the nightly duplicate agent will judge the pair",
+    )
 
     # --- reported, but NOT a tier condition -------------------------------------
     #

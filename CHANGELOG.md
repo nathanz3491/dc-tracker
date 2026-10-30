@@ -1184,6 +1184,18 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A candidate twin the county check raised no longer takes its rows out of
+  "complete"** (`tracker/clean.py` `twins_judged`, `_Shared.asked`, `_shared`; reader
+  docs *Tiers*, en and zh; `tests/test_duplicate_detection.py`).
+  - **Why:** the county pass keeps an unjudged pair out of no total — both rows still
+    count — yet the tier check counted the pair at T1, "a possible duplicate nobody
+    has ruled on", which drops a row to T0. Shipped on 10-30, it took 36 rows out of
+    complete in one night, and the daily watcher read that as the data getting worse.
+  - **What changed:** such a pair is an open question at T3 (`twins_judged`) and is
+    settled when the nightly duplicate agent judges it; a row in one can be sound and
+    complete. A pair that does hold a row out of a total still counts at T1. On
+    production this returns 31 rows to complete, and at most 7 settled rows step down
+    to complete.
 - **One campus filed in two towns of a county under two companies is now compared,
   and Project Jupiter is no longer counted twice** (`tracker/capex.py`
   `suspected_duplicates` county pass, `_counties`, `_shared_figures`,

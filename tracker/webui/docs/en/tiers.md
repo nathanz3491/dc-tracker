@@ -40,6 +40,7 @@ So T2 means "complete as far as anything has been published", with the unknowns 
 - No tranches that may be one building counted twice.
 - Every open obstacle backed by a sentence.
 - Every source read by the current version of the tracker's reading instructions, so nothing rests on an older, looser reading.
+- No **candidate twin** left unjudged: another campus in the same county that states the same figure or shares a distinctive name word. Until the nightly duplicate check rules on the pair, both campuses still count in every total — it is a question, not an error.
 
 ## Why a campus stays low
 

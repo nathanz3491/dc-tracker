@@ -368,3 +368,40 @@ def test_only_a_judge_that_read_the_articles_may_merge_on_a_county(session):
     refused = evidence_blocks_merge(pair, oracle, borderplex, judge_read_the_sources=False)
     assert refused and "county" in refused
     assert evidence_blocks_merge(pair, oracle, borderplex, judge_read_the_sources=True) is None
+
+
+def test_an_unjudged_county_pair_is_an_open_question_not_an_unsound_row(session):
+    """It holds no row out of a total, so it cannot make one wrong: it is asked at T3
+    (`twins_judged`), not failed at T1 (`duplicates_answered`). Counted at T1 when the
+    county pass shipped, it took 36 rows out of complete in one night."""
+    from tracker import clean
+
+    a = _row(
+        session,
+        company="Acme",
+        name="Saguaro Campus",
+        city="Buckeye",
+        county="Maricopa County",
+        state="AZ",
+        dedup_key="acme|city:buckeye|AZ",
+        mw_planned=600.0,
+        investment_usd=5_000_000_000,
+    )
+    b = _row(
+        session,
+        company="Desert Holdings",
+        name="Saguaro Data Center",
+        city="Tonopah",
+        county="Maricopa County",
+        state="AZ",
+        dedup_key="desert|city:tonopah|AZ",
+        mw_planned=600.0,
+        investment_usd=5_000_000_000,
+    )
+    pair = _pair(session, a, b)
+    assert not pair.holds_rows_out
+    cards = {c.project_id: c for c in clean.scan(session).cards}
+    for row in (a, b):
+        conditions = {cond.key: cond.ok for cond in cards[row.id].conditions}
+        assert conditions["duplicates_answered"]
+        assert not conditions["twins_judged"]
