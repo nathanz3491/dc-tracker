@@ -88,6 +88,10 @@ Nine rules.
    *together with* an exact name, a shared tranche, or a shared party, those rules
    apply normally and the granularity is the explanation for the pair rather than a
    reason to abstain. Read the evidence classes at the top of the block.
+   **A shared county is the same kind of qualifier.** Two rows in different towns
+   of one county, under different companies, that state the same investment or the
+   same capacity are often one campus named by its developer and by its tenant —
+   and often two neighbours. Decide on what the articles say about the site.
 
 7. **Neighbouring phases are not duplicates.** Two names that differ only by a
    number — "Polaris Forge 1" and "Polaris Forge 2", "SLC02" and "SLC-04" — are

@@ -201,10 +201,14 @@ def _ports(session, *, joint="Mitsui / SB Energy") -> tuple[Project, Project]:
 
 
 def test_a_new_row_is_paired_with_its_twin_under_another_town_and_company(session):
+    """Since 2026-10-30 the county pass raises this pair too — one county, a shared
+    name word — and with it the party the two companies share."""
     from tracker.capex import twin_pairs
 
     old, new = _ports(session)
-    assert (old.id, new.id) not in _ids(session), "the regular passes cannot see it"
+    regular = _pair(session, old, new)
+    assert {"county", "party"} <= set(regular.kinds)
+    assert regular.holds_rows_out, "a shared party is evidence of its own"
 
     (pair,) = twin_pairs(session, [new.id])
     assert (pair.a_id, pair.b_id) == (old.id, new.id)
@@ -246,3 +250,121 @@ def test_a_pair_already_ruled_out_is_not_asked_again(session):
     old, new = _ports(session)
     pairs.park(session, [old.id, new.id], reason="different sites", by="operator")
     assert twin_pairs(session, [new.id]) == []
+
+
+# --- one county, two towns, two companies --------------------------------------------
+
+
+def _jupiter(session):
+    """Project Jupiter on 2026-10-30: Oracle's row under Las Cruces, BorderPlex's under
+    Santa Teresa, the same 2,450 MW and $165B in Doña Ana County, never compared."""
+    oracle = _row(
+        session,
+        company="Oracle",
+        name="Stargate - Doña Ana County (Project Jupiter)",
+        city="Las Cruces",
+        county="Doña Ana County",
+        state="NM",
+        dedup_key="oracle|city:las cruces|NM",
+        mw_planned=2450.0,
+        investment_usd=165_000_000_000,
+    )
+    borderplex = _row(
+        session,
+        company="BorderPlex Digital Assets",
+        name="Project Jupiter",
+        city="Santa Teresa",
+        county="Doña Ana County",
+        state="NM",
+        dedup_key="borderplex|city:santa teresa|NM",
+        mw_planned=2450.0,
+        investment_usd=165_000_000_000,
+    )
+    return oracle, borderplex
+
+
+def _pair(session, a, b):
+    return next(p for p in suspected_duplicates(session) if {p.a_id, p.b_id} == {a.id, b.id})
+
+
+def test_one_county_two_towns_two_companies_and_the_same_figures(session):
+    oracle, borderplex = _jupiter(session)
+    pair = _pair(session, oracle, borderplex)
+    assert "county" in pair.kinds
+    assert "Doña Ana County" in pair.why
+    assert "$165.0B" in pair.why and "2,450 MW" in pair.why
+
+
+def test_it_holds_no_row_out_of_the_totals_until_judged(session):
+    """A county is a large place: 50 of the 55 pairs this pass raised on the 10-30
+    copy rested on it and a figure or a word, and a false pair hides a real campus
+    from capex."""
+    from tracker.capex import rollup
+
+    oracle, borderplex = _jupiter(session)
+    assert not _pair(session, oracle, borderplex).holds_rows_out
+    counted = {pid for position in rollup(session) for pid in position.project_ids}
+    assert {oracle.id, borderplex.id} <= counted
+
+
+def test_a_county_text_naming_two_counties_counts_as_each(session):
+    """Berry Hill: one row's county read "Danville and Pittsylvania"."""
+    a = _row(
+        session,
+        company="Stack Infrastructure",
+        name="Berry Hill campus",
+        county="Danville and Pittsylvania",
+        state="VA",
+        dedup_key="stack|county:danville and pittsylvania|VA",
+        investment_usd=100_000_000_000,
+    )
+    b = _row(
+        session,
+        company="Stack Infrastructure",
+        name="Berry Hill",
+        city="Danville",
+        county="Pittsylvania County",
+        state="VA",
+        dedup_key="stack|city:danville|VA",
+        investment_usd=100_000_000_000,
+        mw_planned=3000.0,
+    )
+    assert "county" in _pair(session, a, b).kinds
+
+
+def test_one_county_and_nothing_else_is_not_a_pair(session):
+    _row(
+        session,
+        company="Google",
+        name="Google Council Bluffs",
+        city="Council Bluffs",
+        county="Pottawattamie County",
+        state="IA",
+        dedup_key="google|city:council bluffs|IA",
+        mw_planned=300.0,
+        investment_usd=1_000_000_000,
+    )
+    _row(
+        session,
+        company="Meta",
+        name="Meta Carter Lake",
+        city="Carter Lake",
+        county="Pottawattamie County",
+        state="IA",
+        dedup_key="meta|city:carter lake|IA",
+        mw_planned=200.0,
+        investment_usd=800_000_000,
+    )
+    assert _ids(session) == set()
+
+
+def test_only_a_judge_that_read_the_articles_may_merge_on_a_county(session):
+    from tracker.dupresolve import evidence_blocks_merge
+
+    oracle, borderplex = _jupiter(session)
+    pair = _pair(session, oracle, borderplex)
+    if set(pair.kinds) & {"exact", "tranche", "party"}:
+        return  # hard evidence of its own; the rail under test does not arise
+    refused = evidence_blocks_merge(pair, oracle, borderplex, judge_read_the_sources=False)
+    assert refused and "county" in refused
+    assert evidence_blocks_merge(pair, oracle, borderplex, judge_read_the_sources=True) is None

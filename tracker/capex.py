@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -538,7 +539,7 @@ def counting(session: Session) -> Tally:
     with working_set(session):
         pairs = suspected_duplicates(session)
         positions = rollup(session, pairs=pairs)
-    return tally(positions, duplicate_groups(pairs))
+    return tally(positions, duplicate_groups([p for p in pairs if p.holds_rows_out]))
 
 
 def tally(positions: list[Position], groups: list[list[int]]) -> Tally:
@@ -651,7 +652,7 @@ def rollup(
     skip_ids: set[int] = set()
     if pairs is None:
         pairs = suspected_duplicates(session)
-    for group in duplicate_groups(pairs):
+    for group in duplicate_groups([p for p in pairs if p.holds_rows_out]):
         members = [eligible[pid] for pid in group if pid in eligible]
         if len(members) < 2:
             continue
@@ -1101,6 +1102,11 @@ def suspect_attributions(session: Session) -> list[tuple[int, str, str]]:
 #:   two signals that name a building and why it cannot carry a merge on its own.
 #:   Measured on the live database it pairs NTT's Itasca campus with NTT's Chicago
 #:   one, 31.7 km apart: same company, same county, two buildings;
+#: * a **county** in common, with the same figure or a distinctive name word, is the
+#:   pair every other pass misses: two towns of one county under two companies, as
+#:   Project Jupiter was (Oracle in Las Cruces, BorderPlex in Santa Teresa, the same
+#:   $165B). A statement about place, like `identity`, so it carries no merge alone
+#:   and holds no row out of a total until a judge has said "same";
 #: * a **name** token in common is the weakest — it is a word, and words recur.
 #:
 #: **The order changed, and the reason is what a reader can act on.** `identity`
@@ -1108,7 +1114,7 @@ def suspect_attributions(session: Session) -> list[tuple[int, str, str]]:
 #: opened with 31 of its 49 pairs — every one of them a class that no automated
 #: path can settle, because `dupresolve.merge_blocked` refuses granularity alone.
 #: The classes something can be done about now sort first.
-EVIDENCE_ORDER: tuple[str, ...] = ("exact", "tranche", "party", "identity", "name")
+EVIDENCE_ORDER: tuple[str, ...] = ("exact", "tranche", "party", "identity", "county", "name")
 
 #: What each class is called where a person reads it. One table, because the CLI and
 #: the console must not name the same evidence differently — the console's whole
@@ -1120,6 +1126,7 @@ EVIDENCE_LABELS: dict[str, str] = {
     "tranche": "same tranche",
     "party": "shared operator",
     "identity": "city vs county",
+    "county": "same county",
     "name": "name overlap",
 }
 
@@ -1176,6 +1183,10 @@ class DuplicatePair:
     #: field rather than something a reader infers from the two labels, because
     #: `dupresolve` trusts it for a merge and a rail has to read a value.
     exact: bool = False
+    #: The county both rows sit in, when the county pass raised them; and the
+    #: figures both state ("$165B", "2,450 MW") when that was the second signal.
+    shared_county: str = ""
+    shared_figures: tuple[str, ...] = ()
 
     @property
     def kinds(self) -> tuple[str, ...]:
@@ -1185,9 +1196,22 @@ class DuplicatePair:
             "identity": bool(self.shared_keys),
             "tranche": bool(self.shared_blocks),
             "party": bool(self.shared_parties),
+            "county": bool(self.shared_county),
             "name": bool(self.shared_tokens),
         }
         return tuple(k for k in EVIDENCE_ORDER if got[k])
+
+    @property
+    def holds_rows_out(self) -> bool:
+        """Whether this pair sets a row aside in the totals before anyone has judged it.
+
+        Every pair does except one the county pass raised on place and a word or a
+        figure alone: of the 55 it raised on the 10-30 copy, 50 rested on nothing
+        more, and a false pair is not free — `rollup` would hold a real campus out of
+        the buyer table until somebody parked it. The other five also share a party,
+        Project Jupiter's two rows among them, and count at once.
+        """
+        return not ("county" in self.kinds and not set(self.kinds) - {"county", "name"})
 
     @property
     def rank(self) -> int:
@@ -1211,6 +1235,11 @@ class DuplicatePair:
             parts.append(f"both name {', '.join(self.shared_parties[:3])}")
         if self.shared_keys:
             parts.append(f"same place at different granularity ({self.shared_keys[0]})")
+        if self.shared_county:
+            figures = (
+                f", both stating {' and '.join(self.shared_figures)}" if self.shared_figures else ""
+            )
+            parts.append(f"both in {self.shared_county}{figures}")
         if self.shared_tokens:
             parts.append(f"both names carry {', '.join(sorted(self.shared_tokens)[:3])}")
         return "; ".join(parts) or "same locality"
@@ -1225,6 +1254,7 @@ class DuplicatePair:
             "b_mw": self.b_mw,
             "evidence": list(self.kinds),
             "shared_keys": list(self.shared_keys),
+            "shared_county": self.shared_county,
             "why": self.why,
         }
 
@@ -1591,10 +1621,91 @@ def suspected_duplicates(session: Session, *, include_parked: bool = False) -> l
                     )
                 )
 
+    # --- The pairs one county holds under two towns and two companies ----------
+    #
+    # Project Jupiter is Oracle's row under Las Cruces and BorderPlex's under Santa
+    # Teresa: the same 2,450 MW and $165B, both in Doña Ana County. No pass above
+    # reaches it — no shared town, company stem, tranche or name — so capex counted
+    # it twice. Berry Hill likewise, one row's county reading "Danville and
+    # Pittsylvania", which is why a county text naming several counts as each.
+    #
+    # A county is a large place, so it takes a second signal: the same investment
+    # ($100M or more), the same planned capacity (50 MW or more), or a distinctive
+    # name word. And it holds no row out of a total until it is judged
+    # (`DuplicatePair.holds_rows_out`).
+    by_county: dict[tuple[str, str], list[Project]] = {}
+    for project in projects:
+        for county in _counties(project.county):
+            by_county.setdefault((project.state, county), []).append(project)
+    for (state, county), group in by_county.items():
+        for i, a in enumerate(group):
+            for b in group[i + 1 :]:
+                key = canonical(a.id, b.id)
+                if key in seen or key in parked:
+                    continue
+                figures = _shared_figures(a, b)
+                found = evidence(a, b)
+                if not figures and not found["shared_tokens"]:
+                    continue
+                seen.add(key)
+                label = next(
+                    (p.county for p in (a, b) if p.county and _counties(p.county) == {county}),
+                    county,
+                )
+                pairs.append(
+                    DuplicatePair(
+                        a_id=a.id,
+                        a_company=a.company,
+                        a_name=a.name,
+                        b_id=b.id,
+                        b_company=b.company,
+                        b_name=b.name,
+                        locality=a.city or a.county or "",
+                        state=state,
+                        b_mw=float(b.mw_planned or 0.0),
+                        shared_county=label,
+                        shared_figures=figures,
+                        **found,
+                    )
+                )
+
     # Strongest evidence first, so the pair most worth merging is the one on
     # screen. `looks_like_the_same_site` decided the same things in the same order
     # and threw the reason away; nothing is detected differently here.
     return sorted(pairs, key=lambda p: (p.rank, p.a_id, p.b_id))
+
+
+def _counties(text: str | None) -> set[str]:
+    """Each county a row's county text names, folded: "Danville and Pittsylvania"
+    is two, "Doña Ana County" is `dona ana`."""
+    from tracker.dedup import _slug
+
+    out: set[str] = set()
+    for part in re.split(r"\s+and\s+|/|,|&|;", text or ""):
+        words = [w for w in _slug(part).split() if w not in _PLACE_KIND_WORDS and w != "city"]
+        if words:
+            out.add(" ".join(words))
+    return out
+
+
+def _shared_figures(a: Project, b: Project) -> tuple[str, ...]:
+    """The figures two rows both state, at a size that is unlikely to be chance."""
+    out: list[str] = []
+    if (
+        a.investment_usd
+        and a.investment_usd == b.investment_usd
+        and a.investment_usd >= 100_000_000
+    ):
+        usd = a.investment_usd
+        out.append(f"${usd / 1e9:,.1f}B" if usd >= 1e9 else f"${usd / 1e6:,.0f}M")
+    if (
+        a.mw_planned
+        and b.mw_planned
+        and a.mw_planned >= 50
+        and abs(a.mw_planned - b.mw_planned) < 0.5
+    ):
+        out.append(f"{a.mw_planned:,.0f} MW")
+    return tuple(out)
 
 
 def _pair_evidence(a: Project, b: Project, keys, where) -> dict[str, Any]:

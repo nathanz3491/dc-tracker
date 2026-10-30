@@ -1184,6 +1184,25 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **One campus filed in two towns of a county under two companies is now compared,
+  and Project Jupiter is no longer counted twice** (`tracker/capex.py`
+  `suspected_duplicates` county pass, `_counties`, `_shared_figures`,
+  `DuplicatePair.holds_rows_out`, `rollup`, `counting`; `tracker/dupresolve.py`
+  `evidence_blocks_merge`; `tracker/prompts/duplicates-resolve-v3.txt`;
+  `docs/workflows/duplicates.md` + `duplicates.svg`;
+  `tests/test_duplicate_detection.py`, `tests/test_clean.py`).
+  - **Why:** every pass compared rows sharing a town, a company, a tranche or a name.
+    Project Jupiter was Oracle's row under Las Cruces and BorderPlex's under Santa
+    Teresa — the same 2,450 MW and $165B in Doña Ana County — so it was never asked
+    about, and capex counted it twice. Berry Hill ($100B) was missed the same way,
+    one row's county reading "Danville and Pittsylvania".
+  - **What changed:** rows of one county are compared when they also state the same
+    investment ($100M or more), the same capacity (50 MW or more) or a distinctive
+    name word; a county text naming several counts as each. On the 10-30 copy this
+    raised 55 pairs. The 5 that also share a party, Jupiter among them, count against
+    the totals at once: capex fell from $2,986B to $2,806B. The other 50 rest on
+    place alone, so they go to the nightly duplicate agent but hold no row out of a
+    total until judged, and only the agent that reads the articles may merge on them.
 - **A dismissed plausibility check reopens when the figure it was given to changes**
   (`tracker/audit.py` `_dismiss`, `DISMISSED`, `JUDGED_TOLERANCE`, `judged_figures`,
   `settled_codes`; `docs/data-quality.md`; `tests/test_audit_resolve.py`).

@@ -597,31 +597,36 @@ def duplicates() -> Canvas:
     c.legend(48, 108)
     c.rule(128)
 
-    c.section(48, 162, "how a pair is raised", "five passes, unioned — each reaches duplicates the others structurally cannot")
+    c.section(48, 162, "how a pair is raised", "six passes, unioned — each reaches duplicates the others structurally cannot")
 
     p1 = c.box(
-        48, 192, 236, 70, "1 · same locality",
-        ["(city or county, state), folded: accents,", "'County', a one-letter typo. Compares", "company strings AND party rows"],
+        48, 192, 236, 58, "1 · same locality",
+        ["(city or county, state), folded: accents,", "'County', one-letter typos"],
         role="cool", title_size=12,
     )
     p2 = c.box(
-        48, 268, 236, 70, "2 · dedup keys",
+        48, 255, 236, 58, "2 · dedup keys",
         ["bucketed on company, not locality —", "pairs county:richland with city:richland"],
         role="cool", title_size=12,
     )
     p3 = c.box(
-        48, 344, 236, 70, "3 · shared tranche key",
+        48, 318, 236, 58, "3 · shared tranche key",
         ["starts from the key, not a place:", "Crusoe's Abilene, Oracle's Shackelford"],
         role="cool", title_size=12,
     )
     p4 = c.box(
-        48, 420, 236, 70, "4 · one name, one state",
-        ["a distinctive name filed twice under", "places that do not match: Colossus,", "Project Jupiter, Polaris Forge 1"],
+        48, 381, 236, 58, "4 · one name, one state",
+        ["a distinctive name filed under places", "that do not match: Colossus, Polaris Forge"],
         role="cool", title_size=12,
     )
     p5 = c.box(
-        48, 496, 236, 70, "5 · the last 3 days' new rows",
-        ["each against its likeliest twin: a shared", "town or county, one operator within reach,", "or one operator's project name; 60 a night"],
+        48, 444, 236, 58, "5 · one county, two towns",
+        ["the same $ or MW, or a name word: Project", "Jupiter. Asked, not taken out of capex"],
+        role="cool", title_size=12,
+    )
+    p6 = c.box(
+        48, 507, 236, 58, "6 · the last 3 days' new rows",
+        ["each against its likeliest twin, wherever", "it is filed; 60 a night"],
         role="cool", title_size=12,
     )
 
@@ -630,7 +635,7 @@ def duplicates() -> Canvas:
         ["carrying every signal that", "holds for it, not only the", "one that raised it.", "", "Recording only the latter left", "31 live pairs with a single", "evidence class and no route", "to any decision"],
         role="panel", title_size=13,
     )
-    for b in (p1, p2, p3, p4, p5):
+    for b in (p1, p2, p3, p4, p5, p6):
         c.arrow([b.right(), (307, b.cy), (307, pair.cy), (330, pair.cy)])
 
     c.text(576, 258, "RANKED, STRONGEST FIRST", size=10.5, colour=SLATE, bold=True, spacing=SECTION_TRACKING)
@@ -640,6 +645,7 @@ def duplicates() -> Canvas:
         ("same tranche", TEAL, TEAL_FILL),
         ("shared operator", SLATE, COOL),
         ("city vs county", SLATE, COOL),
+        ("same county", SLATE, COOL),
         ("name overlap", RED, RED_FILL),
     ]:
         x = c.chip(x, 276, label, colour=colour, fill=fill)
@@ -709,7 +715,7 @@ def duplicates() -> Canvas:
 
     rails = c.box(
         556, 696, 356, 198, "Rails · what --merge still refuses, one function for both judges",
-        ["· confidence under the floor — 0.85 for the agent, 0.9 for", "   the one-call path, far above what a park needs", "· evidence is only a shared name word — unless both rows are", "   one operator's and the judge read the articles", "· evidence is only a cross-granularity key match — the old", "   path refuses outright; the agent may rule, because it", "   can read the articles and be a person with a map", "· the only shared tranche names a market and a sequence:", "   iad-3, hillsboro-1, held by two operators 60 km apart", "· the names differ by an ordinal — Polaris Forge 1 and 2", "· further apart than a campus spans: 25 km, +20 a town centre", "· the agent quoted no sentence from an article it read"],
+        ["· confidence under the floor — 0.85 for the agent, 0.9 for", "   the one-call path, far above what a park needs", "· evidence is only a shared name word — unless both rows are", "   one operator's and the judge read the articles", "· evidence is only a place — a city against its county, or", "   one county — the old path refuses; the agent may rule,", "   because it can read the articles and be a person with a map", "· the only shared tranche names a market and a sequence:", "   iad-3, hillsboro-1, held by two operators 60 km apart", "· the names differ by an ordinal — Polaris Forge 1 and 2", "· further apart than a campus spans: 25 km, +20 a town centre", "· the agent quoted no sentence from an article it read"],
         role="red", title_size=13, align="left", sub_size=10.2,
     )
     c.arrow([same.right(), (533, same.cy), (533, rails.cy), (556, rails.cy)], colour=RED)

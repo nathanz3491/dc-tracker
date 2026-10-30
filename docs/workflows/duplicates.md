@@ -14,11 +14,11 @@ Bare `tracker duplicates`, `duplicates parked` and `duplicates mixed` are
 **read-only**. `park`, `unpark` and `resolve` write and take the single-writer lock,
 so per `CLAUDE.md` §2 they run on the production host.
 
-![The duplicates workflow: four detection passes, the ranked evidence classes, the three answers with every rail that refuses a merge, and the mirror check for one row holding several campuses](duplicates.svg)
+![The duplicates workflow: six detection passes, the ranked evidence classes, the three answers with every rail that refuses a merge, and the mirror check for one row holding several campuses](duplicates.svg)
 
 ## How a pair is raised
 
-Four passes over the same rows, **unioned rather than substituted**, and a fifth for
+Five passes over the same rows, **unioned rather than substituted**, and a sixth for
 the rows a night adds. Each reaches duplicates the others structurally cannot, and
 the measurements are the argument:
 
@@ -28,8 +28,8 @@ the measurements are the argument:
 | 2 | dedup keys, bucketed on **company** — locality is the axis that disagrees | cross-granularity duplicates: Hyperion stored four times as `richland parish`, `holly ridge`, `richland`, `richmond parish`. Finds 259 pairs, but alone would **lose 225 of pass 1's 230** |
 | 3 | a shared tranche key, not a place | a campus filed under two locality names that do not match — Stargate as Crusoe's `abilene` row and Oracle's `shackelford county` row. Nine pairs, seven of them real |
 | 4 | one distinctive **name** in one state | a campus whose rows disagree about the place and share no tranche — xAI's Colossus as `Memphis` and as `孟菲斯`, TeraWulf's Lake Mariner under its county and under a town in it, Project Jupiter filed by two of its builders, CyrusOne Thad Hill as a town and as its county. The name must carry a word that is neither a place, nor industry vocabulary, nor the state: two operators' "Santa Clara Data Center" in Santa Clara name nothing |
-
-| 5 | **one new row**, against every row in its state | the last three days' new campuses, each put to its likeliest twin once (`capex.twin_pairs`, `duplicates resolve --created-since`). A candidate shares a locality at either granularity — one row's town, the other's county — or sits within the distance rail, or is the **same operator** within that reach (Menlo Digital under Phoenix and under Ahwatukee), or, when neither row could be placed, the same operator naming the same project (Galaxy's Helios under "Afton", a town the Census file does not list, and under Dickens County). Evidence still comes from the same test the other passes use. On 2026-10-05 the new row "SoftBank / SB Energy — PORTS Technology Campus" in Piketon sat unpaired beside "SB Energy — PORTS-Pike Technology Campus" in Pike County: town against county, under two company names, so neither pass 1 nor pass 2 compared them |
+| 5 | one **county**, with a second signal: the same investment ($100M or more), the same planned capacity (50 MW or more), or a distinctive name word | two towns of one county under two companies — Project Jupiter as Oracle's Las Cruces row and BorderPlex's Santa Teresa row, the same 2,450 MW and $165B, never compared and counted twice; Berry Hill, whose county text read "Danville and Pittsylvania" (a county text naming several counts as each). 55 pairs on the 10-30 copy. 50 rest on the county and a figure or a word alone, so such a pair **holds no row out of capex until it is judged** (`DuplicatePair.holds_rows_out`), and only a judge that read the articles may merge on it; the other 5 also share a party, Project Jupiter among them, and are held out at once |
+| 6 | **one new row**, against every row in its state | the last three days' new campuses, each put to its likeliest twin once (`capex.twin_pairs`, `duplicates resolve --created-since`). A candidate shares a locality at either granularity — one row's town, the other's county — or sits within the distance rail, or is the **same operator** within that reach (Menlo Digital under Phoenix and under Ahwatukee), or, when neither row could be placed, the same operator naming the same project (Galaxy's Helios under "Afton", a town the Census file does not list, and under Dickens County). Evidence still comes from the same test the other passes use. On 2026-10-05 the new row "SoftBank / SB Energy — PORTS Technology Campus" in Piketon sat unpaired beside "SB Energy — PORTS-Pike Technology Campus" in Pike County: town against county, under two company names, so neither pass 1 nor pass 2 compared them |
 
 **The nightly loop asks about every new row once.** After the discover crawl adds
 campuses, the nightly loop (`tracker/overnight.py`) places them first (`ingest geo`: county and town
@@ -452,13 +452,13 @@ Touching any of these means the poster is in scope. Re-render with
 
 | Concern | Where |
 | --- | --- |
-| The four detection passes | `tracker/capex.py` — `suspected_duplicates`, `_pair_evidence`, `_locality_buckets`, `_locality_word`, `_one_edit_apart` |
+| The five detection passes | `tracker/capex.py` — `suspected_duplicates`, `_pair_evidence`, `_locality_buckets`, `_locality_word`, `_one_edit_apart`, `_counties`, `_shared_figures` |
 | A new row against its likeliest twin | `tracker/capex.py` — `twin_pairs`, `_place_words`; `tracker/triage.py` — `resolve_pairs(pairs=)`; `tracker/cli/duplicates.py` — `duplicates_resolve(--created-since, --limit)`; `tracker/overnight.py` — `Night.run_round` (`twin_since`), `TWIN_DAYS`, `TWINS`, `ingest geo` before the pass |
 | The party signal, and the guard on it | `tracker/parties.py` — `shared_across_companies`, `_identifying_keys`, `_NOT_IDENTIFYING_ROLES`, `keys_for` |
 | One company, one key | `tracker/dedup.py` — `company_key`, `_company_slug`, `_reduce`, `_alias_table`, `_COMPANY_SUFFIXES`, `_COMPANY_ALIASES`, `same_operator`, `use_person_aliases`, `alias_listeners`; `tracker/seed/operators.toml` — `aliases`; `tracker/companies.py` — `add_alias`, `load_aliases`, `sync`; `tracker/db.py` — `_read_company_aliases`; migration `0043_company`; `tracker/parties.py` — `split_names`, `same_company_names`, `_folded`, `known_keys` |
 | Every key a row answers to | `tracker/keys.py` — `sync`, `remember`, `natural_key`, `renormalise`; `tracker/upsert.py` — `upsert_record` (end); `tracker/merge.py` — `merge_projects`; `tracker/derive.py` — `run`; `tracker/cli/quality.py` — `init` |
-| Evidence classes, labels, ranking | `tracker/capex.py` — `EVIDENCE_ORDER`, `EVIDENCE_LABELS`, `strongest_evidence`, `DuplicatePair.rank` |
-| Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw` |
+| Evidence classes, labels, ranking | `tracker/capex.py` — `EVIDENCE_ORDER`, `EVIDENCE_LABELS`, `strongest_evidence`, `DuplicatePair.rank`, `DuplicatePair.holds_rows_out` |
+| Grouping and the MW figure | `tracker/capex.py` — `duplicate_groups`, `double_counted_mw`, `rollup`, `counting` |
 | Key comparison primitives | `tracker/dedup.py` — `all_keys`, `is_cross_granularity_match`, `is_market_sequence`, `sibling_ordinals`, `exact_identity`, `shared_parties_across_companies` |
 | Parking | `tracker/pairs.py` — `park`, `unpark`, `listing`, `parked_keys`, `canonical` |
 | The rails, shared by both judges | `tracker/dupresolve.py` — `evidence_blocks_merge`, `merge_blocked`, `MIN_CONFIDENCE`, `MERGE_CONFIDENCE`, `FAR_APART_KM`, `TOWN_CENTRE_KM`, `distance_limit`, `on_town_centre`, `centroid_ids` |

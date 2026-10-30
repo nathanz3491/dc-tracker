@@ -504,7 +504,8 @@ def evidence_blocks_merge(
     # see. Still only for a judge that read the articles, like granularity below.
     named_by_one_operator = "name" in kinds and same_operator(a.company, b.company)
     if not hard:
-        if ("identity" in kinds or named_by_one_operator) and judge_read_the_sources:
+        place = "identity" in kinds or "county" in kinds
+        if (place or named_by_one_operator) and judge_read_the_sources:
             pass  # the refusals a judge that read the articles may pass
         elif market_only:
             return (
@@ -518,6 +519,13 @@ def evidence_blocks_merge(
             return (
                 "the only evidence is a cross-granularity key match; "
                 "dedup refuses to merge a county row into a city row unattended"
+            )
+        elif "county" in kinds:
+            # Two towns of one county, like the city-versus-county case above: only
+            # a judge that read both rows' articles may call them one campus.
+            return (
+                "the only evidence is a shared county beside a figure or a word; "
+                "only a judge that read the articles may merge on it"
             )
         else:
             return "the only evidence is a shared name word, which is not identity"

@@ -20,17 +20,17 @@ from tracker.models import Project, Risk, Source
 def _project(session, **kwargs) -> Project:
     """A row that passes every condition, so each test can break exactly one.
 
-    City and company are keyed off the name so two rows in one test are never
-    mistaken for one campus — `capex.suspected_duplicates` buckets by locality, and
-    two "Someone" rows in Englewood are a genuine duplicate pair, which would fail
-    `duplicates_answered` for reasons the test is not about.
+    City, county and company are keyed off the name so two rows in one test are
+    never mistaken for one campus — `capex.suspected_duplicates` buckets by
+    locality, and since 2026-10-30 compares rows of one county that state the same
+    figures, which every row built here does.
     """
     slug = str(kwargs.get("name", "Reference")).lower().replace(" ", "-")
     defaults = {
         "name": "Reference",
         "company": f"Operator {slug}",
         "city": f"Town {slug}",
-        "county": "Arapahoe County",
+        "county": f"{slug.title()} County",
         "state": "CO",
         "dedup_key": f"clean|{slug}",
         "phase": "construction",
