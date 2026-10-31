@@ -694,6 +694,32 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nights read more: the queue, both enrich passes and the two re-reads each take
+  half as much again** (`tracker/overnight.py` `Options`; `README.md`;
+  `docs/workflows/enrich.md`; `tests/test_overnight.py`).
+  - **Why:** Go's own usage put the account at 31% of its month with nine nights
+    left. The nights were stopping at their fixed point with work done and ceiling
+    unspent, ¥12–16 against ¥16.09, so a larger ceiling alone would buy nothing.
+  - **New defaults:** 45 campuses on 180 articles for the pipeline pass, 75 rows on
+    300 articles below T2, 1,350 queued articles, and 180 each to re-read and
+    re-check.
+- **The nightly money ceiling is read from OpenCode Go's own usage**
+  (`tracker/spend.py` `read_go_usage`, `parse_go_usage`, `go_allowance`,
+  `cycle_start`, `NIGHT_MAX_CNY`; `scripts/overnight.sh`; `README.md`;
+  `tests/test_cost_controls.py`).
+  - **Why:** the ledgers price calls exactly as Go does: $10.04 for the week Go put at
+    25% of $40, measured 2026-10-31. But they cannot see other work on the same plan,
+    and they spread the budget over a rolling 30 days, while Go's month resets and
+    keeps nothing. A quiet first fortnight therefore left 69% of the month to lapse.
+  - **What changed:** tonight's ceiling comes from Go's usage endpoint, through the
+    same key. It is the smaller of two rooms, spread over the nights left before
+    Go's month resets: what is left of the tracker's 85% by its own ledgers, and
+    what is left of 95% of the whole account in the month and in the week.
+  - **Limits and fallback:**
+    - The per-night cap rises from ¥24 to ¥45, a sanity bound now that the week and
+      the five hours come from Go itself.
+    - When Go cannot be read, the ledger-only ceiling stands in as before.
+    - The night's log opens with the ceiling and where it came from.
 - **The nightly loop's money ceiling follows OpenCode Go's $100 month**
   (`tracker/spend.py` `GO_MONTHLY_USD`, `NIGHT_MAX_CNY`; `tracker/overnight.py`;
   `README.md`; `tests/test_cost_controls.py`).

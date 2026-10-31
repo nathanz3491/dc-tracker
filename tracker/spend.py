@@ -46,9 +46,13 @@ Run as a module for the shell script that reads it::
     python -m tracker.spend allowance <dir>    # tonight's ceiling from the month's ledgers
 
 **The month.** OpenCode Go allows $100 a month on the flash model, and other work
-shares the plan; the tracker keeps to 85% of it (:func:`monthly_budget`). The nightly
-loop reads its ceiling from :func:`allowance`, over every ledger in its directory, so
-a dear night is paid back by the next ones.
+shares the plan; the tracker keeps to 85% of it (:func:`monthly_budget`). Since
+2026-10-31 the nightly loop reads its ceiling from Go's own usage windows
+(:func:`go_allowance`): what is left of the tracker's 85%, and of the account's room
+in the month and the week, spread over the nights before Go's month resets. When Go
+cannot be read it falls back on :func:`allowance`, over every ledger in its directory,
+so a dear night is paid back by the next ones. The ledgers price calls the way Go
+does: on 2026-10-31 they held $10.04 for the week Go reported at 25% of $40.
 
 **Mid-run.** Every paid pass asks :func:`ceiling_reached` before each item, against
 `TRACKER_SPEND_CEILING_CNY` (and `TRACKER_SPEND_CEILING_TOKENS`), so a pass that
@@ -57,7 +61,9 @@ starts under the ceiling stops near it instead of spending its whole batch past 
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
+import math
 import os
 import sys
 import threading
@@ -126,12 +132,21 @@ TRACKER_SHARE: Final = 0.85
 #: month inside the share as well.
 WINDOW_DAYS: Final = 30
 
-#: The most one night may spend, whatever budget is passed in. Above a night's share
-#: of the month (¥20.12 since 10-31) so it never trims the share, and inside the
-#: tracker's share of Go's other two caps as they stood on 10-18: seven nights at this
-#: are ¥168 against 85% of $40 a week (about ¥241), and one is under 85% of $16 per
-#: five hours (about ¥97).
-NIGHT_MAX_CNY: Final = 24.0
+#: The most one night may spend, whatever budget is passed in. A sanity bound, not
+#: the budget: the week and the five hours are read from Go itself since 10-31
+#: (:func:`go_allowance`). Room for a night that catches up a quiet start to Go's
+#: month, and one night at this is 6% of a $100 month, under a third of the
+#: five-hour window.
+NIGHT_MAX_CNY: Final = 45.0
+
+#: Go's other two windows as shares of the monthly limit (opencode.ai/docs/go,
+#: "Usage limits", read 2026-10-31): a rolling five hours at 20%, a week at 50%.
+GO_WEEKLY_SHARE: Final = 0.5
+GO_ROLLING_SHARE: Final = 0.2
+
+#: How full the nights will plan the whole Go account, in any of its windows. Other
+#: work runs on the same plan, and a window that runs out blocks it too.
+ACCOUNT_CEILING: Final = 0.95
 
 #: How fast the nights pay back what the last 29 days spent over their share -- a
 #: phase that ran past the ceiling, a day of hand-run work recorded in a ledger: a
@@ -173,6 +188,124 @@ def allowance(calls: Iterable[Call], *, now: dt.datetime, budget: float | None =
     spent = total(c for c in calls if c.when is not None and since <= c.when <= now)
     over = max(0.0, spent - share * (WINDOW_DAYS - 1))
     return max(0.0, min(NIGHT_MAX_CNY, share - over / CATCH_UP_DAYS))
+
+
+@dataclass(frozen=True)
+class GoWindow:
+    """One of Go's usage windows: how full it is, and when it empties."""
+
+    percent: float
+    resets_at: dt.datetime
+
+
+@dataclass(frozen=True)
+class GoUsage:
+    """The Go account's windows, as OpenCode's usage endpoint reports them."""
+
+    monthly: GoWindow
+    weekly: GoWindow | None = None
+    rolling: GoWindow | None = None
+
+
+def parse_go_usage(body: Any) -> GoUsage | None:
+    """A :class:`GoUsage` from the endpoint's JSON, or None when it is not that shape.
+
+    The shape, as read on 2026-10-31: ``{"usage": {"rolling": {"status": "ok",
+    "percent": 0, "resetsAt": "2026-10-31T13:16:47.000Z"}, "weekly": {...},
+    "monthly": {...}}}``. The month is required; the other two are optional.
+    """
+
+    def window(name: str) -> GoWindow | None:
+        raw = body["usage"].get(name)
+        if not isinstance(raw, dict):
+            return None
+        when = dt.datetime.fromisoformat(str(raw["resetsAt"]).replace("Z", "+00:00"))
+        return GoWindow(float(raw["percent"]), when)
+
+    try:
+        monthly = window("monthly")
+        if monthly is None:
+            return None
+        return GoUsage(monthly=monthly, weekly=window("weekly"), rolling=window("rolling"))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def read_go_usage(settings: Any = None, *, timeout: float = 20.0) -> GoUsage | None:
+    """The Go account's windows from `<opencode_go_base_url>/usage`, or None.
+
+    The endpoint counts everything the account spent: this machine's nights and
+    daytime, and other work on the same plan, which no ledger here can see. It reports
+    percentages, not dollars. None when there is no Go key or the request fails, and
+    the caller falls back on the ledgers.
+    """
+    try:
+        import httpx
+
+        from tracker.config import get_settings
+
+        settings = settings or get_settings()
+        key = settings.opencode_go_api_key
+        secret = key.get_secret_value().strip() if key else ""
+        if not secret:
+            return None
+        url = settings.opencode_go_base_url.rstrip("/") + "/usage"
+        response = httpx.get(url, headers={"Authorization": f"Bearer {secret}"}, timeout=timeout)
+        response.raise_for_status()
+        return parse_go_usage(response.json())
+    except Exception:  # a ceiling that cannot be read must never stop a night
+        return None
+
+
+def cycle_start(resets_at: dt.datetime) -> dt.datetime:
+    """When Go's month that ends at `resets_at` began: one calendar month earlier."""
+    year, month = (
+        (resets_at.year, resets_at.month - 1) if resets_at.month > 1 else (resets_at.year - 1, 12)
+    )
+    return resets_at.replace(
+        year=year, month=month, day=min(resets_at.day, calendar.monthrange(year, month)[1])
+    )
+
+
+def go_allowance(usage: GoUsage, calls: Iterable[Call], *, now: dt.datetime) -> float:
+    """Tonight's money ceiling, in yuan, from the Go account's own windows.
+
+    Two rooms, each spread over the nights left before its window resets, and the
+    smaller wins:
+
+    * **the tracker's share** — 85% of the month, less what the tracker's ledgers
+      spent since Go's month began. The ledgers match Go's own accounting to the
+      cent: on 2026-10-31 they held $10.04 for the week Go put at 25% of $40;
+    * **the whole account** — 95% of the month and of the week, less what Go says the
+      account has used, so other work on the plan is never squeezed out of a window.
+
+    **Unspent money is spread over the rest of Go's month**, because Go's month resets
+    and carries nothing over. The ledger-only :func:`allowance` deliberately refused
+    that on a rolling window, where savings that leave the window are owed back.
+    Here, a quiet first fortnight left 54% of the month unused with nine nights to go.
+    A night that overspends shows in the next night's reading, so a wrong plan
+    figure corrects itself night by night.
+    """
+    plan = GO_MONTHLY_USD * CNY_PER_USD
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.UTC)
+
+    def nights(until: dt.datetime) -> int:
+        return max(1, math.ceil((until - now).total_seconds() / 86400))
+
+    month = usage.monthly
+    start = cycle_start(month.resets_at)
+    mine = total(c for c in calls if c.when is not None and start <= c.when <= now) / plan * 100
+    tracker_room = max(0.0, TRACKER_SHARE * 100 - mine)
+    account_room = max(0.0, ACCOUNT_CEILING * 100 - month.percent)
+    percent = min(tracker_room, account_room) / nights(month.resets_at)
+    if usage.weekly is not None:
+        week_room = max(0.0, ACCOUNT_CEILING * 100 - usage.weekly.percent) * GO_WEEKLY_SHARE
+        percent = min(percent, week_room / nights(usage.weekly.resets_at))
+    if usage.rolling is not None:
+        rolling_room = max(0.0, ACCOUNT_CEILING * 100 - usage.rolling.percent) * GO_ROLLING_SHARE
+        percent = min(percent, rolling_room)
+    return max(0.0, min(NIGHT_MAX_CNY, percent / 100 * plan))
 
 
 def read_all(directory: Path | str) -> list[Call]:
@@ -488,7 +621,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     if args[0] == "allowance":
-        print(f"{allowance(read_all(args[1]), now=dt.datetime.now(dt.UTC)):.2f}")
+        # From Go's own windows when they can be read, else from the ledgers alone.
+        # The why goes to stderr, which `overnight.sh` appends to the night's log.
+        now, calls = dt.datetime.now(dt.UTC), read_all(args[1])
+        usage = read_go_usage()
+        if usage is None:
+            tonight = allowance(calls, now=now)
+            why = "from the ledgers (Go's usage could not be read)"
+        else:
+            tonight = go_allowance(usage, calls, now=now)
+            week = f", week {usage.weekly.percent:g}%" if usage.weekly else ""
+            why = (
+                f"from Go: month {usage.monthly.percent:g}%{week}, resets "
+                f"{usage.monthly.resets_at:%Y-%m-%d}"
+            )
+        print(f"{tonight:.2f}")
+        print(f"tonight's ceiling CNY {tonight:.2f}, {why}", file=sys.stderr)
         return 0
     calls = read(args[1])
     if args[0] == "total":

@@ -338,7 +338,7 @@ STARTED_UTC = "2026-10-29 22:01:00"
 ROUND_ONE = [
     ("discover", "--no-show"),
     ("news", "--baselines", "300", "--max-queries", "1500"),
-    ("ingest", "queue", "--new-first", "--limit", "900", "--screen"),
+    ("ingest", "queue", "--new-first", "--limit", "1350", "--screen"),
     ("ingest", "geo"),
     (
         "duplicates", "resolve", "--merge", "--min-confidence", "0.85",
@@ -353,10 +353,10 @@ ROUND_ONE = [
     ("risks", "confirm", "--limit", "40"),
     ("logic", "resolve", "--limit", "60"),
     ("tranches", "review", "--limit", "20"),
-    ("enrich", "--select", "30", "--pipeline", "--budget", "120"),
-    ("enrich", "--select", "50", "--t2", "--target", "0", "--budget", "200"),
-    ("ingest", "reread", "--cached-only", "--existing-only", "--limit", "120"),
-    ("ingest", "recheck", "--cached-only", "--existing-only", "--limit", "120"),
+    ("enrich", "--select", "45", "--pipeline", "--budget", "180"),
+    ("enrich", "--select", "75", "--t2", "--target", "0", "--budget", "300"),
+    ("ingest", "reread", "--cached-only", "--existing-only", "--limit", "180"),
+    ("ingest", "recheck", "--cached-only", "--existing-only", "--limit", "180"),
     ("backfill", "derive"),
     ("clean", "--snapshot", "--since", "1"),
 ]  # fmt: skip
@@ -510,8 +510,8 @@ CEILINGS = [
     ("logic", ("--discover", "0"), ("risks",), ("logic", "resolve", "--limit")),
     ("tranches", ("--discover", "0"), ("logic", "resolve", "--limit"), ("tranches",)),
     ("pipeline", ("--discover", "0"), ("tranches",), ("enrich",)),
-    ("enrich", ("--discover", "0"), ("enrich", "--select", "30"), ("enrich", "--select", "50")),
-    ("reread", ("--discover", "0"), ("enrich", "--select", "50"), ("ingest", "reread")),
+    ("enrich", ("--discover", "0"), ("enrich", "--select", "45"), ("enrich", "--select", "75")),
+    ("reread", ("--discover", "0"), ("enrich", "--select", "75"), ("ingest", "reread")),
     ("recheck", ("--discover", "0"), ("ingest", "reread"), ("ingest", "recheck")),
 ]
 
@@ -745,10 +745,10 @@ def test_the_defaults_are_the_shells():
     assert (o.hours, o.rounds, o.dry_rounds) == (10, 20, 2)
     assert (o.findings, o.pairs, o.audit, o.risks, o.nest) == (60, 40, 60, 40, 20)
     assert (o.pipeline, o.pipeline_budget, o.enrich, o.enrich_budget, o.enrich_rounds) == (
-        30, 120, 50, 200, 1,
+        45, 180, 75, 300, 1,
     )  # fmt: skip
-    assert (o.discover, o.screen, o.baselines, o.search_cap) == (900, True, 300, 2000)
-    assert (o.dates, o.reread, o.recheck, o.min_confidence) == (150, 120, 120, "0.85")
+    assert (o.discover, o.screen, o.baselines, o.search_cap) == (1350, True, 300, 2000)
+    assert (o.dates, o.reread, o.recheck, o.min_confidence) == (150, 180, 180, "0.85")
     assert (o.merge, o.cny, o.tokens, o.backup_every) == (True, None, 25_000_000, 5)
     assert (o.judgement_effort, o.extraction_effort, o.agent_effort) == ("high", None, None)
     assert o.local_judgement is False
@@ -838,7 +838,7 @@ def test_discover_0_skips_the_news_and_places_rows_in_the_free_phase(tmp_path):
 def test_enrich_0_skips_the_t2_pass_but_not_the_pipeline_pass(tmp_path):
     run = go(make(tmp_path, ["--rounds", "1", "--enrich", "0"]))
     enrich = [c for c in run.stub.calls if c[0] == "enrich"]
-    assert enrich == [("enrich", "--select", "30", "--pipeline", "--budget", "120")]
+    assert enrich == [("enrich", "--select", "45", "--pipeline", "--budget", "180")]
     assert "    merge=1  enrich=0  screen=1  min-confidence 0.85\n" in run.text
 
 
@@ -852,13 +852,13 @@ def test_pipeline_dates_reread_and_recheck_can_each_be_turned_off(tmp_path):
     assert ("backfill", "dates", "--apply") in run.stub.calls
     assert not any(c[:2] in {("ingest", "reread"), ("ingest", "recheck")} for c in run.stub.calls)
     assert [c for c in run.stub.calls if c[0] == "enrich"] == [
-        ("enrich", "--select", "50", "--t2", "--target", "0", "--budget", "200")
+        ("enrich", "--select", "75", "--t2", "--target", "0", "--budget", "300")
     ]
 
 
 def test_no_screen_reads_the_queue_unscreened(tmp_path):
     run = go(make(tmp_path, ["--rounds", "1", "--no-screen"]))
-    assert ("ingest", "queue", "--new-first", "--limit", "900", "--no-screen") in run.stub.calls
+    assert ("ingest", "queue", "--new-first", "--limit", "1350", "--no-screen") in run.stub.calls
 
 
 def test_enrich_rounds_extends_both_enrich_passes(tmp_path):

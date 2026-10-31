@@ -189,11 +189,23 @@ the old value hid, and merging changes the survivor's claim set and can match a
 third row. Ceilings on hours, rounds, **yuan** and tokens, a `VACUUM INTO` snapshot
 before the first merge, and one run at a time. The money ceiling is tonight's share
 of a month by default (`python -m tracker.spend allowance <ledger directory>`). Other
-work shares the OpenCode Go plan, so the tracker keeps to 85% of its $100 month:
-¥603.50 over a rolling 30 days. That counts the daytime too: a command run by hand
-and the console's AI panels write `data/runs/daytime-YYYYMM.spend` beside the nights'
-ledgers. A night gets a thirtieth of the month, ¥20.12, less a seventh of whatever the
-last 29 days spent over their share; unspent money is not carried over. `--cny N` sets a flat ceiling instead. It is
+work shares the OpenCode Go plan, so the tracker keeps to 85% of its $100 month.
+Since 2026-10-31 the share is read from Go itself: its usage endpoint
+(`<opencode_go_base_url>/usage`, the Go key) reports how full the account's month,
+week and five hours are. Tonight gets the smaller of two rooms, spread over the nights
+left before Go's month resets:
+- what is left of the tracker's 85%, by its own ledgers since the month began;
+- what is left of 95% of the whole account in the month and the week, so other work
+  on the plan is never squeezed out.
+
+Go's month resets and keeps nothing, so a quiet stretch is spent before it ends, never
+more than ¥45 a night. The ledgers price calls as Go does: $10.04 for a week Go put at
+25% of $40, measured 2026-10-31. When Go cannot be read, a night gets a thirtieth of
+the month from the ledgers, ¥20.12, less a seventh of whatever the last 29 days spent
+over their share. The ledgers count the daytime too: a command run by hand and the
+console's AI panels write `data/runs/daytime-YYYYMM.spend` beside the nights' ledgers.
+The night's log opens with the ceiling and where it came from. `--cny N` sets a flat
+ceiling instead. It is
 checked before every paid phase, and inside each one too: a command reads
 `TRACKER_SPEND_CEILING_CNY` (and `TRACKER_SPEND_CEILING_TOKENS`; unset is no ceiling)
 and asks `tracker.spend.ceiling_reached` before every item or wave it starts — every
@@ -231,10 +243,10 @@ other shell, and `scripts/overnight.sh --help` lists every option (the same as
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`).
 Before it, a smaller enrich pass looks for the opening date and planned capacity of
-campuses being built or permitted that lack one (`--pipeline`, default 30 campuses
-and 120 articles), largest first: without a date a campus is missing from the
+campuses being built or permitted that lack one (`--pipeline`, default 45 campuses
+and 180 articles), largest first: without a date a campus is missing from the
 supply chart and can never be flagged as late.
-The first round also reads the news and adds campuses (`--discover`, default 900): it
+The first round also reads the news and adds campuses (`--discover`, default 1350): it
 polls the feeds, which costs nothing, and reads that many queued articles through
 the crawl's identity check (`ingest queue --new-first`). A model reads
 their headlines first and sets aside the pages about a place abroad (`--no-screen` to
@@ -250,11 +262,11 @@ Enrich reads for one row and creates none, so without this step nothing in the l
 added a campus. The first round also asks publishers for the dates of up to 150
 undated articles (`--dates`; one plain request each, newest first, never the same page
 twice in 90 days) and SEC for the filing date of every undated filing, which no page
-states (one request a company, outside that 150), and re-reads up to 60 cached articles
-that an older extraction prompt last read (`--reread`, about ¥0.8), so a tightened gate
+states (one request a company, outside that 150), and re-reads up to 180 cached articles
+that an older extraction prompt last read (`--reread`, about ¥2.4), so a tightened gate
 reaches rows written before it. A change to the gate itself does not change the prompt,
-so it has its own re-read: up to 60 cached articles holding a value, milestone or party
-the gate refused before its last revision (`--recheck`, about ¥1.2), each taken once.
+so it has its own re-read: up to 180 cached articles holding a value, milestone or party
+the gate refused before its last revision (`--recheck`, about ¥3.6), each taken once.
 A round counts as progress only when a count falls below the lowest it has been that
 night, so counts that wobble up and back down end the night instead of prolonging
 it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the

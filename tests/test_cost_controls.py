@@ -421,6 +421,110 @@ def test_the_allowance_is_a_command_the_loop_can_read(tmp_path, capsys):
     assert capsys.readouterr().out.strip() == f"{spend.monthly_budget() / 30:.2f}"
 
 
+# --- the ceiling read from Go's own usage windows ---------------------------------------
+#
+# Go's usage endpoint, read on 2026-10-31: the account at 31% of its month with nine
+# nights to its reset, while the ledgers had the nights spending under their share. The
+# ledgers price calls as Go does ($10.04 for a week Go put at 25% of $40), so what was
+# missing was not accuracy but Go's month: it resets, and what is unspent is lost.
+
+GO_REPLY = {
+    "usage": {
+        "rolling": {"status": "ok", "percent": 0, "resetsAt": "2026-10-31T13:16:47.000Z"},
+        "weekly": {"status": "ok", "percent": 25, "resetsAt": "2026-11-02T00:00:00.000Z"},
+        "monthly": {"status": "ok", "percent": 31, "resetsAt": "2026-11-09T14:55:37.000Z"},
+    }
+}
+#: 18:00 in Beijing on 10-31, as the loop starts: ten nights before the month resets,
+#: two before the week does.
+LOOP_STARTS = dt.datetime(2026, 10, 31, 10, 0, tzinfo=dt.UTC)
+PLAN_CNY = spend.GO_MONTHLY_USD * spend.CNY_PER_USD
+
+
+def _go(monthly: float = 31, weekly: float = 25, rolling: float = 0) -> spend.GoUsage:
+    usage = spend.parse_go_usage(GO_REPLY)
+    return spend.GoUsage(
+        monthly=spend.GoWindow(monthly, usage.monthly.resets_at),
+        weekly=spend.GoWindow(weekly, usage.weekly.resets_at),
+        rolling=spend.GoWindow(rolling, usage.rolling.resets_at),
+    )
+
+
+def _spent(percent_of_plan: float) -> list:
+    """The tracker's own ledgers this Go month, one off-peak night (20:00 in Beijing)."""
+    when = dt.datetime(2026, 10, 20, 12, 0, tzinfo=dt.UTC)
+    return [spend.parse(_night(when, percent_of_plan / 100 * PLAN_CNY))]
+
+
+def test_gos_usage_reply_is_read_as_its_three_windows():
+    usage = spend.parse_go_usage(GO_REPLY)
+    assert usage.monthly == spend.GoWindow(
+        31.0, dt.datetime(2026, 11, 9, 14, 55, 37, tzinfo=dt.UTC)
+    )
+    assert (usage.weekly.percent, usage.rolling.percent) == (25.0, 0.0)
+    for body in ({"usage": {}}, {"error": "unauthorized"}, "<html>", None):
+        assert spend.parse_go_usage(body) is None
+
+
+def test_gos_month_began_one_calendar_month_before_it_resets():
+    assert spend.cycle_start(dt.datetime(2026, 11, 9, 14, 55, tzinfo=dt.UTC)) == dt.datetime(
+        2026, 10, 9, 14, 55, tzinfo=dt.UTC
+    )
+    assert spend.cycle_start(dt.datetime(2026, 3, 31, tzinfo=dt.UTC)) == dt.datetime(
+        2026, 2, 28, tzinfo=dt.UTC
+    )
+    assert spend.cycle_start(dt.datetime(2027, 1, 9, tzinfo=dt.UTC)) == dt.datetime(
+        2026, 12, 9, tzinfo=dt.UTC
+    )
+
+
+def test_a_quiet_start_to_gos_month_is_spent_over_the_nights_left():
+    """The tracker at 23% of the plan, the account at 31%: the tracker's 85% leaves
+    62 points and the account's 95% leaves 64, so 62 points over ten nights."""
+    tonight = spend.go_allowance(_go(), _spent(23), now=LOOP_STARTS)
+    assert tonight == pytest.approx(0.062 * PLAN_CNY, abs=0.05)  # about ¥44
+    assert tonight > spend.monthly_budget() / 30, "more than a flat thirtieth"
+
+
+def test_other_work_on_the_plan_is_never_squeezed_out():
+    """Other work took the account to 88%: only 7 points are left for everyone."""
+    tonight = spend.go_allowance(_go(monthly=88), _spent(23), now=LOOP_STARTS)
+    assert tonight == pytest.approx(0.007 * PLAN_CNY, abs=0.05)
+
+
+def test_a_full_week_holds_the_night_back_however_much_month_is_left():
+    tonight = spend.go_allowance(_go(weekly=93), _spent(23), now=LOOP_STARTS)
+    assert tonight == pytest.approx((95 - 93) * 0.5 / 2 / 100 * PLAN_CNY, abs=0.05)
+
+
+def test_a_tracker_past_its_share_gets_nothing_and_no_night_passes_the_cap():
+    assert spend.go_allowance(_go(), _spent(86), now=LOOP_STARTS) == 0.0
+    last_day = spend.GoUsage(
+        monthly=spend.GoWindow(5, LOOP_STARTS + dt.timedelta(hours=20)),
+        weekly=spend.GoWindow(0, LOOP_STARTS + dt.timedelta(hours=20)),
+    )
+    assert spend.go_allowance(last_day, [], now=LOOP_STARTS) == spend.NIGHT_MAX_CNY
+
+
+def test_the_loop_reads_gos_windows_and_falls_back_on_the_ledgers(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(spend, "read_go_usage", lambda: _go())
+    assert spend.main(["allowance", str(tmp_path)]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == f"{spend.go_allowance(_go(), [], now=dt.datetime.now(dt.UTC)):.2f}"
+    assert "from Go: month 31%, week 25%" in out.err
+
+    monkeypatch.setattr(spend, "read_go_usage", lambda: None)
+    assert spend.main(["allowance", str(tmp_path)]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == f"{spend.monthly_budget() / 30:.2f}"
+    assert "from the ledgers" in out.err
+
+
+def test_without_a_go_key_nothing_is_asked():
+    keyless = Settings(_env_file=None, opencode_go_api_key=None)
+    assert spend.read_go_usage(keyless) is None
+
+
 # --- the ceiling a pass asks about mid-run --------------------------------------
 
 

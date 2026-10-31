@@ -105,9 +105,11 @@ mkdir -p "$(dirname "$LOG")"
 # `tracker` child appends to it. The name is `ledger_name` in tracker/overnight.py,
 # which the status page reads back.
 export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight-$(date '+%Y%m%d-%H%M%S').spend}"
-# Tonight's share of the month, read before tonight's ledger exists. Empty when it
-# cannot be read; the loop then falls back, and `--cny` overrides it either way.
-ALLOWANCE="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>/dev/null || true)"
+# Tonight's share of the month, read before tonight's ledger exists: from Go's own
+# usage windows, or the ledgers when Go cannot be read. Its one-line why goes to the
+# night's log. Empty when it cannot be read at all; the loop then falls back, and
+# `--cny` overrides it either way.
+ALLOWANCE="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>>"$LOG" || true)"
 exec > >(tee -a "$LOG") 2>&1
 
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has no

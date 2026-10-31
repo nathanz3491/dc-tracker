@@ -89,9 +89,10 @@ from the supply-by-year chart and can never be flagged as late; one with no size
 nothing to it. On 2026-10-26 that was 111 of 258 campuses under construction and 135
 of 169 in permitting, and the `--t2` order seldom reached them: it ranks by how close a
 row is to the bar, and these rows usually miss one of nine fields at most. The
-overnight loop now gives them their own pass before the T2 one (30 rows, 120 articles,
-out of the 80 rows the T2 pass had alone). Rows asked twice with nothing found are
-passed over exactly as above, so the same thirty do not come back every night.
+overnight loop now gives them their own pass before the T2 one: 45 rows on 180 articles
+since 2026-10-31, when the nights' volumes rose by half; 30 on 120 when the pass began,
+out of the 80 rows the T2 pass had alone. Rows asked twice with nothing found are
+passed over exactly as above, so the same campuses do not come back every night.
 
 ## `--basics`: the fields that say what a project is
 

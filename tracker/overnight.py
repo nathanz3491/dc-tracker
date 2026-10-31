@@ -146,6 +146,13 @@ the duplicate, audit, obstacle, contradiction and tranche passes in a round, so 
 ceiling reached early cuts reading, never settling. An overshoot is one enrich pass (about ¥6), and the next
 nights' allowance pays it back.
 
+Raised by half on 2026-10-31, when Go's own usage showed the nights stopping at their
+fixed point under the ceiling (¥12-16 a night against ¥16.09, 31% of Go's month used
+with nine nights left): 45 + 75 rows on 180 + 300 articles, 1,350 queued articles, and
+180 each to re-read and re-check. The ceiling is now read from Go's windows
+(`tracker.spend.go_allowance`), so a quiet stretch of Go's month is spent before it
+resets.
+
 Later rounds are cheaper than the first: every paid phase records what it answered
 or could not decide, keyed on the evidence it was shown, and does not re-offer it
 until that evidence changes or a month passes (`tracker/declines.py`).
@@ -320,12 +327,12 @@ class Options:
     # --pipeline`). On 10-26, 111 of 258 under construction and 135 of 169 in
     # permitting had no date, so the supply chart and the delay flags could not see
     # them; the T2 pass weighs every field alike and rarely chose them.
-    pipeline: int = 30
-    pipeline_budget: int = 120
-    enrich: int = 50
-    enrich_budget: int = 200
+    pipeline: int = 45
+    pipeline_budget: int = 180
+    enrich: int = 75
+    enrich_budget: int = 300
     enrich_rounds: int = 1
-    discover: int = 900
+    discover: int = 1350
     # Have a model read the queued headlines first and set aside what cannot be campus
     # news (`ingest queue --screen`). On, for pages about a place abroad only:
     # measured on 5,272 past reads on 2026-10-26, that spares 230 useless reads and
@@ -335,8 +342,8 @@ class Options:
     baselines: int = 300
     search_cap: int = 2000
     dates: int = 150
-    reread: int = 120
-    recheck: int = 120
+    reread: int = 180
+    recheck: int = 180
     min_confidence: str = "0.85"
     merge: bool = True
     #: None: tonight's share of the month (`tracker.spend allowance`).
@@ -426,25 +433,25 @@ def parser() -> argparse.ArgumentParser:
         "--pipeline",
         type=int,
         default=d.pipeline,
-        help="campuses being built or permitted with no online date or capacity to enrich first (default 30); 0 to skip",
+        help="campuses being built or permitted with no online date or capacity to enrich first (default 45); 0 to skip",
     )
     a(
         "--pipeline-budget",
         type=int,
         default=d.pipeline_budget,
-        help="articles that pass may read (default 120)",
+        help="articles that pass may read (default 180)",
     )
     a(
         "--enrich",
         type=int,
         default=d.enrich,
-        help="projects below T2 to enrich after it (default 50); 0 to skip",
+        help="projects below T2 to enrich after it (default 75); 0 to skip",
     )
     a(
         "--enrich-budget",
         type=int,
         default=d.enrich_budget,
-        help="articles that pass may read (default 200)",
+        help="articles that pass may read (default 300)",
     )
     a(
         "--enrich-rounds",
@@ -456,7 +463,7 @@ def parser() -> argparse.ArgumentParser:
         "--discover",
         type=int,
         default=d.discover,
-        help="queued articles to read, the news first (default 900); 0 to skip discovery, the news watch and the read altogether",
+        help="queued articles to read, the news first (default 1350); 0 to skip discovery, the news watch and the read altogether",
     )
     screen = p.add_mutually_exclusive_group()
     screen.add_argument(
@@ -491,13 +498,13 @@ def parser() -> argparse.ArgumentParser:
         "--reread",
         type=int,
         default=d.reread,
-        help="articles to re-read under the current prompt, first round (default 120); 0 to skip",
+        help="articles to re-read under the current prompt, first round (default 180); 0 to skip",
     )
     a(
         "--recheck",
         type=int,
         default=d.recheck,
-        help="articles holding a refusal from before the gate's last revision to re-read, first round (default 120); 0 to skip",
+        help="articles holding a refusal from before the gate's last revision to re-read, first round (default 180); 0 to skip",
     )
     a(
         "--min-confidence",
