@@ -30,6 +30,9 @@ from tracker.cli import app
 #: Every command `tracker --help` offers, sub-commands qualified by their group.
 #: Captured from the module before it was split, and unchanged by the split.
 COMMANDS = {
+    "answers",
+    "answers load",
+    "answers show",
     "audit",
     "audit check",
     "audit resolve",

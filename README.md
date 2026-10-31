@@ -48,7 +48,9 @@ reads the articles behind the row, searches if they cannot settle it, and rules 
 wrong citations out of the merge. It never assigns a field: a scalar is a cache of
 the claim set, so an assignment is undone by the next `backfill derive`, and
 superseding the claim is what survives. `--no-agent` gives you the keyboard,
-`--auto` the mechanical repairs only.
+`--auto` the mechanical repairs only. `tracker answers` scores the stored values
+against a verified answer key, the one measurement here of whether a value is
+*true* rather than quoted; `--against <snapshot>` lists every answer a change moved.
 
 Two of those commands now check their own work before writing. `sync` and `ingest
 crawl` consult a model at the one moment a duplicate can be prevented rather than

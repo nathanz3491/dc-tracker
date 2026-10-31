@@ -260,6 +260,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "changes",
             # Beside `changes`: the values a run emptied with no ruling behind them.
             "losses",
+            # Beside both: how many stored values a verified answer key says are
+            # right, which neither a count of quotes nor a diff can say.
+            "answers",
+            "answers show",
             # How the news came in last night, per source.
             "news report",
             "queue",
@@ -351,6 +355,8 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "init",
             "backfill",
+            # Stores verified answers; a batch is checked whole before any is written.
+            "answers load",
             "export",
             "watch add",
             "watch rm",

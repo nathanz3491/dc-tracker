@@ -758,6 +758,59 @@ class PartyTenure(Base):
         )
 
 
+class AnswerKey(Base):
+    """A verified answer for one campus and field, to score the database against.
+
+    Migration 0050. Nothing else says whether a stored value is true; `tracker.answer_key`
+    scores the rows against these. `value` is text — a stage, a number, an ISO date read
+    at `precision` — and NULL on a `verified` answer means the field should be empty.
+    """
+
+    __tablename__ = "answer_key"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), nullable=False
+    )
+    field: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[str | None] = mapped_column(Text)
+    low: Mapped[float | None] = mapped_column(REAL)
+    high: Mapped[float | None] = mapped_column(REAL)
+    precision: Mapped[str | None] = mapped_column(Text)
+    basis: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    source_url: Mapped[str | None] = mapped_column(Text)
+    quote: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    method: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "field", name="uq_answer_key_project_field"),
+        CheckConstraint(
+            sql_in(
+                "field",
+                ("phase", "mw_planned", "investment_usd", "expected_online", "first_announced"),
+            ),
+            name="ck_answer_key_field",
+        ),
+        CheckConstraint(
+            sql_in("status", ("verified", "unsettled", "draft")), name="ck_answer_key_status"
+        ),
+        CheckConstraint(
+            "precision IS NULL OR "
+            + sql_in("precision", ("day", "month", "quarter", "half", "year")),
+            name="ck_answer_key_precision",
+        ),
+        CheckConstraint("low IS NULL OR high IS NULL OR low <= high", name="ck_answer_key_range"),
+        CheckConstraint("length(method) > 0", name="ck_answer_key_method"),
+        Index("ix_answer_key_project_id", "project_id"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<AnswerKey p={self.project_id} {self.field}={self.value!r} {self.status}>"
+
+
 class Company(Base):
     """One company, under the key every row is already filed by.
 

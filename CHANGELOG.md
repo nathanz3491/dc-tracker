@@ -12,6 +12,28 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **An answer key, and a score of how many stored values are true**
+  (`tracker/answer_key.py`; migration 0050 `answer_key`; `tracker answers`, `answers
+  load`, `answers show`; `tracker/merge.py` carries a campus's answers to the
+  survivor; `docs/data-quality.md` "The answer key", `docs/workflows/duplicates.md`;
+  `tests/test_answer_key.py`).
+  - **Why:** nothing measured whether a value is true. The quote check says a
+    sentence exists, the tiers count open questions, and each merge rule was argued
+    from the incident that prompted it. On 2026-10-30 a researched draft for the 50
+    largest campuses disagreed with 83 of 259 stored answers, every one of them
+    resting on a real sentence. With nothing to score against, a change to how values
+    are chosen could not be weighed on net.
+  - **What it does:** verified answers are held one per campus and field (stage,
+    planned MW, investment, online date, first announced). `tracker answers` gives
+    each field's share right with its 95% interval.
+    - A figure within 5% or inside a stated range is right.
+    - A date is right inside the answer's span, and imprecise when it agrees only
+      coarsely.
+    - An empty field is counted apart from a wrong one.
+  - **Weighing a change:** `--against <snapshot>` scores both databases with the same
+    answers and lists every answer a change moved.
+  - **Which answers count:** only `verified` answers are scored. How an answer earns
+    that, without a person, is in the data-quality page. No answers are loaded yet.
 - **A re-read no longer deletes a value it simply did not repeat, and the nightly
   loop puts back any value lost without a ruling** (`tracker/upsert.py`
   `omitted_quietly`, `reinstate`, `upsert_record(quote_holds=)`;

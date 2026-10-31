@@ -275,8 +275,10 @@ row keeps following the campus: the watch moves to the survivor before the row i
 deleted, rather than going with it. So do the decisions people and the nightly
 review made about the folded row that live outside its citations: how its tranches
 nest (`block_nesting`, migration 0042) and a role that has ended there — a former
-tenant (`party_tenure`, migration 0044). Each is moved unless the survivor already
-holds its own for the same tranche or party, which then stands.
+tenant (`party_tenure`, migration 0044) — and the verified answers the answer key
+holds for the campus (`answer_key`, migration 0050). Each is moved unless the
+survivor already holds its own for the same tranche, party or field, which then
+stands.
 
 `folded` carries a run's merges forward, so a later pair naming a row this run just
 deleted is asked about the survivor instead. That is what settles a group of four
@@ -469,7 +471,7 @@ Touching any of these means the poster is in scope. Re-render with
 | One loop for every paid pass: per-pair commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/spend.py` — `ceiling_reached`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`; `tracker/llm.py` — `without_thinking` |
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `pick`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
-| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint` |
+| The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint`; `tracker/answer_key.py` — `repoint` |
 | Prevention at write time | `tracker/gatekeeper.py` — `same_site_arbiter`, `_warm_verdict`, `_cold_verdict`, `_rejection`, `RULES`; `tracker/ingest/crawl.py` — `ExtractionContext` |
 | One row, several campuses | `tracker/mixed.py` — `mixed_rows`, `_Lexicon.build`, `_Row.read`, `_Row.words`, `_group`, `_names_the_other`, `_disagree`, `_stated`, `_ruled_out`, `_carries_anything`, `_NOT_A_SITE`, `_LANDFORMS`, `_CODE`, `_CODENAME`, `_LANDMARK`, `BRAND_KM`; `tracker/overnight.py` — `Night.morning_report` |
 | CLI, printers, keyboard prompt | `tracker/cli/duplicates.py` — `merge`, `unalias`, `duplicates`, `duplicates_park`, `duplicates_unpark`, `duplicates_resolve`, `duplicates_parked`, `duplicates_mixed`, `_print_parked`, `_dupe_prompt` |

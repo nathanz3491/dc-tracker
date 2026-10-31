@@ -35,8 +35,8 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from tracker import answer_key, watchlist
 from tracker import keys as keys_mod
-from tracker import watchlist
 from tracker.models import Event, Project, ProjectAlias, Risk, utcnow
 from tracker.normalize import url_identity
 from tracker.upsert import SOURCE_NOTE_PREFIX, fold_source, recompute_from_sources, record_tag
@@ -210,6 +210,10 @@ def merge_projects(
         # survivor. One the survivor already ruled on is the survivor's.
         _move_nesting(session, keep, dupe)
         _move_tenure(session, keep, dupe)
+
+        # Verified answers for the campus (migration 0050). The cascade would delete
+        # them with the row; the campus is the same one they answer for.
+        answer_key.repoint(session, dupe.id, keep.id)
 
         session.delete(dupe)
         result.removed.append(dupe_id)

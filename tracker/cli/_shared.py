@@ -140,6 +140,11 @@ app.add_typer(party_app)
 tranches_app = typer.Typer(name="tranches", invoke_without_command=True)
 app.add_typer(tranches_app)
 
+#: The answer key (migration 0050): bare `tracker answers` scores the database against
+#: the verified answers; `load` stores a batch and `show` lists them beside the rows.
+answers_app = typer.Typer(name="answers", invoke_without_command=True)
+app.add_typer(answers_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

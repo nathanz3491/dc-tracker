@@ -429,6 +429,69 @@ effort for that one night; it runs at `high` again (`overnight.sh --judgement-ef
 The other two came from enrich's agent being asked about every empty field of a row
 chosen for one T2 gap; under `--t2` it is now asked about that gap alone.
 
+## The answer key
+
+```bash
+tracker answers load answers.json            # store a batch (on the host)
+tracker answers                              # how the database scores, per field
+tracker answers --against <snapshot.db>      # both scored; every answer a change moved
+tracker answers show --project 597           # each answer beside what the row holds
+```
+
+**Nothing else here says whether a stored value is true.** The quote check says a
+sentence exists, the tiers count open questions, and every merge rule was justified
+by the incident that prompted it. On 2026-10-30 a researched draft for the 50
+campuses carrying most of the money disagreed with 83 of 259 stored answers. Every
+one of those values had a real sentence behind it, a programme total, the whole
+tract or a phase's date, and no check had flagged them. So no change to how values
+are chosen could be weighed on net. The answer key (`answer_key`, migration 0050)
+holds verified answers, one per campus and field (stage, planned MW, investment,
+online date, first announced). `--against` scores a snapshot with the same answers,
+which is how a rule is weighed before it ships: "six wrong answers became right, one
+right answer stopped being right".
+
+**How a value is judged.**
+- A figure within 5% of the answer is right: publishers round. A range answer
+  ("$6–10B") takes any figure inside it, with the same 5% at each end.
+- A date is right when its span lies inside the answer's span. It is *imprecise*
+  when it agrees but more coarsely ("2025" for 2025-02-25), and wrong otherwise. A
+  date stored on the 1st at day precision is read as that day, so a month written as
+  a day is wrong, not imprecise.
+- A stage must match. An answer may name alternatives ("paused|cancelled") when the
+  evidence supports either.
+- An empty field is *empty*, not wrong, so a gap and an error stay apart. An answer
+  with no value says the field *should* be empty, such as a halted campus's old
+  online date.
+- Each field's share right comes with its 95% Wilson interval, because the key is
+  small.
+
+**What the answers mean.** Planned MW is the facility or utility power when a source
+gives both it and the IT load; the IT load stays recorded as its basis. An online
+date is when the first capacity comes online, not completion. A first-announced date
+is the first public report of the campus. These are decisions, made on 2026-10-31.
+Where the merge still prefers otherwise, the key scores the row wrong, which is what
+the key is for.
+
+**How an answer earns `verified`.** It is model-researched; no person confirms it,
+which was decided on 2026-10-31. Correctness is enforced by the protocol instead:
+- Two independent drafts. Neither sees the other or the database's value, and they
+  must agree.
+- Each cites a page that was actually fetched, with a quote. Code confirms the quote
+  is on the page and states the value.
+- A primary source, or two independent credible publishers. A directory never
+  suffices alone, and a stage answer needs the latest report found.
+- A third pass looks for counter-evidence: a later denial, a revised figure, another
+  campus of the same name.
+- An adjudicator settles any disagreement from primary evidence. If it cannot, the
+  answer is stored as `unsettled` and never scored. `draft` answers are scored only
+  with `--drafts`.
+- A random tenth of verified answers is re-run from scratch, and the disagreement
+  rate is reported as the key's own error. If it exceeds 5%, the protocol is
+  tightened before any score is used to accept a change.
+
+A merge carries the folded row's answers to the survivor. The two were one campus,
+so the survivor's own answer for a field stands.
+
 ## What the stored data actually rests on
 
 ```bash
