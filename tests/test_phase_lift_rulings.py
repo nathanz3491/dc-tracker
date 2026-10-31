@@ -5,7 +5,7 @@ its `phase` ruled a misread on the row, but the "under construction" powered she
 same article named kept the campus at construction — over seven articles saying QTS had
 cancelled it. `blocks.lifting_blocks` leaves such a tranche out, and lets a campus the
 claims call cancelled or paused be lifted only by a running building or by evidence
-newer than the stop.
+newer than the latest report of the stop.
 """
 
 from __future__ import annotations
@@ -176,6 +176,28 @@ def test_a_tranche_reported_after_the_stop_still_lifts(session):
     project = _stopped_campus(session, tranche_published=dt.datetime(2026, 9, 1))
     recompute_from_sources(session, project)
     assert project.phase == "construction"
+
+
+def test_a_tranche_between_two_reports_of_the_stop_does_not_lift(session):
+    """Sulphur Springs (#1449): reported halted, then a roundup still listed its first
+    building "under construction", then the halt was reported again. Measured against
+    the first report of the stop the roundup was newer and lifted the campus back."""
+    project = _stopped_campus(session, tranche_published=STOP + dt.timedelta(days=9), stop="paused")
+    session.add(
+        Source(
+            project_id=project.id,
+            url="https://news.example/halted-again",
+            source_type="trade_press",
+            published_at=STOP + dt.timedelta(days=70),
+            fields="phase",
+            claims=json.dumps({"phase": "paused"}),
+            quotes=json.dumps({"phase": "construction on the project is on hold"}),
+        )
+    )
+    session.flush()
+    session.refresh(project)
+    recompute_from_sources(session, project)
+    assert project.phase == "paused"
 
 
 def test_a_running_building_still_lifts_a_stopped_campus(session):

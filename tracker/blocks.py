@@ -1934,12 +1934,17 @@ def lifting_blocks(project: Any, blocks: list[Any], phase: str | None = None) ->
       its day — replayed on the 10-30 copy, counting those too lowered five running
       campuses, ATL3's finished expansion among them.
     * **for a campus the claims say is cancelled or paused, a tranche that is not
-      running and whose article is no newer than the first report of the stop.** A
+      running and whose article is no newer than the latest report of the stop.** A
       running building still lifts it — "a campus with a serving building is not
       cancelled, whatever one article said" (`raise_phase`) — but a planned or
-      half-built one reported years before the stop says nothing about the campus
-      since. A tranche on an undated page cannot show it is newer, so it does not
-      lift; nor does anything when no stop claim carries a date.
+      half-built one reported before the stop says nothing about the campus since.
+      The *latest* report, not the first: Sulphur Springs (#1449) was reported halted
+      on 2026-02-10, a roundup on 02-19 still listed its first building "under
+      construction", and the halt was reported again on 04-22 and 09-24. Measured
+      against the first report the roundup was newer and lifted the campus back to
+      construction; against the latest it is not. A tranche on an undated page
+      cannot show it is newer, so it does not lift; nor does anything when no stop
+      claim carries a date.
 
     `phase` None asks only the first question, for readers that show what lifted a
     stored phase without the claims' answer to hand.
@@ -1972,7 +1977,7 @@ def lifting_blocks(project: Any, blocks: list[Any], phase: str | None = None) ->
         for day in [_published_day(claim)]
         if day is not None
     ]
-    stop = min(stopped) if stopped else None
+    stop = max(stopped) if stopped else None
 
     def newer(block: Any) -> bool:
         source = sources.get(getattr(block, "source_id", None))

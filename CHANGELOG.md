@@ -1194,6 +1194,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus reported halted twice is no longer lifted back to "construction" by a
+  roundup published between the two reports** (`tracker/blocks.py` `lifting_blocks`;
+  `docs/workflows/logic.md`; `tests/test_phase_lift_rulings.py`).
+  - **Why:** the 10-30 rule compared a tranche with the *first* report that the campus
+    had stopped. Sulphur Springs (#1449) was reported halted on 02-10. A roundup on
+    02-19 still listed its first building as under construction, and the halt was
+    reported again on 04-22 and 09-24. The roundup counted as newer news and kept the
+    campus at construction.
+  - **What changed:** a tranche is compared with the latest report of the stop.
+    Replayed on the 10-31 copy, one row moves: Sulphur Springs becomes paused, as the
+    draft answer key has it, and its $18B and 3 GW leave the capex totals.
 - **A candidate twin the county check raised no longer takes its rows out of
   "complete"** (`tracker/clean.py` `twins_judged`, `_Shared.asked`, `_shared`; reader
   docs *Tiers*, en and zh; `tests/test_duplicate_detection.py`).
