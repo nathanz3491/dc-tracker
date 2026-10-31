@@ -672,6 +672,16 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly loop's money ceiling follows OpenCode Go's $100 month**
+  (`tracker/spend.py` `GO_MONTHLY_USD`, `NIGHT_MAX_CNY`; `tracker/overnight.py`;
+  `README.md`; `tests/test_cost_controls.py`).
+  - **What changed:** the flash plan's allowance rose from $80 to $100 a month on
+    2026-10-31. The tracker still keeps to 85% of it, now ¥603.50 over a rolling 30
+    days (was ¥482.80), so a night gets ¥20.12 (was ¥16.09), less a seventh of any
+    overspend.
+  - **The per-night cap:** it rises from ¥20 to ¥24. Otherwise it would have trimmed
+    the new share, and seven nights at ¥24 still sit inside 85% of Go's weekly cap
+    as it stood on 10-18.
 - **The nightly loop's decisions are now tested Python** (`tracker/overnight.py`,
   `tests/test_overnight.py`). The round loop, the stop rules, the ceilings, the
   counts and the morning report had no test that ran them; each now has one, and

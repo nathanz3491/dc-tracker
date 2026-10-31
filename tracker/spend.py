@@ -45,7 +45,7 @@ Run as a module for the shell script that reads it::
     python -m tracker.spend summary  <ledger>  # the closing line: models, then searches
     python -m tracker.spend allowance <dir>    # tonight's ceiling from the month's ledgers
 
-**The month.** OpenCode Go allows $80 a month on the flash model, and other work
+**The month.** OpenCode Go allows $100 a month on the flash model, and other work
 shares the plan; the tracker keeps to 85% of it (:func:`monthly_budget`). The nightly
 loop reads its ceiling from :func:`allowance`, over every ledger in its directory, so
 a dear night is paid back by the next ones.
@@ -113,9 +113,10 @@ PEAK_WINDOWS: Final = ((9, 12), (14, 18))
 
 PEAK_MULTIPLIER: Final = 2.0
 
-#: OpenCode Go's monthly allowance for the flash model, in dollars (2026-10-18). Go
-#: also caps $40 a week and $16 every five hours.
-GO_MONTHLY_USD: Final = 80.0
+#: OpenCode Go's monthly allowance for the flash model, in dollars: $100 from
+#: 2026-10-31, $80 from 2026-10-18. On 10-18 Go also capped $40 a week and $16 every
+#: five hours.
+GO_MONTHLY_USD: Final = 100.0
 
 #: The tracker's share of that allowance. Other work runs on the same plan, and the
 #: user set the tracker at about 85% of it (2026-10-25).
@@ -125,10 +126,12 @@ TRACKER_SHARE: Final = 0.85
 #: month inside the share as well.
 WINDOW_DAYS: Final = 30
 
-#: The most one night may spend, whatever budget is passed in. Inside the tracker's
-#: share of Go's other two caps: seven nights at this are ¥140 against 85% of $40 a
-#: week (about ¥241), and one is under 85% of $16 per five hours (about ¥97).
-NIGHT_MAX_CNY: Final = 20.0
+#: The most one night may spend, whatever budget is passed in. Above a night's share
+#: of the month (¥20.12 since 10-31) so it never trims the share, and inside the
+#: tracker's share of Go's other two caps as they stood on 10-18: seven nights at this
+#: are ¥168 against 85% of $40 a week (about ¥241), and one is under 85% of $16 per
+#: five hours (about ¥97).
+NIGHT_MAX_CNY: Final = 24.0
 
 #: How fast the nights pay back what the last 29 days spent over their share -- a
 #: phase that ran past the ceiling, a day of hand-run work recorded in a ledger: a
@@ -138,7 +141,7 @@ CATCH_UP_DAYS: Final = 7
 
 
 def monthly_budget() -> float:
-    """What the tracker may spend in a rolling month, in yuan: $80 x ¥7.1 x 85% = ¥482.80.
+    """What the tracker may spend in a rolling month, in yuan: $100 x ¥7.1 x 85% = ¥603.50.
 
     The nights and the daytime together: since 2026-10-26 a command run by hand and
     the console's AI panels write `daytime-YYYYMM.spend` beside the nights' ledgers
@@ -152,7 +155,7 @@ def monthly_budget() -> float:
 def allowance(calls: Iterable[Call], *, now: dt.datetime, budget: float | None = None) -> float:
     """Tonight's money ceiling, in yuan, from what the last 29 days spent.
 
-    A night's share of the month (:func:`monthly_budget` / 30, ¥16.09), less a
+    A night's share of the month (:func:`monthly_budget` / 30, ¥20.12), less a
     seventh of whatever the previous 29 days spent over their share; never below
     nothing or above :data:`NIGHT_MAX_CNY`. Nights that spend their allowance close a
     month at the budget, and a dear stretch is paid back over the next week.

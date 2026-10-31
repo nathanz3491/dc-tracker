@@ -187,10 +187,10 @@ the old value hid, and merging changes the survivor's claim set and can match a
 third row. Ceilings on hours, rounds, **yuan** and tokens, a `VACUUM INTO` snapshot
 before the first merge, and one run at a time. The money ceiling is tonight's share
 of a month by default (`python -m tracker.spend allowance <ledger directory>`). Other
-work shares the OpenCode Go plan, so the tracker keeps to 85% of its $80 month:
-¥482.80 over a rolling 30 days. That counts the daytime too: a command run by hand
+work shares the OpenCode Go plan, so the tracker keeps to 85% of its $100 month:
+¥603.50 over a rolling 30 days. That counts the daytime too: a command run by hand
 and the console's AI panels write `data/runs/daytime-YYYYMM.spend` beside the nights'
-ledgers. A night gets a thirtieth of the month, ¥16.09, less a seventh of whatever the
+ledgers. A night gets a thirtieth of the month, ¥20.12, less a seventh of whatever the
 last 29 days spent over their share; unspent money is not carried over. `--cny N` sets a flat ceiling instead. It is
 checked before every paid phase, and inside each one too: a command reads
 `TRACKER_SPEND_CEILING_CNY` (and `TRACKER_SPEND_CEILING_TOKENS`; unset is no ceiling)

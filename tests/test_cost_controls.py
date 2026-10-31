@@ -328,7 +328,7 @@ def _night(day: dt.datetime, cny: float) -> str:
 
 
 def test_the_tracker_keeps_to_85_percent_of_the_month():
-    assert spend.monthly_budget() == pytest.approx(80 * 7.1 * 0.85)  # ¥482.80
+    assert spend.monthly_budget() == pytest.approx(100 * 7.1 * 0.85)  # ¥603.50
 
 
 def test_a_command_run_by_hand_records_its_calls_in_the_daytime_ledger(tmp_path, monkeypatch):
@@ -384,7 +384,7 @@ def test_a_dear_month_pays_itself_back_over_a_week_not_in_one_night():
     tonight = spend.allowance(dear, now=now)
     assert tonight == pytest.approx(share - 29 * 3 / 7, abs=0.05)
     assert tonight > 0, "a night at nothing reads no news"
-    gone = [spend.parse(_night(now - dt.timedelta(days=1), 600.0))]
+    gone = [spend.parse(_night(now - dt.timedelta(days=1), spend.monthly_budget() * 1.25))]
     assert spend.allowance(gone, now=now) == 0.0
 
 

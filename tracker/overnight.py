@@ -97,9 +97,10 @@ THE PHASE ORDER IS THE ARGUMENT. The news first, then cheapest and most-blocking
 WHAT IT COSTS, AND THE CEILING. The ceiling is money, priced from the spend ledger by
 `tracker.spend` at OpenCode Go's rates for the hour each call was made. By default it
 is tonight's share of a month (`tracker.spend allowance`, from 2026-10-25). OpenCode
-Go's flash allowance is $80 a month, and other work runs on the same plan, so the
-tracker keeps to 85% of it: ¥482.80 over a rolling 30 days, counting the console's
-and hand-run commands' daytime ledgers with the nights' (from 10-26), ¥16.09 a night,
+Go's flash allowance is $100 a month (from 10-31; $80 before), and other work runs on
+the same plan, so the tracker keeps to 85% of it: ¥603.50 over a rolling 30 days,
+counting the console's and hand-run commands' daytime ledgers with the nights' (from
+10-26), ¥20.12 a night,
 less a seventh of whatever the last 29 days spent over their share. Unspent money is
 not carried over: tried on the 10-25 ledgers, it ran four weeks above the share on
 October's savings and then left two nights with nothing. Before that it was a flat
@@ -140,9 +141,9 @@ Raised again on 2026-10-25, to spend the month's share: 80 rows on 320 articles
 (69% of rows still lacked a basic field; split on 10-26 into 30 campuses being built
 or permitted with no date or capacity, then 50 below T2), 900 queued articles, and
 120 each to re-read and re-check. About ¥16-17 a night at the 10-25 rates, which the
-night's ¥16.09 trims; enrich runs after the duplicate, audit, obstacle,
-contradiction and tranche passes in a round, so a ceiling reached early cuts
-reading, never settling. An overshoot is one enrich pass (about ¥6), and the next
+¥16.09 ceiling trimmed and the ¥20.12 one of 10-31 has room for; enrich runs after
+the duplicate, audit, obstacle, contradiction and tranche passes in a round, so a
+ceiling reached early cuts reading, never settling. An overshoot is one enrich pass (about ¥6), and the next
 nights' allowance pays it back.
 
 Later rounds are cheaper than the first: every paid phase records what it answered
