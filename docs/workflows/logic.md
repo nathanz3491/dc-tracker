@@ -147,7 +147,11 @@ had. A tool that invents 73 faults is worse than one that finds none.
 * `mw_built` takes the **largest** figure — energised megawatts only go up, and a
   better source describing an earlier state should not walk it back.
 * `first_announced` takes the **earliest**, because that is what "first" means.
-* `phase` takes the **furthest along**, unless a source says it stopped.
+* `phase` takes the **furthest along**, unless a source says it stopped and nothing
+  newer shows it moving again. Only a newer, quoted, first-hand report of a stage past
+  "announced", whose own sentence does not itself report a stop, restarts a stopped
+  campus (since 2026-10-31). Before that, a February "on hold" outranked #2051 Joliet's
+  March and May approvals.
 * `name`, `company` and the location fields are **never overwritten** once set:
   churn in an identity field is worse than staleness.
 
@@ -566,7 +570,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The four layers, and the spend dials | `tracker/logic.py` — `review`, `MAX_TOKENS` |
 | Rules | `tracker/logic.py` — `check_rules`, `_check_stored_against_evidence`, `_nested_blocks`, `dedupe`, `ERROR`, `WARNING`; `tracker/blocks.py` — `structure`, `rollup` |
 | Suspected delays, and tranches past their date | `tracker/delays.py` — `assess`, `suspected_delay`, `suspected`, `tranche_state`, `period_end`, `read_as` |
-| Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field`, `claims_by_field` (the order), `stale_claims`, `STALE_AFTER` |
+| Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field`, `claims_by_field` (the order), `stale_claims`, `STALE_AFTER`, `_moving_again` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `_drop_restated_delays`, `_clear_built`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news`; `tracker/delays.py` — `restates`, `period_end` |
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |

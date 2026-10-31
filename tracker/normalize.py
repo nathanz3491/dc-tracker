@@ -1014,8 +1014,8 @@ _PHASE_SYNONYMS: dict[str, str] = {
 #: length is uncorrelated with meaning and every terminal synonym is short, so
 #: longest-first recorded a stopped project as an advancing one — and `capex` went on
 #: counting it, because it excludes `PHASE_TERMINAL` from the totals.
-#: `upsert._resolve_ladder` and `blocks.furthest_status` both already read "a terminal
-#: state always wins"; this was the one place that did not.
+#: `upsert._resolve_ladder` and `blocks.furthest_status` both already put a stop ahead
+#: of any progress reported with it; this was the one place that did not.
 #:
 #: **Longest-first** within each group is what keeps "pre-construction" from being
 #: read as `construction` by the shorter entry.

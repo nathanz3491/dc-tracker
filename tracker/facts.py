@@ -832,6 +832,7 @@ class Statements:
                             else None
                         ),
                         as_of=_axis(entry, "as_of"),
+                        quote=row.quote,
                     )
                 )
         return rank_claims(out, settings=settings)

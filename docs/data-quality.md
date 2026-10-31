@@ -224,7 +224,7 @@ and printed with its reason. That reason is **not always "the better source won"
 | --- | --- |
 | `mw_built` | the largest **claimed** figure; energised capacity only grows, but the row's own value is not one of its candidates |
 | `first_announced` | the earliest **claimed** date; that is what "first" means |
-| `phase` | furthest along, unless a source says it stopped |
+| `phase` | furthest along, unless a source says it stopped and no newer, quoted, first-hand report shows it moving again |
 | `name`, `company`, `city`, … | first seen, never overwritten; churn beats staleness |
 | everything else | credibility, then recency |
 

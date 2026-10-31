@@ -320,6 +320,142 @@ def test_cancelled_overrides_a_further_along_phase(session):
     assert session.scalar(select(Project)).phase == "cancelled"
 
 
+# --- a stop yields only to newer, real progress -------------------------------
+#
+# #2051 Joliet, pinned. A February "on hold indefinitely" outranked the March and May
+# approvals, because any stop won whatever its date. #1529 is the guard's reason:
+# its newer `construction` sentences were stop-work orders.
+
+APPROVED = "The city council voted 7-2 to approve the rezoning for the campus."
+
+
+def stage(value, day, quote=APPROVED, by="news.example", **flags):
+    """One campus-stage claim from publisher `by`, published on `day` (None: undated)."""
+    from tracker.upsert import _Claim
+
+    published = dt.datetime.fromisoformat(day) if day else None
+    return _Claim(
+        value,
+        2,
+        T1,
+        "trade_press",
+        f"https://{by}/{value}/{day}",
+        published_at=published,
+        quote=quote,
+        **flags,
+    )
+
+
+def ladder(*claims, revive=True):
+    from tracker.upsert import Policy, resolve
+
+    return resolve(Policy.PHASE, list(claims), None, ratchet=False, revive=revive)
+
+
+ON_HOLD = "The project is on hold indefinitely, the developer said."
+
+
+HOLD = stage("paused", "2026-02-10", ON_HOLD)
+#: Newer approvals from two publishers: what a restart takes.
+MARCH = stage("permitting", "2026-03-18", by="planning.example")
+MAY = stage("permitting", "2026-05-06", by="council.example")
+
+
+def test_a_stop_yields_to_newer_quoted_progress_from_two_publishers():
+    assert ladder(HOLD, MARCH, MAY) == "permitting"
+
+
+def test_one_publisher_does_not_restart_a_campus():
+    """#1529: its one newer report said approvals "have not been overturned"."""
+    again = stage("permitting", "2026-06-01", by="planning.example")
+    assert ladder(HOLD, MARCH) == "paused"
+    assert ladder(HOLD, MARCH, again) == "paused"
+
+
+def test_a_stop_still_beats_progress_reported_before_it_or_the_same_day():
+    before = stage("construction", "2025-11-02", by="council.example")
+    same_day = stage("permitting", "2026-02-10", by="council.example")
+    assert ladder(before, MARCH, HOLD) == "paused"
+    assert ladder(same_day, MARCH, HOLD) == "paused"
+
+
+def test_a_stop_work_order_read_as_construction_does_not_restart_a_campus():
+    """#1529: the newer `construction` sentences report the opposite of progress."""
+    order = "The county ordered the developer to immediately cease work on the site."
+    assert (
+        ladder(HOLD, MARCH, stage("construction", "2026-04-01", order, by="county.example"))
+        == "paused"
+    )
+
+
+def test_only_quoted_dated_first_hand_progress_restarts_a_campus():
+    for weak in (
+        stage("permitting", "2026-05-06", by="wiki.example", tertiary=True),
+        stage("permitting", "2026-05-06", quote=None, by="wiki.example"),
+        stage("permitting", None, by="wiki.example"),
+    ):
+        assert ladder(HOLD, MARCH, weak) == "paused"
+    # An undated stop could be the newest report of all.
+    assert ladder(stage("paused", None, ON_HOLD), MARCH, MAY) == "paused"
+
+
+def test_a_newer_mention_of_the_plan_is_not_a_restart():
+    mention = stage("announced", "2026-05-06", by="planning.example")
+    assert ladder(stage("cancelled", "2025-06-01", ON_HOLD), mention, MAY) == "cancelled"
+
+
+def test_a_restarted_campus_is_at_the_stage_it_restarted_at():
+    """Construction before a cancellation does not carry over to a new start."""
+    built = stage("construction", "2024-03-01")
+    withdrawn = stage("cancelled", "2025-06-01", "The developer withdrew the project.")
+    assert ladder(built, withdrawn, MARCH, MAY) == "permitting"
+
+
+def test_a_block_status_keeps_a_stop_whatever_its_date():
+    """Blocks call `resolve` without `revive`; the campus stage passes it."""
+    assert ladder(HOLD, MARCH, MAY, revive=False) == "paused"
+
+
+def test_a_campus_that_moved_on_after_a_pause_is_not_left_paused(session):
+    """End to end, through the citations' own quotes and dates."""
+
+    def said(url, phase, day, quote):
+        return SourceRecord(
+            url=url,
+            source_type="trade_press",
+            fetched_at=T1,
+            claims={"phase": phase},
+            quotes={"phase": quote},
+            claim_meta={"phase": {"as_of": day}},
+        )
+
+    upsert_record(
+        session,
+        rec(
+            sources=[
+                said("https://a.com/hold", "paused", "2026-02-10", ON_HOLD),
+                said("https://b.com/plan", "permitting", "2026-03-18", APPROVED),
+                said("https://c.com/zoning", "permitting", "2026-05-06", APPROVED),
+            ]
+        ),
+    )
+    row = session.scalar(select(Project))
+    assert row.phase == "permitting"
+    assert "newer, quoted first-hand report of progress" in (row.notes or "")
+    recompute_from_sources(session, row)
+    assert row.phase == "permitting"
+
+
+def test_the_reason_never_credits_progress_the_stop_beat():
+    """A strongest claim handed in as the winner may be one the stop outranked."""
+    from tracker.logic import decision
+    from tracker.upsert import Policy
+
+    older = stage("permitting", "2026-01-05")
+    assert decision(Policy.PHASE, MAY, HOLD, [HOLD, MARCH, MAY])[0] == "restarted"
+    assert decision(Policy.PHASE, older, HOLD, [HOLD, older])[0] == "furthest along"
+
+
 # --- placeholders -----------------------------------------------------------
 #
 # Fairwater (#1), pinned. `sample-projects.json` types its unreplaced seed URLs

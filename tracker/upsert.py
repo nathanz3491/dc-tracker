@@ -394,6 +394,10 @@ class _Claim:
     #: 2016", `claim_meta` axis `as_of`). Dates the claim for `stale_claims` ahead of
     #: its article's publication: a 2026 article can quote a 2016 figure.
     as_of: Any = None
+    #: The sentence the claim was quoted from (`source.quotes`, or the fact row's
+    #: `quote`), or None. Read by the stage ladder: a newer `construction` whose own
+    #: sentence reports a stop-work order is not a campus moving again.
+    quote: str | None = None
 
     def recency(self, *, by_publication: bool) -> Any:
         """The timestamp this claim is ranked by.
@@ -472,6 +476,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         # Parsed once per source rather than once per claim and axis: it was 770,000
         # `json.loads` of the same few hundred envelopes per nightly count.
         meta = _claim_meta(s)
+        quotes = _quotes(s)
         for name, value in claims.items():
             if name not in WRITABLE_FIELDS or value is None:
                 continue
@@ -494,9 +499,21 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                         else None
                     ),
                     as_of=_axis_in(meta, name, "as_of"),
+                    quote=quotes.get(name),
                 )
             )
     return rank_claims(out, settings=settings)
+
+
+def _quotes(source: Source) -> dict[str, str]:
+    """A source's quote per field, or {} when it has none or they are malformed."""
+    try:
+        quotes = json.loads(source.quotes or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(quotes, dict):
+        return {}
+    return {name: text for name, text in quotes.items() if isinstance(text, str)}
 
 
 def rank_claims(out: dict[str, list[_Claim]], *, settings: Any = None) -> dict[str, list[_Claim]]:
@@ -888,7 +905,11 @@ def _resolve(field_name: str, claims: list[_Claim], existing: Any, *, ratchet: b
     if field_name in CLAIM_OWNED_FIELDS and all(c.decided_against for c in claims):
         return None
     return resolve(
-        FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT), claims, existing, ratchet=ratchet
+        FIELD_POLICY.get(field_name, Policy.PREFER_WEIGHT),
+        claims,
+        existing,
+        ratchet=ratchet,
+        revive=True,
     )
 
 
@@ -941,6 +962,7 @@ def resolve(
     terminal: tuple[str, ...] = PHASE_TERMINAL,
     default: Any = None,
     ratchet: bool = True,
+    revive: bool = False,
 ) -> Any:
     """Apply a merge policy to choose one value.
 
@@ -951,7 +973,8 @@ def resolve(
 
     `rank`/`terminal`/`default` parameterise the LADDER policy, so the project
     `phase` progression and a block's own status progression share one
-    implementation.
+    implementation. `revive` lets newer quoted progress outrank an older stop; the
+    campus stage passes it (through `_resolve`) and a block's status does not.
 
     Unconfirmed (待确认) claims are discarded outright whenever any confirmed claim
     exists for the field. Done here, once, rather than inside each policy: MAX and
@@ -1030,6 +1053,7 @@ def resolve(
             terminal=terminal,
             default=default if default is not None else DEFAULT_PHASE,
             ratchet=ratchet,
+            revive=revive,
         )
 
     # PREFER_WEIGHT: claims are pre-sorted by (weight, recency).
@@ -1100,12 +1124,19 @@ def _resolve_ladder(
     terminal: tuple[str, ...],
     default: Any,
     ratchet: bool = True,
+    revive: bool = False,
 ) -> Any:
-    """Furthest along a progression, but a terminal state always wins.
+    """Furthest along a progression, but a terminal state wins over older progress.
 
     A project a newer source says is cancelled is cancelled, even though
     "operational" sits further along. Paused/cancelled are statements about the
     thing stopping, not about its degree of completion.
+
+    **With `revive`, a stop yields to newer, real progress** (:func:`_moving_again`).
+    Until 2026-10-31 any stop won whatever its date, against the paragraph above:
+    #2051 Joliet's February "on hold indefinitely" outranked its March and May
+    approvals, so the campus read as stopped after it had moved on. Only the campus
+    stage passes it; a block's status keeps the older rule.
 
     Parameterised so a block's status ladder reuses it: same argument, different
     rungs.
@@ -1128,14 +1159,70 @@ def _resolve_ladder(
     """
     stopped = [c for c in claims if c.value in terminal]
     if stopped:
-        # Claims are sorted strongest-and-newest first.
-        return stopped[0].value
+        moving = _moving_again(claims, stopped, rank) if revive else []
+        if not moving:
+            # Claims are sorted strongest-and-newest first.
+            return stopped[0].value
+        claims = moving
     ranked = [c.value for c in claims if c.value in rank]
     if ratchet and existing in rank:
         ranked.append(existing)
     if not ranked:
         return existing or default
     return max(ranked, key=lambda p: rank[p])
+
+
+#: Wording that makes a stage sentence a report of stopping, whatever stage it was read
+#: as. #1529's newer `construction` sentences were stop-work orders ("immediately cease
+#: work"); read as progress, they would have restarted a campus the county had stopped.
+_STOP_SAID = re.compile(
+    r"\b(?:stop[- ]work|cease[sd]?|ceasing|halt(?:s|ed|ing)?|paus(?:e|es|ed|ing)|"
+    r"on hold|suspend(?:s|ed|ing)?|withdr(?:aw|aws|awn|awing|ew))\b",
+    re.IGNORECASE,
+)
+
+
+def _moving_again(
+    claims: list[_Claim], stopped: list[_Claim], rank: dict[str, int]
+) -> list[_Claim]:
+    """The claims showing a stopped campus moving again, or [] when none do.
+
+    Each must be:
+
+    * **real progress**: a rung above the first (permitting, construction,
+      operational). A newer article that only mentions the plan is not a restart;
+    * **newer than every report of the stop**, both dated. An undated stop could be
+      the newest and an undated claim the oldest, so neither is guessed at;
+    * **quoted and first-hand**: a 待确认 value is evidence of nothing yet, and a
+      directory restates whatever it last copied;
+    * **not itself a stop** (:data:`_STOP_SAID`): a stop-work order read as
+      `construction` reports the opposite of progress;
+    * **told by two publishers**. One sentence is not enough: #1529's only newer
+      report without a stop in it said its approvals "have not been overturned" amid
+      threatened litigation, and was read as `permitting` beside two stop-work orders.
+
+    Claims older than the latest stop are left out of the answer as well: a campus
+    that restarted is at the stage it restarted at, not the one it had reached before
+    it stopped.
+    """
+    stops = [_published_day(c) for c in stopped]
+    if any(day is None for day in stops):
+        return []
+    last_stop = max(stops)
+    first_rung = min(rank.values())
+    out = []
+    for claim in claims:
+        if claim.value not in rank or rank[claim.value] <= first_rung:
+            continue
+        if not claim.confirmed or claim.tertiary or not claim.quote:
+            continue
+        day = _published_day(claim)
+        if day is None or day <= last_stop or _STOP_SAID.search(claim.quote):
+            continue
+        out.append(claim)
+    if len({conf.registrable_domain(c.url) for c in out}) < 2:
+        return []
+    return out
 
 
 def _conflict_notes(by_field: dict[str, list[_Claim]]) -> tuple[list[str], list[str]]:

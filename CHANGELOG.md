@@ -1242,6 +1242,25 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus that moved on after a pause is no longer held at the pause**
+  (`tracker/upsert.py` `_resolve_ladder`, `_moving_again`, `_STOP_SAID`, `_Claim.quote`;
+  `tracker/facts.py`; `tracker/logic.py` `_decided_by`, `why_decided`;
+  `docs/workflows/logic.md` and `logic.svg`, `docs/data-quality.md`;
+  `tests/test_upsert.py`).
+  - **Why:** any report that a campus stopped beat every report that it progressed,
+    whatever the dates. Joliet Technology Center (#2051) was pulled from a February
+    agenda. Its annexation was approved in March and its rezoning in May, yet the
+    night's recompute would have moved it from permitting back to announced.
+  - **What changed:** a stop still beats older progress, and progress reported the
+    same day. It gives way only when at least two publishers report a later stage than
+    "announced" after the latest stop, in quoted first-hand sentences that do not
+    themselves report a stop. The second publisher matters: #1529's one newer report
+    said its approvals "have not been overturned", beside two stop-work orders.
+    Tranche statuses keep the old rule. A conflict note now says when newer progress
+    outranked a stop.
+  - **Replayed on the 10-31 copy:** one stage moves against the old rule. #2051 stays
+    at permitting, and #1529 stays paused. #48's note changes to the new reason, with
+    its stage unchanged.
 - **A campus reported halted twice is no longer lifted back to "construction" by a
   roundup published between the two reports** (`tracker/blocks.py` `lifting_blocks`;
   `docs/workflows/logic.md`; `tests/test_phase_lift_rulings.py`).

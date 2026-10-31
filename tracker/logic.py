@@ -22,7 +22,8 @@ That reason is **not always "the better source won"**, and assuming it was is th
 mistake this module was built on. Each field has a declared policy: built capacity
 takes the largest figure because energised megawatts only go up, `first_announced`
 the earliest because that is what "first" means, `phase` the furthest along unless
-a source says it stopped, and the identity fields are never overwritten once set.
+a source says it stopped and nothing newer shows it moving again, and the identity
+fields are never overwritten once set.
 Only the remainder are settled by credibility and then recency. Re-deriving the
 winner as though credibility always decided it reported 73 of 221 live rows as
 having drifted from their sources; none of them had. A tool that invents 73 faults
@@ -160,8 +161,8 @@ class Collision:
     winner_fetched: dt.datetime | None
     loser_fetched: dt.datetime | None
     #: Which rule decided it: "confirmed", "whole site", "first-hand", "credibility",
-    #: "recency", "tiebreak", "largest", "earliest", "furthest along", "terminal" or
-    #: "first seen".
+    #: "recency", "tiebreak", "largest", "earliest", "furthest along", "terminal",
+    #: "restarted" or "first seen".
     decided_by: str
     #: The field's declared merge policy, named so the reason is checkable.
     policy: str = "prefer_weight"
@@ -1128,8 +1129,8 @@ def why_decided(
     and how recent it is. Built capacity takes the largest figure because energised
     megawatts only go up; the first-announced date takes the earliest because that
     is what "first" means; the phase takes the furthest along unless somebody says
-    it stopped. Reporting all of them as "the better source won" would be a
-    plausible sentence and the wrong one.
+    it stopped and nothing newer shows it moving again. Reporting all of them as
+    "the better source won" would be a plausible sentence and the wrong one.
 
     Taken out of `Collision.why` so `upsert._conflict_notes` can say the same thing
     in the row's own notes. It used to hardcode "kept higher-weighted value" there,
@@ -1175,6 +1176,10 @@ def why_decided(
         return "the phase furthest along the progression wins"
     if decided_by == "terminal":
         return "a source saying it stopped overrides one saying it progressed"
+    if decided_by == "restarted":
+        return (
+            "a newer, quoted first-hand report of progress outranks an older report that it stopped"
+        )
     if decided_by == "first seen":
         return "identity fields are never overwritten once set; churn is worse than staleness"
     return "identical credibility and date; settled on the source URL so the result is stable"
@@ -1226,13 +1231,36 @@ def _decided_by(policy, winner, rival, claims) -> str:
     if policy is Policy.MIN:
         return "earliest"
     if policy is Policy.PHASE:
-        return "terminal" if winner.value in PHASE_TERMINAL else "furthest along"
+        if winner.value in PHASE_TERMINAL:
+            return "terminal"
+        if rival.value in PHASE_TERMINAL and _restarted(winner, claims):
+            return "restarted"
+        return "furthest along"
     # PREFER_WEIGHT: the ordering itself is the answer, so say which step of it.
     if winner.weight != rival.weight:
         return "credibility"
     if (winner.fetched_at or _EPOCH) != (rival.fetched_at or _EPOCH):
         return "recency"
     return "tiebreak"
+
+
+def _restarted(winner, claims) -> bool:
+    """Whether `winner` is the newer quoted progress that outranked a stop.
+
+    Asked of the claims rather than inferred from the two values: a caller that
+    hands in its strongest claim as the winner may be naming one the stop beat, and
+    "newer progress won" would then explain a value the row does not hold.
+    """
+    from tracker.upsert import _PHASE_RANK, _moving_again, contenders
+    from tracker.vocab import PHASE_TERMINAL
+
+    try:
+        live = contenders(list(claims))
+        stopped = [c for c in live if c.value in PHASE_TERMINAL]
+        return bool(stopped) and winner in _moving_again(live, stopped, _PHASE_RANK)
+    except AttributeError:
+        # Claim-shaped objects built before the claims carried quotes and dates.
+        return False
 
 
 _EPOCH = dt.datetime(1970, 1, 1)
