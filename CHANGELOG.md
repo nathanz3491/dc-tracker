@@ -42,6 +42,14 @@ initial build of the v1 PRD.
     ten minutes breaks it. That process keeps writing, so the next command becomes a
     second writer, and fails partway as SQLite allows one. A warning about one lock
     never arms the break of another that took its place.
+  - `lock break --stop-process` ends the holder instead (asked to stop, killed after
+    fifteen seconds) and then breaks its lock: no second writer, but its uncommitted
+    work is rolled back. The same two steps, warned separately from `--force`. It
+    refuses a pid that is no longer a tracker command, since pids are reused; a
+    command mentioning `database_tracker` in a path is not a tracker command.
+  - When the holder is one of the nightly loop's phases, either warning says so in a
+    banner: the loop goes on to its next phase, and ending the night is a decision
+    about the whole loop, not about one lock.
   - The break happens under the lock's own reclaim guard and only if the lock is
     still the one inspected, so a lock that changed hands is never the one removed.
 

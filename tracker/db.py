@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import itertools
 import logging
 import os
 import re
@@ -769,6 +770,77 @@ def break_write_lock(db_path: Path | str, *, force: bool = False) -> WriteLock:
         )
         _unlink(lock.path)
     return lock
+
+
+def process_command(pid: int) -> str | None:
+    """The command line of a running process, or None if there is no such process."""
+    if sys.platform == "win32":
+        # wmic is gone from current Windows; CIM is what replaced it.
+        query = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return out.strip() or None
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False
+        )
+    except OSError:  # no `ps`, or a sandbox refusing it: unknown, so never taken for a tracker
+        return None
+    return out.stdout.strip() or None
+
+
+def is_tracker_command(command: str) -> bool:
+    """Whether a command line runs the tracker: a word that IS `tracker`, or `-m tracker`.
+
+    Not "mentions tracker": the checkout lives in `database_tracker`, so every Python
+    started from its virtualenv mentions it, tracker command or not.
+    """
+    words = [w.strip("\"'") for w in command.split()]
+    names = [re.split(r"[\\/]", w)[-1].lower() for w in words]
+    if any(n in ("tracker", "tracker.exe") for n in names):
+        return True
+    return any(a == "-m" and b == "tracker" for a, b in itertools.pairwise(words))
+
+
+def stop_lock_holder(lock: WriteLock, *, grace_s: float = 15.0) -> str:
+    """End the process holding `lock`; returns how ("stopped", "killed" or "already gone").
+
+    Asks it to stop first (SIGTERM; on Windows the only signal there is) and waits up
+    to `grace_s` for it to go, then kills it. A pid can be reused once its process has
+    gone, so the process must still be a tracker command, or this refuses rather than
+    end something unrelated. Its open transaction is rolled back by SQLite; what it had
+    committed stays.
+    """
+    import signal
+
+    pid = lock.pid
+    if pid is None:
+        raise AlreadyRunning("the lock names no pid, so there is no process to stop")
+    if not _pid_alive(pid):
+        return "already gone"
+    command = process_command(pid) or ""
+    if not is_tracker_command(command):
+        raise AlreadyRunning(
+            f"pid {pid} is not a tracker command ({command[:120] or 'unknown'}): its pid was "
+            "probably reused, so it is not stopped. `tracker lock break` removes the lock."
+        )
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return "stopped"
+        time.sleep(0.2)
+    os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and _pid_alive(pid):
+        time.sleep(0.2)
+    if _pid_alive(pid):
+        raise AlreadyRunning(f"pid {pid} would not stop, even when killed")
+    return "killed"
 
 
 def utcnow_text() -> str:
