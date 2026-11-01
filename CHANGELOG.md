@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Fixed
+
+- **Search finds lost to Google redirect links, recovered** (`scripts/resolve_goto_links.py`).
+  From 2026-10-30 Google let only the top three links of a results page be followed,
+  so Serper returned the rest as `google.com/goto` redirects, which robots.txt forbids
+  us to read: 829 of 1,394 finds on 10-30 and 668 of 1,146 on 10-31 were never read.
+  Serper restored real links on 10-31 at 17:00 UTC. The script sends the stored goto
+  links to Serper's free `/resolve` and puts each real page back in the queue (or
+  retires the link when that page was already found again). Dry run by default.
+
 ### Added
 
 - **A suspicion score that aims the nightly re-checks** (`tracker/suspect.py`,
