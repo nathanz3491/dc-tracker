@@ -690,6 +690,87 @@ def _unlink(path: Path) -> None:
             time.sleep(_CONTENTION_POLL_S)
 
 
+@dataclass(frozen=True)
+class WriteLock:
+    """The write lock as a person reads it: who holds it, and whether they still exist.
+
+    `raw` is the file's text (`pid command started-at`); None means there is no lock.
+    `alive` is whether the holder's process is still running — the same test a
+    command taking the lock applies, so `stale` here is exactly a lock the next
+    writer would reclaim on its own.
+    """
+
+    path: Path
+    raw: str | None
+    alive: bool
+
+    @property
+    def held(self) -> bool:
+        return self.raw is not None
+
+    @property
+    def stale(self) -> bool:
+        return self.held and not self.alive
+
+    @property
+    def pid(self) -> int | None:
+        head = (self.raw or "").split(maxsplit=1)
+        return int(head[0]) if head and head[0].isdigit() else None
+
+    @property
+    def command(self) -> str:
+        parts = (self.raw or "").split()
+        # pid, then the command (it may be several words), then a date and a time.
+        return " ".join(parts[1:-2]) if len(parts) >= 4 else ""
+
+    @property
+    def since(self) -> str:
+        parts = (self.raw or "").split()
+        return " ".join(parts[-2:]) if len(parts) >= 4 else ""
+
+
+def inspect_write_lock(db_path: Path | str) -> WriteLock:
+    """The write lock beside `db_path`, read without touching it."""
+    path = _lock_path(db_path)
+    raw = _read_lock(path, patient=True)
+    return WriteLock(path, raw, bool(raw is not None and _held(path, raw)))
+
+
+def break_write_lock(db_path: Path | str, *, force: bool = False) -> WriteLock:
+    """Remove the write lock; returns the lock that was removed.
+
+    Without `force` only a stale lock goes — one whose process has died, which the
+    next writer would reclaim anyway; a live holder raises `AlreadyRunning`. With
+    `force` a live holder's lock goes too, and that is the dangerous case: the holder
+    keeps writing, and the next command to start becomes a second writer beside it
+    — SQLite's "database is locked" partway through, after paying for its calls.
+
+    Under the reclaim guard, and only if the file still holds what was inspected, so
+    a lock that changed hands in between is never the one deleted. The holder's own
+    release checks the same way, so it will not delete a newer lock either.
+    """
+    lock = inspect_write_lock(db_path)
+    if not lock.held:
+        return lock
+    if lock.alive and not force:
+        raise AlreadyRunning(
+            f"the write lock is held by a live process (pid {lock.pid}, {lock.command or '?'}, "
+            f"since {lock.since or '?'}). Stop that process, or pass --force to break it anyway."
+        )
+    with _reclaim_guard(lock.path):
+        if _read_lock(lock.path) != lock.raw:
+            raise AlreadyRunning(
+                "the write lock changed hands while it was being broken; check again"
+            )
+        log.warning(
+            "breaking the write lock held by pid %s%s",
+            lock.pid or "?",
+            " (forced)" if lock.alive else "",
+        )
+        _unlink(lock.path)
+    return lock
+
+
 def utcnow_text() -> str:
     from tracker.models import utcnow
 

@@ -22,6 +22,18 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker lock`: who holds the write lock, and taking it back** (`tracker/cli/lock.py`;
+  `tracker/db.py` — `inspect_write_lock`, `break_write_lock`, `WriteLock`;
+  `tests/test_lock_cli.py`).
+  - `tracker lock` / `lock check` names the holder (pid, command, since when) and
+    whether its process is still running, beside the nightly loop's own lock.
+  - `lock break` removes a dead holder's lock, which the next writer would reclaim
+    anyway; it refuses a live one. `lock break --force` breaks a live holder's lock
+    too, after asking (`--yes` to skip): that process keeps writing, so the next
+    command becomes a second writer, and fails partway as SQLite allows one.
+  - The break happens under the lock's own reclaim guard and only if the lock is
+    still the one inspected, so a lock that changed hands is never the one removed.
+
 - **A suspicion score that aims the nightly re-checks** (`tracker/suspect.py`,
   `tracker/suspect_transformer.py`; `tracker suspect`, `suspect score`, `suspect
   train`, `suspect row ID`; `logic resolve --suspects N`; the agents' `check_suspicion`

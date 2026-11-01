@@ -114,6 +114,11 @@ BLOCKED: dict[str, str] = {
     # somebody at a terminal, not a button on the page.
     "cloudflare": "run it from a terminal — publishing this page is not a click",
     "version": "shown in the header",
+    # Breaking a writer's lock is a decision about a process on the host, made by
+    # somebody who can see it: from a page it would be a button that makes two writers.
+    "lock": "run it on the host, where the processes are",
+    "lock check": "run it on the host, where the processes are",
+    "lock break": "breaking a write lock is for somebody at a terminal on the host",
     # The status page shows the same thing to anybody, and a note on it is public
     # text: written at a terminal, by whoever runs the tracker.
     "status": "it is the public status page",

@@ -150,6 +150,11 @@ app.add_typer(answers_app)
 suspect_app = typer.Typer(name="suspect", invoke_without_command=True)
 app.add_typer(suspect_app)
 
+#: The database's write lock: bare `tracker lock` (or `check`) says who holds it;
+#: `break` removes a dead holder's, and `break --force` a live one's.
+lock_app = typer.Typer(name="lock", invoke_without_command=True)
+app.add_typer(lock_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

@@ -37,7 +37,9 @@ Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
 training table, one JSON line per campus and judged field; `--snapshots DIR` adds each
 value's history from the nightly copies). `tracker suspect` ranks the stored values
 likeliest to be wrong, which the nightly loop re-reads (`suspect row ID` shows one
-row; the transformer half needs `pip install -e ".[head]"`). `tracker merge` folds rows that turned out to be
+row; the transformer half needs `pip install -e ".[head]"`). `tracker lock` says which
+command holds the database's write lock; `lock break` removes a dead holder's lock, and
+`lock break --force` a running one's (dangerous: it makes a second writer). `tracker merge` folds rows that turned out to be
 one campus, and `tracker exclude` takes out a row that is not a data center — a chip
 fab, a battery plant — and keeps any later reading from creating it again; they are
 the only commands here that delete anything. `tracker rename ID "<name>" --why …` gives
