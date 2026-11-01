@@ -12,6 +12,28 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Training labels the tracker keeps about its own values, and one table to train on**
+  (`tracker/labels.py`, `tracker/training.py`; `tracker export training [--snapshots
+  DIR]`; `judged.run(fields=…)`; the nightly loop's findings record;
+  `tests/test_training.py`).
+  - **Why:** the suspicion score that aims re-checks learns from labels, and the
+    hand-checked ones are a few hundred. The tracker already judged its own values
+    every night and kept no record. Measured 2026-11-01: a model trained only on the
+    claims the tracker had already rejected ranked the answer key's wrong values as
+    well as one trained on the key itself, so these records are worth keeping.
+  - **Verdicts:** every paid pass that goes through `judged.run` now writes what each
+    answer did to its rows (`data/runs/verdicts.jsonl`): each field that moved, and,
+    for logic and audit findings, the fields looked at and left standing. Measured
+    from the rows, so no pass has to report it.
+  - **Findings:** before round 1 the loop writes the free checks' findings with the
+    value each flagged (`data/runs/findings.jsonl`). Whether a finding was right is
+    then read from what that value did next. Finding types differ widely: 2 in 10
+    were wrong for an ambiguous phase label, 4 in 4 for investment below build cost.
+  - **The export:** one JSON line per campus and judged field, with every claim and
+    its quote, the row's identity, the value's history across the nightly snapshots,
+    the findings and their outcomes, the verdicts, and the answer key's verdict. It
+    reads and never writes; old snapshots are read for the columns they have.
+
 - **An answer key, and a score of how many stored values are true**
   (`tracker/answer_key.py`; migration 0050 `answer_key`; `tracker answers`, `answers
   load`, `answers show`; `tracker/merge.py` carries a campus's answers to the

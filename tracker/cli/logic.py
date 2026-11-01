@@ -958,6 +958,7 @@ def _triage_by_model(session, findings: list, logic_mod, extractor, *, limit: in
         limit=limit,
         on_each=announce,
         label="logic-llm",
+        fields=lambda f: [(f.project_id, name) for name in f.fields],
     )
     over_budget = got.beyond
     _print_ceiling(got)

@@ -1453,7 +1453,7 @@ def resolve_all(
     prepared, rungs 3 to 5 off it. With a person at the keyboard (`ask`) the pass is
     serial whatever `workers` says: one question on screen at a time.
     """
-    from tracker import judged
+    from tracker import judged, labels
 
     def prepared(pair: tuple[Project, UnitFinding]) -> Question:
         return prepare(pair[0], pair[1], extractor=extractor, ask=ask)
@@ -1491,6 +1491,10 @@ def resolve_all(
         on_each=on_each,
         on_start=on_start,
         label="audit",
+        fields=lambda pair: [
+            (pair[1].project_id, name)
+            for name in labels.AUDIT_FIELDS.get(pair[1].code, labels.AUDIT_DEFAULT)
+        ],
     )
 
 

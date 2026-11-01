@@ -858,7 +858,7 @@ def coverage(
 
 @app.command("export")
 def export_cmd(
-    fmt: Annotated[str, typer.Argument(help="md | csv | json | html | facts")],
+    fmt: Annotated[str, typer.Argument(help="md | csv | json | html | facts | training")],
     out: Annotated[Path | None, typer.Option("--out", help="Write here instead of stdout.")] = None,
     company: Annotated[str | None, typer.Option("--company")] = None,
     state: Annotated[str | None, typer.Option("--state")] = None,
@@ -871,6 +871,14 @@ def export_cmd(
             help="Include a generated-at timestamp. Off by default so output is reproducible.",
         ),
     ] = False,
+    snapshots: Annotated[
+        Path | None,
+        typer.Option(
+            "--snapshots",
+            help="training only: the directory of nightly snapshot copies, for each "
+            "value's history.",
+        ),
+    ] = None,
 ) -> None:
     """Write the database out as Markdown, CSV or JSON — or every statement as one table.
 
@@ -879,14 +887,23 @@ def export_cmd(
     its tier (confirmed, directory, derived, inferred, unconfirmed, ruled out), the
     quote, the citation, and whether it is the value the campus holds.
 
+    `training` is the suspicion score's training table (`tracker.training`): one JSON
+    line per campus and judged field, with its claims, the row's identity, the
+    value's history across `--snapshots`, the night checks' findings and outcomes, the
+    paid passes' verdicts, and the answer key's verdict where there is one.
+
     Output is deterministic: the same data exports byte-identically every time,
     unless you ask for --stamp.
     """
     from tracker.export import FORMATS, ExportFilter, fetch_projects, render, write_export
     from tracker.models import utcnow
 
-    if fmt not in (*FORMATS, "facts"):
-        _fail(f"format must be one of: {', '.join((*FORMATS, 'facts'))}")
+    if fmt not in (*FORMATS, "facts", "training"):
+        _fail(f"format must be one of: {', '.join((*FORMATS, 'facts', 'training'))}")
+    if snapshots is not None and fmt != "training":
+        _fail("--snapshots is for the training export only")
+    if snapshots is not None and not snapshots.is_dir():
+        _fail(f"--snapshots: {snapshots} is not a directory")
     if phase and phase not in PHASES:
         _fail(f"--phase must be one of: {', '.join(PHASES)}")
 
@@ -897,6 +914,17 @@ def export_cmd(
             from tracker import facts as facts_mod
 
             text = facts_mod.render_csv(facts_mod.rows_for(session, [p.id for p in projects]))
+        elif fmt == "training":
+            from tracker import labels, training
+
+            text = training.render_jsonl(
+                training.rows(
+                    session,
+                    [p.id for p in projects],
+                    db_path=labels.db_path_of(session),
+                    snapshots=snapshots,
+                )
+            )
         else:
             text = render(
                 fmt, projects, generated_at=utcnow().isoformat(sep=" ") if stamp else None

@@ -33,7 +33,9 @@ Then query: `tracker list`, `tracker show ID`, `tracker stats`, `tracker capex`,
 `tracker coverage`, `tracker duplicates`, `tracker blocks`, `tracker tranches`,
 `tracker company`, `tracker party list ID`, `tracker invariants`, `tracker facts`,
 `tracker review`, `tracker verify`,
-`tracker export {md,csv,json,facts}`. `tracker merge` folds rows that turned out to be
+`tracker export {md,csv,json,facts,training}` (`training` is the suspicion score's
+training table, one JSON line per campus and judged field; `--snapshots DIR` adds each
+value's history from the nightly copies). `tracker merge` folds rows that turned out to be
 one campus, and `tracker exclude` takes out a row that is not a data center — a chip
 fab, a battery plant — and keeps any later reading from creating it again; they are
 the only commands here that delete anything. `tracker rename ID "<name>" --why …` gives

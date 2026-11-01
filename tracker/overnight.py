@@ -795,6 +795,8 @@ class Night:
     clock: Callable[[], dt.datetime]
     ledger: Path
     pid: int
+    #: Writes the night's check findings to the training log; returns how many.
+    findings: Callable[[], int] = lambda: 0
 
     capped_: bool = False
     first_snapshot: Path | None = None
@@ -907,6 +909,9 @@ class Night:
         except SnapshotFailed as exc:
             log.say(f"the snapshot failed ({exc}) — stopping before anything is deleted")
             return 1
+        # The free checks' findings, each with the value it flagged, before the night
+        # can change either: what later happens to that value is the finding's label.
+        log.line(f"    findings recorded for training: {self.findings()}")
 
         try:
             for number in range(1, o.rounds + 1):
@@ -1285,7 +1290,24 @@ def build(o: Options, stream: BinaryIO) -> Night:
         clock=_local_now,
         ledger=ledger,
         pid=int(os.environ.get("OVERNIGHT_PID") or os.getpid()),
+        findings=lambda: night_findings(db, _local_now()),
     )
+
+
+def night_findings(db: Path, now: dt.datetime) -> int:
+    """Record the free checks' findings for training (`tracker.labels`). Never raises."""
+    from tracker import labels
+    from tracker.db import open_db, session_scope
+
+    try:
+        engine = open_db(db)
+        try:
+            with session_scope(engine, commit=False) as session:
+                return labels.record_findings(session, night=now.date().isoformat())
+        finally:
+            engine.dispose()
+    except Exception:  # a training log must not cost the night
+        return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

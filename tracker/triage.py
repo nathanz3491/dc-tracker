@@ -748,6 +748,7 @@ def triage_findings(
         on_each=on_each,
         on_start=on_start,
         label="logic",
+        fields=lambda f: [(f.project_id, name) for name in f.fields],
     )
 
 

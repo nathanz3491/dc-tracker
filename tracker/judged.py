@@ -187,6 +187,7 @@ def run(
     on_each: Callable[[Any], None] | None = None,
     on_start: Callable[[Run, list[Any]], None] | None = None,
     label: str = "judge",
+    fields: Callable[[Any], Iterable[tuple[int, str]]] | None = None,
 ) -> Run:
     """Put `items` to a model, in order, keeping each answer as it lands.
 
@@ -216,6 +217,9 @@ def run(
         on_each: called with each item's result as it is applied, for progress.
         on_start: called once the work is chosen, with this run (its `held` and
             `beyond` already counted) and the chosen items, before anything is asked.
+        fields: the (project, field) pairs an item is about, when the pass knows. Every
+            committed answer's effect on its rows is written to the verdict log
+            (`tracker.labels`); with this, the fields it left standing are too.
     """
     from tracker import declines
     from tracker.spend import ceiling_reached
@@ -309,8 +313,24 @@ def run(
         except Exception as exc:
             return _Raised(exc)
 
+    from tracker import labels
     from tracker.llm import spend_stage
     from tracker.parallel import map_ordered
+
+    def record(item: Any, before: labels.Held, done: Done) -> None:
+        """The answer's effect on its rows, for the verdict log. Never raises."""
+        try:
+            looked = list(fields(item)) if fields is not None else []
+        except Exception:
+            looked = []
+        labels.record_verdicts(
+            session,
+            by=kind or label,
+            before=before,
+            after=labels.held(session, before),
+            looked_at=looked,
+            declined=bool(done.decline),
+        )
 
     queue = chosen
     while queue:
@@ -356,12 +376,15 @@ def run(
                 if isinstance(answer, _Raised):
                     fail(item, key, answer.error, "ask")
                     continue
+                before = labels.held(session, projects(item)) if commit else {}
                 try:
                     done = apply(item, prepared, answer)
                 except Exception as exc:
                     fail(item, key, exc, "apply")
                     continue
                 finish(key, done)
+                if commit:
+                    record(item, before, done)
     return out
 
 
