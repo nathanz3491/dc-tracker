@@ -336,6 +336,7 @@ TWIN_SINCE = "2026-10-26 22:01:00"
 STARTED_UTC = "2026-10-29 22:01:00"
 
 ROUND_ONE = [
+    ("suspect", "score"),
     ("discover", "--no-show"),
     ("news", "--baselines", "300", "--max-queries", "1500"),
     ("ingest", "queue", "--new-first", "--limit", "1350", "--screen"),
@@ -352,6 +353,7 @@ ROUND_ONE = [
     ("audit", "resolve", "--no-ask", "--limit", "60"),
     ("risks", "confirm", "--limit", "40"),
     ("logic", "resolve", "--limit", "60"),
+    ("logic", "resolve", "--suspects", "25", "--limit", "25"),
     ("tranches", "review", "--limit", "20"),
     ("enrich", "--select", "45", "--pipeline", "--budget", "180"),
     ("enrich", "--select", "75", "--t2", "--target", "0", "--budget", "300"),
@@ -385,6 +387,7 @@ def _report(snap: Path) -> list[tuple[str, ...]]:
         ("invariants", "--record"),
         ("duplicates",),
         ("duplicates", "mixed"),
+        ("suspect", "train", "--snapshots", str(snap.parent)),
         ("news", "report", "--since", STARTED_UTC),
         ("changes", "--against", str(snap)),
     ]
@@ -508,7 +511,13 @@ CEILINGS = [
     ("audit", ("--discover", "0"), ("duplicates", "resolve"), ("audit",)),
     ("risks", ("--discover", "0"), ("audit",), ("risks",)),
     ("logic", ("--discover", "0"), ("risks",), ("logic", "resolve", "--limit")),
-    ("tranches", ("--discover", "0"), ("logic", "resolve", "--limit"), ("tranches",)),
+    (
+        "suspects",
+        ("--discover", "0"),
+        ("logic", "resolve", "--limit"),
+        ("logic", "resolve", "--suspects"),
+    ),
+    ("tranches", ("--discover", "0"), ("logic", "resolve", "--suspects"), ("tranches",)),
     ("pipeline", ("--discover", "0"), ("tranches",), ("enrich",)),
     ("enrich", ("--discover", "0"), ("enrich", "--select", "45"), ("enrich", "--select", "75")),
     ("reread", ("--discover", "0"), ("enrich", "--select", "75"), ("ingest", "reread")),
@@ -828,7 +837,8 @@ def test_discover_0_skips_the_news_and_places_rows_in_the_free_phase(tmp_path):
     firsts = {c[0] for c in run.stub.calls}
     assert "discover" not in firsts
     assert not any(c[:2] in {("ingest", "queue"), ("news", "--baselines")} for c in run.stub.calls)
-    assert run.stub.calls[:2] == [
+    assert run.stub.calls[:3] == [
+        ("suspect", "score"),
         ("backfill", "dates", "--apply", "--refetch", "--yes", "--limit", "150"),
         ("ingest", "geo"),
     ]

@@ -264,6 +264,12 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # right, which neither a count of quotes nor a diff can say.
             "answers",
             "answers show",
+            # Beside `answers`: which stored values are likeliest wrong, ranked for
+            # the night's re-check, and one row's view from both models.
+            "suspect",
+            "suspect row",
+            "suspect score",
+            "suspect train",
             # How the news came in last night, per source.
             "news report",
             "queue",

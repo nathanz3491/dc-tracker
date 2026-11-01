@@ -468,6 +468,26 @@ the value as it was", `audit resolve` leaves them out of what it settled, and
 question, `audit.left_as_it_was`, which reads the sentence the way `settled_codes`
 does.
 
+### `--suspects N`: values no rule can see
+
+Every finding above comes from a rule, and a rule only sees a value that disagrees
+with something. The answer key found 41% of the values it judged wrong while carrying
+a real sentence and no contradiction: a county total stored as one campus's
+investment, a power plant's output as the data center's load. `--suspects N` puts a
+different question to the same agent. Instead of the night's findings it offers the
+N values the suspicion score (`tracker suspect`, `tracker/suspect.py`) ranks likeliest
+wrong, as findings coded `suspect_<field>`, eight in ten from the top of the ranking
+and the rest drawn at random from below it, so the record does not only confirm the
+ranking. The agent re-reads the sources and keeps the value or rules out the claims
+behind it, exactly as for a finding, and the decline memory holds a value it could
+not settle until its citations change.
+
+The nightly loop scores every stored MW, investment and online date before round 1
+(free), runs `logic resolve --suspects 25` once in round 1, and retrains the score at
+the end of the night from what the night's passes decided (`data/runs/verdicts.jsonl`).
+Stages and first-announced dates are not ranked: the score finds their errors no
+better than chance.
+
 ### Two things a model may never do
 
 * It cannot mark a row **verified**. That means "an operator says this is right",
@@ -581,6 +601,7 @@ Touching any of these means the poster is in scope. Re-render with
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
+| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`); `tracker/overnight.py` — `Options.suspects` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

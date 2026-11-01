@@ -322,6 +322,10 @@ class Options:
     audit: int = 60
     risks: int = 40
     nest: int = 20
+    # Values the suspicion score ranks most likely wrong, re-read by the logic agent
+    # in round 1 (`logic resolve --suspects`): the top of the ranking and a random
+    # fifth. Each answer lands in the verdict log the score is retrained from.
+    suspects: int = 25
     # The first enrich pass: campuses being built or permitted that lack an online
     # date or planned capacity, largest first, asked only those two fields (`enrich
     # --pipeline`). On 10-26, 111 of 258 under construction and 135 of 169 in
@@ -423,6 +427,13 @@ def parser() -> argparse.ArgumentParser:
     a("--pairs", type=int, default=d.pairs, help="duplicate pairs per round (default 40)")
     a("--audit", type=int, default=d.audit, help="audit findings per round (default 60)")
     a("--risks", type=int, default=d.risks, help="obstacles per round (default 40)")
+    a(
+        "--suspects",
+        type=int,
+        default=d.suspects,
+        help="values the suspicion score ranks most likely wrong, re-read in round 1 "
+        "(default 25; 0 turns it off)",
+    )
     a(
         "--nest",
         type=int,
@@ -912,6 +923,11 @@ class Night:
         # The free checks' findings, each with the value it flagged, before the night
         # can change either: what later happens to that value is the finding's label.
         log.line(f"    findings recorded for training: {self.findings()}")
+        # Rank tonight's values by the suspicion score, free, before anything changes
+        # them; round 1's suspects phase re-reads the top of it.
+        if o.suspects > 0:
+            log.say("suspicion score")
+            self.tracker("suspect", "score")
 
         try:
             for number in range(1, o.rounds + 1):
@@ -1086,6 +1102,15 @@ class Night:
         log.phase(f"logic — a model reads the sources, {o.findings} at a time")
         self.tracker("logic", "resolve", "--limit", o.findings)
 
+        # The same agent on the values the suspicion score ranked tonight, once a
+        # night: a value can be wrong with no rule able to see it, and these are the
+        # ones most likely to be.
+        if number == 1 and o.suspects > 0:
+            if self.capped("suspects"):
+                return True
+            log.phase(f"suspects — a model re-reads the {o.suspects} likeliest-wrong value(s)")
+            self.tracker("logic", "resolve", "--suspects", o.suspects, "--limit", o.suspects)
+
         # After logic, which may rule a claim out and re-derive a row's tranches: the
         # review then reads the tranches the night settled on.
         if self.capped("tranches"):
@@ -1214,6 +1239,14 @@ class Night:
         # figures are a mixture. Read-only — the count and the worst row; a person
         # splits them.
         self.tracker("duplicates", "mixed", head=2)
+        # Refit both suspicion models on everything the night added (verdicts, findings,
+        # the snapshots' history). Free; each keeps its old weights unless the refit
+        # ranks the answer key at least as well.
+        log.say("retrain the suspicion score")
+        if self.first_snapshot is not None:
+            self.tracker("suspect", "train", "--snapshots", self.first_snapshot.parent)
+        else:
+            self.tracker("suspect", "train")
 
         elapsed = int((self.clock() - self.started).total_seconds()) // 60
         log.say(f"{COMPLETE} — {elapsed}m, {self.spend_summary()}")

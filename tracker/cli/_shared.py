@@ -145,6 +145,11 @@ app.add_typer(tranches_app)
 answers_app = typer.Typer(name="answers", invoke_without_command=True)
 app.add_typer(answers_app)
 
+#: The suspicion score (`tracker.suspect`): bare `tracker suspect` lists tonight's
+#: ranking; `score` makes it, `train` refits both models, `row` shows one row's view.
+suspect_app = typer.Typer(name="suspect", invoke_without_command=True)
+app.add_typer(suspect_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

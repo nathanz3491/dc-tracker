@@ -477,6 +477,21 @@ def evidence_toolkit(
             },
             run=lambda query, limit=10: _find_projects(session, str(query), int(limit)),
         ),
+        Tool(
+            name="check_suspicion",
+            description=(
+                "How likely each stored value on a row is to be wrong, by the suspicion "
+                "score's two models (a logistic regression and a small transformer), with "
+                "what drives it. A pointer to where to look, never a verdict; reliable only "
+                "for mw_planned, investment_usd and expected_online. Free."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"project_id": {"type": "integer"}},
+                "required": ["project_id"],
+            },
+            run=lambda project_id: _check_suspicion(session, int(project_id)),
+        ),
     ]
     if allow_search:
         tools.append(
@@ -663,6 +678,24 @@ def _show_project(session: Any, project_id: int) -> str:
     if project.notes:
         lines.append(f"  notes: {project.notes[:1200]}")
     return "\n".join(lines)
+
+
+def _check_suspicion(session: Any, project_id: int) -> str:
+    """The suspicion score's view of one row, as compact JSON for the model."""
+    import json as _json
+
+    from tracker import labels, suspect
+
+    db_path = labels.db_path_of(session)
+    if db_path is None:
+        return "no suspicion score here (the database is in memory)"
+    try:
+        view = suspect.check_row(session, db_path, project_id)
+    except Exception as exc:  # a pointer tool must not end the agent's turn
+        return f"suspicion check failed: {exc}"
+    if not view["fields"]:
+        return f"no project #{project_id}"
+    return _clip(_json.dumps(view, ensure_ascii=False, default=str))
 
 
 def _find_projects(session: Any, query: str, limit: int = 10) -> str:

@@ -12,6 +12,29 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A suspicion score that aims the nightly re-checks** (`tracker/suspect.py`,
+  `tracker/suspect_transformer.py`; `tracker suspect`, `suspect score`, `suspect
+  train`, `suspect row ID`; `logic resolve --suspects N`; the agents' `check_suspicion`
+  tool; the `head` extra; `docs/workflows/logic.md`; `tests/test_suspect.py`).
+  - **Why:** the answer key found 41% of the values it judged wrong, each with a real
+    sentence behind it and no rule able to see it. Re-reading everything is not
+    affordable; ranking what to re-read is.
+  - **The loop:** before round 1 a logistic regression scores every stored MW,
+    investment and online date (free, seconds); round 1 puts the 25 likeliest wrong
+    (a fifth drawn at random) to the logic agent, which keeps each or rules out the
+    claims behind it; at the end of the night both models are refitted. Each keeps
+    its old weights unless the refit ranks the answer key well enough (the
+    logistic: held-out AUC 0.65 or better; the transformer: no worse than before).
+  - **Measured on 205 answer-key labels, scored on campuses each model never saw:**
+    the logistic regression AUC 0.74 (plain Python; the host has no numpy), the
+    transformer 0.78 without ever seeing a key label (pretrained on the tracker's own
+    rejected claims). Reliable for MW, investment and online dates; stages and
+    first-announced dates are not ranked, where it does no better than chance.
+  - **Agents** can call `check_suspicion` on a row, like `search_web`: both models'
+    P(wrong) per field, with what drives it, as a pointer and never a verdict.
+  - The transformer needs PyTorch (`pip install -e ".[head]"`); without it the
+    nightly refit says so and the logistic regression carries on alone.
+
 - **Training labels the tracker keeps about its own values, and one table to train on**
   (`tracker/labels.py`, `tracker/training.py`; `tracker export training [--snapshots
   DIR]`; `judged.run(fields=…)`; the nightly loop's findings record;

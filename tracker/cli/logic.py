@@ -424,6 +424,14 @@ def logic_resolve(
         typer.Option("--code", help="Work through one kind of finding only.", show_default=False),
     ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Findings to offer.")] = 30,
+    suspects: Annotated[
+        int,
+        typer.Option(
+            "--suspects",
+            help="Instead of the findings, offer the N values the suspicion score ranks "
+            "most likely wrong tonight, a fifth of them drawn at random (`tracker suspect`).",
+        ),
+    ] = 0,
     again: Annotated[
         bool,
         again_flag(
@@ -543,8 +551,16 @@ def logic_resolve(
 
     with _explain_db_locks(), session_scope(engine, commit=writing) as session:
         repairs = logic_mod.resolve_drift(session, apply=writing)
-        report = logic_mod.review(session)
-        findings = [f for f in report.findings if not code or f.code == code]
+        if suspects:
+            # The ranking's values, put to the same agent as a finding is: it re-reads
+            # the sources and keeps the value or rules out the claims behind it, and
+            # what it did lands in the verdict log the score is retrained from.
+            from tracker import suspect as suspect_mod
+
+            findings = suspect_mod.suspects(path, suspects)
+        else:
+            report = logic_mod.review(session)
+            findings = [f for f in report.findings if not code or f.code == code]
 
         # Drop what has already been answered on this row. `audit resolve` has
         # skipped settled findings since it was written; `logic resolve` did not,
