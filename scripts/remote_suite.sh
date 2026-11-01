@@ -169,12 +169,14 @@ start() {
 }
 
 # The test environment, rebuilt only when pyproject.toml or requirements.lock changes.
+# Not the version line: every release stamps it, and nothing reads the installed
+# package's version, so counting it rebuilt the environment on every run after one.
 # Its own uv cache, so building it never writes to the one production installs from.
 ensure_venv() {
   local uv want
   uv="$(command -v uv || echo /opt/homebrew/bin/uv)"
   export UV_CACHE_DIR="$PWD/.suite/uv-cache"
-  want="$(cat pyproject.toml requirements.lock | shasum -a 256 | cut -c1-16)"
+  want="$(grep -v '^version = ' pyproject.toml | cat - requirements.lock | shasum -a 256 | cut -c1-16)"
   if [ -x .venv/bin/python ] && [ "$(cat .venv/.suite-deps 2>/dev/null)" = "$want" ]; then
     return 0
   fi
@@ -305,7 +307,10 @@ job() {
   fi
 
   started=$SECONDS
-  sandboxed .venv/bin/python -m pytest -n "$workers" --color=no -rfE "$@"
+  # Work stealing: an idle worker takes tests queued for a busy one, so a few slow
+  # files no longer hold the run open at the end (24 s on 10 workers, 17 s on 12).
+  # A `--dist` passed after -- comes later on the line and wins.
+  sandboxed .venv/bin/python -m pytest -n "$workers" --dist worksteal --color=no -rfE "$@"
   RUN_CODE=$?
   printf 'SUITE-RESULT exit=%s sha=%s seconds=%s\n' "$RUN_CODE" "$sha" "$((SECONDS - started))"
   git update-ref -d "refs/snapshots/$sha" 2>/dev/null

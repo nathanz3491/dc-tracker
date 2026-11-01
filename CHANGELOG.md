@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **The host test suite runs on twelve workers with work stealing** (`scripts/remote_suite.py`,
+  `scripts/remote_suite.sh`, `docs/testing-on-the-host.md`). pytest took 24 s on ten
+  workers and takes 17 s now: an idle worker takes tests queued for a busy one, so a
+  few slow files no longer hold the run open. The test environment is no longer
+  rebuilt after every release either: its fingerprint left out nothing, so each
+  version stamp counted as a dependency change.
+
 ### Fixed
 
 - **Search finds lost to Google redirect links, recovered** (`scripts/resolve_goto_links.py`).

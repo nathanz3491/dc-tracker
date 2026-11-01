@@ -283,7 +283,7 @@ already has the file open.
 
 It fixes and formats with ruff **here** — those rewrite files, so they run where
 the files are — then sends the working tree, uncommitted changes included, to
-`~/dev/tracker/tracker-dev` on `$PROD` and runs every test there on ten workers. The
+`~/dev/tracker/tracker-dev` on `$PROD` and runs every test there on twelve workers. The
 output streams back; the whole of it is kept in `data/runs/remote-suite.log`.
 
 **It cannot touch production, and proves so each time.** The tests run in a macOS

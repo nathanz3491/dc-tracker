@@ -136,9 +136,14 @@ remote suite: an isolation check failed, so no test was run
 
 A failure there is a hole in the sandbox. Fix its cause. Never route around it.
 
-**Low priority.** `nice 10` and ten workers leave the efficiency cores to the console
-and the nightly loop. The suite may run while the loop runs, and says so at the
-start.
+**Low priority.** `nice 10` and twelve workers leave two of the fourteen cores to the
+console and the nightly loop. The suite may run while the loop runs, and says so at
+the start.
+
+**Work stealing.** pytest-xdist runs with `--dist worksteal`, so an idle worker takes
+tests queued for a busy one. Measured 2026-11-01: 24 s on 10 workers without it, 17 s
+on 12 with it, and 14 workers no faster. The rest of a run, about 20 s, is the link to
+the host: each ssh connection takes a few seconds and a run opens four.
 
 ## When it goes wrong
 

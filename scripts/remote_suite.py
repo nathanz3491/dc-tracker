@@ -51,9 +51,11 @@ from pathlib import Path
 #: tracker-dev, and any inside production's checkout, deployer or backups.
 DEFAULT_DIR = "dev/tracker/tracker-dev"
 
-#: The host has ten performance cores; the console and the nightly loop keep the
-#: efficiency cores, and the tests run at low priority besides.
-DEFAULT_WORKERS = 10
+#: The host has ten performance and four efficiency cores. Measured 2026-11-01, with
+#: work stealing (the host half passes `--dist worksteal`): 10 workers 24 s without
+#: it, 12 workers 17 s, 14 workers 17 s. Twelve leaves two cores to the console and
+#: the nightly loop for nothing, and the tests run at low priority besides.
+DEFAULT_WORKERS = 12
 
 #: How many times a dropped link is reattached before giving up on following. The
 #: run goes on regardless; `--attach` picks it up again.
