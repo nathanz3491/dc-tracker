@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         except AlreadyRunning as exc:
             print(f"another writer holds the database: {exc}", file=sys.stderr)
             return 1
-    engine = open_db(db)
+    engine = open_db(db, readonly=not args.apply)
     try:
         with session_scope(engine, commit=args.apply) as session:
             rows = list(session.scalars(select(IngestUrl).where(IngestUrl.url.like(f"%{GOTO}%"))))
