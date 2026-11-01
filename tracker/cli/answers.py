@@ -135,6 +135,59 @@ def load_cmd(
     )
 
 
+@answers_app.command("apply")
+def apply_cmd(
+    write: Annotated[
+        bool, typer.Option("--apply", help="Write the corrections; without it, a dry run.")
+    ] = False,
+    project: Annotated[
+        list[int] | None, typer.Option("--project", help="Only these campuses (repeatable).")
+    ] = None,
+) -> None:
+    """Correct the values the answer key proves wrong, through the claims. Dry run by default.
+
+    For each verified answer the row holds wrong: the answer's page and sentence are
+    cited on the row, and the row's claims the key judges wrong are ruled out as
+    misread, as `logic rule-out` does; the row is re-derived and judged again. "No
+    figure" answers only rule out. Run on the host, where the database is written.
+    """
+    from tracker import answer_apply
+
+    if not write:
+        with session_scope(_read_engine(), commit=False) as session:
+            fixes = answer_apply.plan(session, project)
+        if json_mode():
+            emit({"fixes": [vars(f) for f in fixes]})
+            return
+        table = Table(header_style="bold", box=TABLE_BOX)
+        for column in ("row", "field", "held", "answer key", "cite", "rule out", "note"):
+            table.add_column(column)
+        for f in fixes:
+            table.add_row(
+                f"#{f.project_id}", f.field, escape(str(f.held)), escape(f.answer),
+                "yes" if f.cite else "-", str(len(f.refuted)), escape(f.note),
+            )  # fmt: skip
+        console.print(table)
+        doable = sum(1 for f in fixes if not f.note)
+        console.print(f"{doable} of {len(fixes)} wrong value(s) would be corrected; dry run, "
+                      "nothing written. Re-run with --apply.")  # fmt: skip
+        return
+
+    with session_scope(_writable("answers apply")) as session:
+        outcomes = answer_apply.apply(session, answer_apply.plan(session, project))
+    fixed = [o for o in outcomes if o.verdict == "right"]
+    if json_mode():
+        emit({"corrected": len(fixed), "outcomes": [
+            {"project_id": o.fix.project_id, "field": o.fix.field, "before": str(o.before),
+             "after": str(o.after), "verdict": o.verdict} for o in outcomes]})  # fmt: skip
+        return
+    for o in outcomes:
+        mark = "[green]right[/green]" if o.verdict == "right" else f"[yellow]{o.verdict}[/yellow]"
+        console.print(f"#{o.fix.project_id} {o.fix.field}: {escape(str(o.before))} -> "
+                      f"{escape(str(o.after))}  {mark}")  # fmt: skip
+    console.print(f"{len(fixed)} of {len(outcomes)} corrected to the key's answer")
+
+
 @answers_app.command("show")
 def show_cmd(
     project: Annotated[int | None, typer.Option("--project", help="One campus only.")] = None,

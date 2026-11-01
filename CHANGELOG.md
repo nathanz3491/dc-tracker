@@ -37,6 +37,15 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker answers apply`: correct what the answer key proves wrong, through the claims**
+  (`tracker/answer_apply.py`; `tests/test_answer_apply.py`). For each verified answer
+  the row holds wrong, the answer's page and sentence are cited on the row and the
+  claims the key judges wrong are ruled out as misread, as `logic rule-out` does; the
+  row is re-derived and judged again, and the decision is noted as the answer key's.
+  Dry run by default. On a copy of production taken 2026-11-01 it corrected 80 of
+  86 wrong values (the key's score 56% → 91%); the six left are stages a milestone or
+  tranche lifts and one capacity built from tranches.
+
 - **`tracker lock`: who holds the write lock, and taking it back** (`tracker/cli/lock.py`;
   `tracker/db.py` — `inspect_write_lock`, `break_write_lock`, `WriteLock`;
   `tests/test_lock_cli.py`).

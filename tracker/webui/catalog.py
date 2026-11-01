@@ -116,6 +116,9 @@ BLOCKED: dict[str, str] = {
     "version": "shown in the header",
     # Breaking a writer's lock is a decision about a process on the host, made by
     # somebody who can see it: from a page it would be a button that makes two writers.
+    # It rewrites stored values across the database: a decision for somebody at a
+    # terminal on the host, after reading its dry run.
+    "answers apply": "it rewrites stored values — run it on the host after its dry run",
     "lock": "run it on the host, where the processes are",
     "lock check": "run it on the host, where the processes are",
     "lock break": "breaking a write lock is for somebody at a terminal on the host",

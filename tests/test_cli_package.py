@@ -31,6 +31,7 @@ from tracker.cli import app
 #: Captured from the module before it was split, and unchanged by the split.
 COMMANDS = {
     "answers",
+    "answers apply",
     "answers load",
     "answers show",
     "audit",

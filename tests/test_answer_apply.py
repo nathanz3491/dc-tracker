@@ -1,0 +1,115 @@
+"""`tracker answers apply`: correcting what the answer key proves wrong, through the claims.
+
+Each test is one promise: a wrong figure is corrected by citing the answer's sentence
+and ruling out the claim that refuted it, and the correction survives a recompute;
+a "no figure" answer empties the field by ruling its claims out; a value the key
+already holds right is left alone; and the decision is written into the row's notes.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from tracker import answer_apply
+from tracker.ingest.records import IngestRecord, SourceRecord
+from tracker.models import AnswerKey, Project
+from tracker.upsert import recompute_from_sources, upsert_record
+
+
+def _cited(session, name, **claims_by_url):
+    sources = [
+        SourceRecord(
+            url=url,
+            source_type="trade_press",
+            excerpt="excerpt",
+            claims=dict(claims),
+            quotes={k: f"the campus is {v}" for k, v in claims.items()},
+            fetched_at=dt.datetime(2026, 1, 1),
+        )
+        for url, claims in claims_by_url.items()
+    ]
+    result = upsert_record(
+        session,
+        IngestRecord(
+            project={"company": "Someone", "name": name, "city": "Englewood", "state": "CO"},
+            sources=sources,
+        ),
+    )
+    session.commit()
+    return session.get(Project, result.project_id)
+
+
+def _answer(session, project, field, value, **kw):
+    session.add(
+        AnswerKey(
+            project_id=project.id, field=field, value=value, status="verified", method="test", **kw
+        )
+    )
+    session.commit()
+
+
+def test_a_wrong_figure_is_corrected_by_citing_the_answer_and_ruling_out_the_claim(session):
+    project = _cited(session, "Campus A", **{"https://a.example/county": {"investment_usd": 11e9}})
+    _answer(
+        session,
+        project,
+        "investment_usd",
+        "3000000000",
+        source_url="https://b.example/release",
+        quote="the campus will cost $3 billion",
+    )
+
+    fixes = answer_apply.plan(session)
+    assert [(f.field, f.cite, len(f.refuted)) for f in fixes] == [("investment_usd", True, 1)]
+
+    outcomes = answer_apply.apply(session, fixes)
+    session.commit()
+
+    assert outcomes[0].verdict == "right"
+    assert project.investment_usd == 3e9
+    recompute_from_sources(session, project)
+    assert project.investment_usd == 3e9, "the correction is a claim, so it survives a recompute"
+    assert "answer key" in (project.notes or "")
+    assert answer_apply.plan(session) == [], "nothing left to correct"
+
+
+def test_a_no_figure_answer_empties_the_field(session):
+    project = _cited(session, "Campus B", **{"https://a.example/plant": {"mw_planned": 4500.0}})
+    _answer(session, project, "mw_planned", None)
+
+    outcomes = answer_apply.apply(session, answer_apply.plan(session))
+    session.commit()
+
+    assert outcomes[0].verdict == "right"
+    assert project.mw_planned is None
+
+
+def test_a_value_the_key_holds_right_is_left_alone(session):
+    project = _cited(session, "Campus C", **{"https://a.example/x": {"mw_planned": 300.0}})
+    _answer(session, project, "mw_planned", "300")
+
+    assert answer_apply.plan(session) == []
+
+
+def test_the_dry_run_writes_nothing(session, monkeypatch, db_path):
+    from typer.testing import CliRunner
+
+    from tracker.cli import app
+
+    project = _cited(session, "Campus D", **{"https://a.example/y": {"investment_usd": 9e9}})
+    _answer(
+        session,
+        project,
+        "investment_usd",
+        "1000000000",
+        source_url="https://b.example/z",
+        quote="a $1 billion campus",
+    )
+    monkeypatch.setattr("tracker.cli._shared._db_path", lambda: db_path)
+
+    result = CliRunner().invoke(app, ["answers", "apply"])
+
+    assert result.exit_code == 0, result.output
+    assert "dry run" in result.output
+    session.expire_all()
+    assert session.get(Project, project.id).investment_usd == 9e9
