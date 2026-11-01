@@ -13,6 +13,7 @@ from rich.table import Table
 
 from tracker.cli._shared import (
     TABLE_BOX,
+    _db_path,
     _fail,
     _read_engine,
     _writable,
@@ -173,7 +174,14 @@ def apply_cmd(
                       "nothing written. Re-run with --apply.")  # fmt: skip
         return
 
+    from tracker import suspect
+
     with session_scope(_writable("answers apply")) as session:
+        # The key's labels as they stand, saved before the key changes the rows they
+        # judge: afterwards those rows read "right" and could teach the score nothing.
+        kept = suspect.freeze(session, _db_path())
+        if kept and not json_mode():
+            console.print(f"froze {kept} training entr(y/ies) before correcting")
         outcomes = answer_apply.apply(session, answer_apply.plan(session, project))
     fixed = [o for o in outcomes if o.verdict == "right"]
     if json_mode():

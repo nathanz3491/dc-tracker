@@ -45,6 +45,10 @@ initial build of the v1 PRD.
   Dry run by default. On a copy of production taken 2026-11-01 it corrected 80 of
   86 wrong values (the key's score 56% → 91%); the six left are stages a milestone or
   tranche lifts and one capacity built from tranches.
+  Before it corrects anything it freezes the key's verdicts and each answered
+  field's evidence as they stood (`data/models/key-labels-frozen.jsonl`), and the
+  suspicion score trains on those: a corrected row reads "right" and would teach
+  nothing. On the copy, the refit after correcting still saw all 205 labels.
 
 - **`tracker lock`: who holds the write lock, and taking it back** (`tracker/cli/lock.py`;
   `tracker/db.py` — `inspect_write_lock`, `break_write_lock`, `WriteLock`;

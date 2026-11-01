@@ -113,3 +113,29 @@ def test_the_dry_run_writes_nothing(session, monkeypatch, db_path):
     assert "dry run" in result.output
     session.expire_all()
     assert session.get(Project, project.id).investment_usd == 9e9
+
+
+def test_the_keys_labels_are_frozen_before_it_corrects_the_rows(session, db_path):
+    """After a correction the row reads "right"; training must still see it as wrong."""
+    from tracker import suspect
+
+    project = _cited(session, "Campus E", **{"https://a.example/county": {"investment_usd": 11e9}})
+    _answer(
+        session,
+        project,
+        "investment_usd",
+        "3000000000",
+        source_url="https://b.example/release",
+        quote="the campus will cost $3 billion",
+    )
+
+    assert suspect.freeze(session, db_path) == 1, "the answered field only"
+    assert suspect.freeze(session, db_path) == 0, "a campus is frozen once"
+    answer_apply.apply(session, answer_apply.plan(session))
+    session.commit()
+
+    live = suspect.entries(session, db_path, [project.id])
+    assert next(e for e in live if e["field"] == "investment_usd")["answer"]["verdict"] == "right"
+    frozen = suspect.with_frozen(live, db_path)
+    kept = next(e for e in frozen if e["field"] == "investment_usd")
+    assert kept["answer"]["verdict"] == "wrong" and kept["held"] == 11e9

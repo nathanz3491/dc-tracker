@@ -275,12 +275,71 @@ def entries(
     return out
 
 
+FROZEN = "key-labels-frozen.jsonl"
+
+
+def frozen(db_path: Path | str) -> dict[tuple[int, str], dict]:
+    """The answer key's labels as they stood before the key corrected anything.
+
+    `answers apply` copies the key's values onto the rows, after which every corrected
+    row reads "right" and the key has nothing left to teach or to measure the score
+    by. So before it corrects a campus it saves that campus's training entries (the
+    claims, the row, the key's verdict on the value then held) here, and training reads
+    these in place of the live rows. Keyed by (project, field).
+    """
+    path = models_dir(db_path) / FROZEN
+    if not path.is_file():
+        return {}
+    out = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            e = json.loads(line)
+            out[(int(e["project_id"]), e["field"])] = e
+    return out
+
+
+def with_frozen(rows: list[dict], db_path: Path | str) -> list[dict]:
+    """`rows` with every frozen (project, field) replaced by its frozen entry."""
+    saved = frozen(db_path)
+    return [saved.get((e["project_id"], e["field"]), e) for e in rows]
+
+
+def freeze(session: Any, db_path: Path | str) -> int:
+    """Save the entry of every answered field not frozen yet. Returns how many.
+
+    Answered fields only: a field frozen before it had an answer would hide the answer
+    a later batch gives it.
+    """
+    from tracker import answer_key
+
+    saved = frozen(db_path)
+    pending = {(a.project_id, a.field) for a in answer_key.answers(session)} - set(saved)
+    if not pending:
+        return 0
+    campuses = sorted({p for p, _ in pending})
+    new = [
+        e
+        for e in entries(session, Path(db_path), campuses)
+        if (e["project_id"], e["field"]) in pending
+    ]
+    path = models_dir(db_path) / FROZEN
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for e in new:
+            fh.write(json.dumps(e, ensure_ascii=False, default=str) + "\n")
+    return len(new)
+
+
 def train_logistic(session: Any, db_path: Path, *, today: dt.date | None = None) -> dict[str, Any]:
-    """Refit on the answer key's verdicts; keep it if its held-out AUC clears `FLOOR`."""
+    """Refit on the answer key's verdicts; keep it if its held-out AUC clears `FLOOR`.
+
+    The verdicts are the frozen ones where the key has already corrected the row
+    (`frozen`): a corrected row reads "right" and would teach nothing.
+    """
     from tracker import answer_key
 
     key = {(a.project_id, a.field) for a in answer_key.answers(session)}
-    rows = entries(session, db_path, sorted({p for p, _ in key}))
+    rows = with_frozen(entries(session, db_path, sorted({p for p, _ in key})), db_path)
     X, y, groups = [], [], []
     for e in rows:
         ans = e.get("answer") or {}

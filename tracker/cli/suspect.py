@@ -93,7 +93,10 @@ def train_cmd(
     with session_scope(_read_engine(), commit=False) as session:
         logistic = suspect.train_logistic(session, path)
         transformer = (
-            suspect_transformer.train(suspect.entries(session, path, snapshots=snapshots), path)
+            suspect_transformer.train(
+                suspect.with_frozen(suspect.entries(session, path, snapshots=snapshots), path),
+                path,
+            )
             if suspect_transformer.available()
             else {"kept": "skipped: PyTorch is not installed (the `head` extra)"}
         )
