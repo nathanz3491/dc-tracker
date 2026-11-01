@@ -37,9 +37,11 @@ initial build of the v1 PRD.
   - `tracker lock` / `lock check` names the holder (pid, command, since when) and
     whether its process is still running, beside the nightly loop's own lock.
   - `lock break` removes a dead holder's lock, which the next writer would reclaim
-    anyway; it refuses a live one. `lock break --force` breaks a live holder's lock
-    too, after asking (`--yes` to skip): that process keeps writing, so the next
-    command becomes a second writer, and fails partway as SQLite allows one.
+    anyway; it refuses a live one. `lock break --force` on a live holder only warns
+    the first time, naming the process; a second `--force` on the same lock within
+    ten minutes breaks it. That process keeps writing, so the next command becomes a
+    second writer, and fails partway as SQLite allows one. A warning about one lock
+    never arms the break of another that took its place.
   - The break happens under the lock's own reclaim guard and only if the lock is
     still the one inspected, so a lock that changed hands is never the one removed.
 

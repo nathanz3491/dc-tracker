@@ -7,6 +7,8 @@ dies leaves the file behind; the next writer reclaims it on its own, so `break` 
 for a person who wants it gone now. `break --force` also removes the lock of a
 process that is still running, which makes the next command a second writer beside
 it: only for a holder known to be hung, and better still, stop that process instead.
+So the first `--force` only warns, naming the process, and a second on the same lock
+within ten minutes breaks it (`tracker.db.lock.force-armed` remembers the warning).
 
 The nightly loop has a lock of its own (`data/runs/overnight.lock`), which the
 deployer reads; `check` shows it beside the write lock, and nothing here touches it.
@@ -14,7 +16,7 @@ deployer reads; `check` shows it beside the write lock, and nothing here touches
 
 from __future__ import annotations
 
-import sys
+import time
 from pathlib import Path
 from typing import Annotated
 
@@ -87,19 +89,44 @@ def check_cmd() -> None:
         )
 
 
+#: How long a `--force` warning stays armed: a second `--force` within this breaks the
+#: lock, a later one warns again. Long enough to read the warning and decide.
+ARMED_FOR_S = 600.0
+
+
+def _armed_path(lock: WriteLock) -> Path:
+    return lock.path.with_name(lock.path.name + ".force-armed")
+
+
+def _armed_for(lock: WriteLock) -> bool:
+    """Whether a `--force` warning was given about this very lock, recently."""
+    path = _armed_path(lock)
+    try:
+        armed = path.read_text(encoding="utf-8")
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return False
+    return armed == lock.raw and age <= ARMED_FOR_S
+
+
 @lock_app.command("break")
 def break_cmd(
     force: Annotated[
         bool,
         typer.Option(
             "--force",
-            help="DANGEROUS: also break a lock whose process is still running. That "
-            "process keeps writing, and the next command becomes a second writer.",
+            help="DANGEROUS: also break a lock whose process is still running. The first "
+            "--force only warns; a second within ten minutes, on the same lock, breaks it.",
         ),
     ] = False,
-    yes: Annotated[bool, typer.Option("--yes", help="With --force: do not ask first.")] = False,
 ) -> None:
-    """Remove the write lock of a process that has died; --force for a live one."""
+    """Remove the write lock of a process that has died; --force for a live one.
+
+    `--force` on a running holder works in two steps. The first prints a warning and
+    breaks nothing; a second `--force` on the same lock within ten minutes breaks it.
+    The warning names the process, so the second run is a decision about that one:
+    if the lock has changed hands in between, the second run warns again instead.
+    """
     db = _db_path()
     lock = inspect_write_lock(db)
     if not lock.held:
@@ -111,18 +138,24 @@ def break_cmd(
             f"since {lock.since or '?'} UTC.\nStop that process, or pass --force to break "
             "the lock anyway (it keeps writing, and the next command becomes a second writer)."
         )
-    if lock.alive and not yes:
-        if not sys.stdin.isatty():
-            _fail("--force on a running holder asks first; pass --yes where nobody can answer")
+    armed = _armed_path(lock)
+    if lock.alive and not _armed_for(lock):
+        armed.write_text(lock.raw or "", encoding="utf-8")
         err.print(
-            f"[red]pid {lock.pid} ({lock.command or '?'}) is still running and still writing.[/red]"
+            f"[bold red]WARNING[/bold red]: pid {lock.pid} ({lock.command or '?'}), holding the "
+            f"lock since {lock.since or '?'} UTC, is still running and still writing.\n"
+            "Breaking its lock does not stop it: the next command to start becomes a second "
+            "writer beside it, and one of them fails partway through, after paying for its "
+            "model calls. Stopping that process is almost always the better fix.\n"
+            "Nothing was broken. Run `tracker lock break --force` again within ten minutes "
+            "to break this lock."
         )
-        if not typer.confirm("Break its lock anyway?", default=False):
-            _fail("left as it was", 1)
+        raise typer.Exit(1)
     try:
         gone = break_write_lock(db, force=force)
     except AlreadyRunning as exc:
         _fail(str(exc))
+    armed.unlink(missing_ok=True)
     what = "a running process's" if gone.alive else "a dead process's"
     console.print(
         f"broke {what} write lock: pid {gone.pid} ({gone.command or '?'}) since {gone.since or '?'}"
