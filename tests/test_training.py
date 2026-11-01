@@ -135,3 +135,17 @@ def test_the_export_carries_the_answer_keys_verdict_on_the_held_value(session, d
     assert mw["answer"]["verdict"] == "wrong"
     assert mw["row"]["city"] == "Mesa"
     assert next(e for e in entries if e["field"] == "phase")["answer"] is None
+
+
+def test_a_read_only_session_names_the_real_file(db_path, migrated_copy):
+    """2026-11-01: the read-only engine's `file:` URI was taken for a path, and the
+    night's findings went into a directory called `file:` inside the checkout."""
+    from tracker.db import make_engine, session_scope
+
+    migrated_copy(db_path)
+    engine = make_engine(db_path, readonly=True)
+    try:
+        with session_scope(engine, commit=False) as s:
+            assert labels.db_path_of(s).resolve() == db_path.resolve()
+    finally:
+        engine.dispose()

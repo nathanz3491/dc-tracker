@@ -66,12 +66,24 @@ def path_of(db_path: Path | str, name: str) -> Path:
 
 
 def db_path_of(session: Any) -> Path | None:
-    """The database file behind a session, or None for one in memory."""
+    """The database file behind a session, or None for one in memory.
+
+    A read-only engine names its file as an SQLite URI (`file:/…/tracker.db`, with
+    `mode=ro` in the query), and taken as a path that wrote the night's findings into
+    a directory called `file:` inside the checkout (2026-11-01). The URI's path is
+    the file.
+    """
     try:
         name = session.get_bind().url.database
     except Exception:
         return None
-    return Path(name) if name and name != ":memory:" else None
+    if not name or name == ":memory:":
+        return None
+    if name.startswith("file:"):
+        name = name[len("file:") :].split("?", 1)[0]
+        if len(name) > 2 and name[0] == "/" and name[2] == ":":  # file:/C:/… on Windows
+            name = name[1:]
+    return Path(name)
 
 
 def _append(db_path: Path | None, name: str, lines: Iterable[dict[str, Any]]) -> None:

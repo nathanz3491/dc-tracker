@@ -21,6 +21,12 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The night's findings record went to a folder called `file:`** (`tracker/labels.py`
+  — `db_path_of`). A read-only connection names its database as an SQLite URI, and
+  the label log took the URI for a path, so on 2026-11-01 the 449 findings landed in
+  `file:/…/data/runs/findings.jsonl` inside the checkout. Moved by hand to
+  `data/runs/findings.jsonl`; the URI's path is now read as the file.
+
 - **Search finds lost to Google redirect links, recovered** (`scripts/resolve_goto_links.py`).
   From 2026-10-30 Google let only the top three links of a results page be followed,
   so Serper returned the rest as `google.com/goto` redirects, which robots.txt forbids
