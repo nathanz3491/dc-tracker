@@ -546,7 +546,7 @@ def test_the_ceiling_is_checked_before_every_paid_phase(tmp_path, before, argv, 
         )
     )
     assert (
-        f"] spend ceiling reached (¥5.00 of ¥5, ~123 of 25000000 tokens) before {before} — stopping\n"
+        f"] spend ceiling reached (¥5.00 of ¥5, ~123 of 9836065 tokens) before {before} — stopping\n"
         in run.text
     )
     started = run.stub.calls.index(next(c for c in run.stub.calls if c[: len(trigger)] == trigger))
@@ -758,7 +758,7 @@ def test_the_defaults_are_the_shells():
     )  # fmt: skip
     assert (o.discover, o.screen, o.baselines, o.search_cap) == (1350, True, 300, 2000)
     assert (o.dates, o.reread, o.recheck, o.min_confidence) == (150, 180, 180, "0.85")
-    assert (o.merge, o.cny, o.tokens, o.backup_every) == (True, None, 25_000_000, 5)
+    assert (o.merge, o.cny, o.tokens, o.backup_every) == (True, None, None, 5)
     assert (o.judgement_effort, o.extraction_effort, o.agent_effort) == ("high", None, None)
     assert o.local_judgement is False
 
@@ -768,11 +768,21 @@ def test_every_child_gets_the_nights_settings(tmp_path):
     expected = {
         "TRACKER_SPEND_LEDGER": str(tmp_path / "overnight-20261029-180100.spend"),
         "TRACKER_SPEND_CEILING_CNY": "15",
-        "TRACKER_SPEND_CEILING_TOKENS": "25000000",
+        # ¥15 at ¥0.61 a million is 24.6 million tokens; the cap sits 20% above.
+        "TRACKER_SPEND_CEILING_TOKENS": "29508196",
         "TRACKER_SEARCH_CAP": "2000",
         "TRACKER_DEEPSEEK_JUDGEMENT_EFFORT": "high",
     }
     assert run.stub.envs and all(env == expected for env in run.stub.envs)
+
+
+def test_the_token_ceiling_follows_the_money_unless_named(tmp_path):
+    """2026-11-01 stopped at a fixed 25 million tokens with ¥16.06 of ¥43.18 spent."""
+    from tracker.overnight import token_ceiling
+
+    assert token_ceiling("43.18") == 84_944_262  # 20% above the ~70.8M ¥43.18 buys
+    named = go(make(tmp_path, ["--rounds", "1", "--tokens", "1000000"]))
+    assert {env["TRACKER_SPEND_CEILING_TOKENS"] for env in named.stub.envs} == {"1000000"}
 
 
 def test_the_effort_and_provider_options_reach_every_child(tmp_path):

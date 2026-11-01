@@ -125,7 +125,10 @@ A ceiling in tokens (`--tokens`, still honoured) mostly counted cached prompt,
 which is billed at a fiftieth of the rate; about 93% of the money is the reply,
 most of it reasoning. 25,000,000 tokens was anything from ¥20 to ¥31, and on the
 six nights to 2026-09-29 the loop cost ¥9-34 without the token ceiling ever
-firing.
+firing. Since 2026-11-01 its default follows the yuan ceiling (`token_ceiling`): 20%
+above what that buys at the cheapest measured rate, ¥0.61 a million. The fixed 25
+million had become the stop that bound once the yuan ceiling rose with Go's month:
+that night ended at ¥16.06 of ¥43.18.
 
 THE VOLUME, raised on 2026-10-05. The cost fixes of 09-30 left nights at ¥1.76-2.75
 against a ¥12 ceiling, so the loop was doing a fifth of what it was allowed to:
@@ -234,6 +237,7 @@ every old log still parses.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime as dt
 import os
 import re
@@ -352,7 +356,9 @@ class Options:
     merge: bool = True
     #: None: tonight's share of the month (`tracker.spend allowance`).
     cny: str | None = None
-    tokens: int = 25_000_000
+    #: None: derived from tonight's money ceiling (`token_ceiling`), so the yuan stop
+    #: is the one that binds and the tokens are only a backstop.
+    tokens: int | None = None
     judgement_effort: str = "high"
     extraction_effort: str | None = None
     agent_effort: str | None = None
@@ -540,7 +546,8 @@ def parser() -> argparse.ArgumentParser:
         "--tokens",
         type=int,
         default=d.tokens,
-        help="also stop when prompt+reply tokens pass N (default 25,000,000)",
+        help="also stop when prompt+reply tokens pass N (default: 20%% above what the "
+        "money ceiling buys at the cheapest measured rate)",
     )
     a(
         "--judgement-effort",
@@ -584,6 +591,22 @@ def parse_options(argv: Sequence[str]) -> Options:
     if ns["backup_every"] < 1:
         parser().error("--backup-every must be at least 1")
     return Options(**ns)
+
+
+#: Yuan per million prompt+reply tokens, the cheapest night measured: 10-26 to 11-01
+#: ran ¥0.611 to ¥0.666 a million (average ¥0.643), the mix of models and cache hits
+#: moving it. The cheapest, so a night that turns out cheap still meets the yuan
+#: ceiling before the token one.
+CNY_PER_MILLION_TOKENS: Final = 0.61
+#: The token ceiling sits this far above what the yuan ceiling buys: a backstop for a
+#: ledger that cannot be priced, never the stop that ends an ordinary night. A fixed
+#: 25 million ended 2026-11-01 at ¥16.06 of a ¥43.18 ceiling, 37% of the money.
+TOKEN_HEADROOM: Final = 1.2
+
+
+def token_ceiling(cny_cap: str) -> int:
+    """Tokens the night may use: 20% above what `cny_cap` yuan buys at the cheapest rate."""
+    return int(float(cny_cap) / CNY_PER_MILLION_TOKENS * 1_000_000 * TOKEN_HEADROOM)
 
 
 def money_ceiling(o: Options) -> tuple[str, str]:
@@ -814,6 +837,8 @@ class Night:
 
     def __post_init__(self) -> None:
         self.cny_cap, self.cny_from = money_ceiling(self.options)
+        if self.options.tokens is None:
+            self.options = dataclasses.replace(self.options, tokens=token_ceiling(self.cny_cap))
         self.env = night_env(self.options, self.cny_cap, self.ledger)
 
     # --- helpers ---------------------------------------------------------------------

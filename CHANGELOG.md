@@ -12,6 +12,14 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly token ceiling follows the money ceiling** (`tracker/overnight.py` —
+  `token_ceiling`). It was a fixed 25,000,000 tokens, and once the yuan ceiling rose
+  with OpenCode Go's month it was the stop that bound: 2026-11-01 ended at ¥16.06 of a
+  ¥43.18 ceiling, 37% of the money. It now defaults to 20% above what the yuan ceiling
+  buys at the cheapest measured rate (¥0.61 a million tokens; the seven nights to
+  11-01 ran ¥0.611-0.666), about 85 million at ¥43.18, so money is the stop that
+  binds and tokens only a backstop. `--tokens N` still overrides it.
+
 - **The host test suite runs on twelve workers with work stealing** (`scripts/remote_suite.py`,
   `scripts/remote_suite.sh`, `docs/testing-on-the-host.md`). pytest took 24 s on ten
   workers and takes 17 s now: an idle worker takes tests queued for a busy one, so a
