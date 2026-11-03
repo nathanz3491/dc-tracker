@@ -22,6 +22,14 @@ initial build of the v1 PRD.
   same values. The dark set rather than the light one, because a terminal's background
   is the reader's and both machines' are dark. The TUI's coverage bars are thin lines
   now too, like `tracker loop`'s: full blocks drew as a gridded slab.
+- **The terminal palette survives a 256-colour terminal** (`tracker/theme.py`). A
+  session reached over ssh announces 256 colours, and Rich and Textual squeeze every
+  other colour to the nearest of those: Meridian's cream text became xterm colour 224,
+  a pink, its warm greys and bar tracks olive, and its amber and gold one colour — the
+  whole TUI read pink. Each terminal role is now one of the 256 exactly: the accents
+  the nearest that keep Meridian's hue (amber, sage, a red for danger), the neutrals
+  true greys, the rose chart series a steel blue. The TUI draws text at full strength
+  (a blend is a colour the 256 lack) and highlights the cursor row amber.
 
 - **The money ceiling is a day's, shared by every run that day** (`tracker/spend.py` —
   `day_allowance`, `day_start`). The loop reads OpenCode Go's usage when it starts and

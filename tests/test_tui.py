@@ -137,8 +137,38 @@ async def test_the_tui_wears_meridians_dark_tokens(tmp_path: Path):
     async with app_under_test.run_test() as pilot:
         await loaded(app_under_test, pilot)
         assert app_under_test.theme == "meridian"
-        assert app_under_test.current_theme.primary == theme.TOKENS["primary"]
-        assert app_under_test.current_theme.background == theme.TOKENS["background"]
+        assert app_under_test.current_theme.primary == theme.PRIMARY
+        assert app_under_test.current_theme.background == theme.BACKGROUND
+
+
+def test_every_terminal_colour_survives_a_256_colour_terminal():
+    """Over ssh the terminal announces 256 colours and every other colour is squeezed
+    to the nearest of them, which turned Meridian's cream text pink. The accents are
+    one of the 256 exactly; the neutrals may move a step along the grey ramp (Rich
+    rounds light greys down) but must stay grey."""
+    from rich.color import Color, ColorSystem
+
+    from tracker import theme
+
+    def squeezed(hexv: str) -> str:
+        return Color.parse(hexv).downgrade(ColorSystem.EIGHT_BIT).get_truecolor().hex
+
+    neutrals = [
+        theme.FOREGROUND,
+        theme.MUTED,
+        theme.TRACK,
+        theme.BACKGROUND,
+        theme.SURFACE,
+        theme.PANEL,
+        theme.BOOST,
+    ]
+    for hexv in neutrals:
+        out = squeezed(hexv)
+        assert out[1:3] == out[3:5] == out[5:7], f"{hexv} becomes {out}, not a grey"
+    accents = [theme.PRIMARY, theme.ACCENT, theme.SUCCESS, theme.WARNING, theme.DANGER]
+    for hexv in [*accents, *theme.CHART]:
+        assert squeezed(hexv) == hexv, f"{hexv} becomes {squeezed(hexv)}"
+    assert len(set(accents)) == len(accents)
 
 
 async def test_the_subtitle_says_which_database_and_how_big(curated: Path):
