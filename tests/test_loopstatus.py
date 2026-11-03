@@ -80,23 +80,33 @@ def test_render_a_running_night_shows_its_bars_phase_and_history():
     state = loopstatus.Live(running=True, cny=11.25, tokens=18_000_000, searches=500)
     page = _draw(_nights(), state, dt.datetime(2026, 11, 3, 0, 20))
     assert "RUNNING" in page
-    assert "¥11.25 of ¥45.00" in page and "25%" in page
-    assert "18.0M of 88.5M" in page
-    assert "free  for 9m" in page
-    assert "+12" in page and "-57" in page
-    assert "Last 2 nights" in page and "fixed point" in page
-    assert "█" in page
+    assert "Now in free for 9m" in page
+    assert "¥11.25 of tonight's ¥45.00; ¥33.75 still available" in page
+    assert "25%" in page and "18.0M of 88.5M" in page
+    assert "Where the time went" in page and "■ enrich" in page
+    assert "12 more" in page and "57 fewer" in page
+    assert "Round 2 so far" in page
+    assert "The last 2 nights" in page and "fixed point" in page and "still running" in page
+    assert "━" in page and "─" in page
 
 
 def test_render_a_night_cut_off_says_so():
     nights = _nights()
     page = _draw(nights, loopstatus.Live(running=False), dt.datetime(2026, 11, 3, 9))
     assert "CUT OFF" in page and "cut off" in page
+    assert "so far" not in page  # the phase list is for a night under way
 
 
-def test_ascii_bars_for_a_console_that_cannot_draw_blocks():
-    text = loopstatus.bar(0.5, 10, ascii_only=True).plain
-    assert text == "#####....."
+def test_a_spend_line_says_which_ceiling_stopped_the_night():
+    tokens = "spend ceiling reached (¥16.06 of ¥43.18, ~25280576 of 25000000 tokens) before reread"
+    money = "spend ceiling reached (¥15.16 of ¥15.09, ~23208740 of 25000000 tokens) before tranches"
+    assert loopstatus._which_ceiling(tokens) == "token ceiling"
+    assert loopstatus._which_ceiling(money) == "money ceiling"
+
+
+def test_ascii_bars_for_a_console_that_cannot_draw_lines():
+    assert loopstatus.bar(0.5, 10, ascii_only=True).plain == "=====-----"
+    assert loopstatus.bar(0.001, 10).plain == "━─────────"  # a sliver still shows
 
 
 def test_cli_reads_the_log_beside_the_database(tmp_path, monkeypatch):
