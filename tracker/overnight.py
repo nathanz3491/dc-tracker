@@ -227,9 +227,10 @@ the PATH and venv, the per-night spend ledger (`TRACKER_SPEND_LEDGER`, named
 into `data/runs/overnight.log`.
 
 THE LOG IS A CONTRACT. The status page reads `data/runs/overnight.log`
-(`tracker.webui.statussite.parse_nights`) and `overnight.sh --status` greps it, so
-the words and line shapes they look for are constants below, imported from here by
-the status page, and the formats — `[YYYY-MM-DD HH:MM:SS] msg`, `--- HH:MM:SS  msg`,
+(`tracker.webui.statussite.parse_nights`), `tracker loop` reads it with the opening
+block's `ceilings`, `at start` and `spend` lines (`tracker.loopstatus`), and
+`overnight.sh --status` greps it, so the words and line shapes they look for are
+constants below, imported from here by both readers, and the formats — `[YYYY-MM-DD HH:MM:SS] msg`, `--- HH:MM:SS  msg`,
 `  round N: findings A -> B (+d) ...` — are byte-for-byte what the shell printed, so
 every old log still parses.
 """
@@ -253,7 +254,7 @@ from typing import BinaryIO, Final, NamedTuple, Protocol
 from tracker import spend
 
 # --- the log contract ---------------------------------------------------------------
-# What `tracker.webui.statussite` and `overnight.sh --status` read. Change one of these
+# What `tracker.webui.statussite`, `tracker.loopstatus` and `overnight.sh --status` read. Change one of these
 # and old logs stop parsing: add a new spelling beside the old instead.
 
 #: Opens a night: `[stamp] overnight starting  (pid N)`.

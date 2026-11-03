@@ -155,6 +155,11 @@ app.add_typer(suspect_app)
 lock_app = typer.Typer(name="lock", invoke_without_command=True)
 app.add_typer(lock_app)
 
+#: The nightly loop's progress (`tracker.loopstatus`): money, time, rounds and phases
+#: of the latest night as bars, and the nights before it.
+loop_app = typer.Typer(name="loop", invoke_without_command=True)
+app.add_typer(loop_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

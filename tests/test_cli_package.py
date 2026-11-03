@@ -123,6 +123,7 @@ COMMANDS = {
     "lock",
     "lock break",
     "lock check",
+    "loop",
     "suspect",
     "suspect row",
     "suspect score",

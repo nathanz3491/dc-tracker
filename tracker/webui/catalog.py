@@ -122,6 +122,9 @@ BLOCKED: dict[str, str] = {
     "lock": "run it on the host, where the processes are",
     "lock check": "run it on the host, where the processes are",
     "lock break": "breaking a write lock is for somebody at a terminal on the host",
+    # It reads the loop's log and ledger, which only the host has; the status page
+    # shows the nights to anybody.
+    "loop": "run it on the host, where the loop runs — the status page shows its nights",
     # The status page shows the same thing to anybody, and a note on it is public
     # text: written at a terminal, by whoever runs the tracker.
     "status": "it is the public status page",

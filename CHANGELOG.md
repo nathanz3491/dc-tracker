@@ -54,6 +54,19 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **`tracker loop`: the nightly loop at a glance** (`tracker/loopstatus.py`,
+  `tracker/cli/loop.py`). `overnight.sh --status` printed the night's raw round lines,
+  which said whether the loop was running and little else — not how much of tonight's
+  money was gone, which phase it was in or for how long, or whether the rounds were
+  still moving anything. This reads the same log and the night's spend ledger and draws
+  them: bars for money, tokens, searches, time and rounds against the night's ceilings
+  (green, yellow past 70%, red past 90%), the findings, duplicate groups and rows below
+  T2 at the start and now, every round's time, cost and effect, the latest round phase
+  by phase with the one under way marked, and the last seven nights with how long each
+  took, what it cost and why it stopped. `--watch N` redraws every N seconds; `--json`
+  gives the same figures for scripts. Read-only, and it runs on the host, where the log
+  is; a console that cannot encode block characters gets ASCII bars.
+
 - **`tracker answers apply`: correct what the answer key proves wrong, through the claims**
   (`tracker/answer_apply.py`; `tests/test_answer_apply.py`). For each verified answer
   the row holds wrong, the answer's page and sentence are cited on the row and the
