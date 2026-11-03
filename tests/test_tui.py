@@ -128,6 +128,19 @@ async def test_an_empty_database_is_not_an_error(tmp_path: Path):
         assert app_under_test.snapshot.projects == []
 
 
+async def test_the_tui_wears_meridians_dark_tokens(tmp_path: Path):
+    from tracker import theme
+
+    db = tmp_path / "empty.db"
+    assert invoke(db, "init").exit_code == 0
+    app_under_test = TrackerApp(db)
+    async with app_under_test.run_test() as pilot:
+        await loaded(app_under_test, pilot)
+        assert app_under_test.theme == "meridian"
+        assert app_under_test.current_theme.primary == theme.TOKENS["primary"]
+        assert app_under_test.current_theme.background == theme.TOKENS["background"]
+
+
 async def test_the_subtitle_says_which_database_and_how_big(curated: Path):
     app_under_test = TrackerApp(curated)
     async with app_under_test.run_test() as pilot:
@@ -387,9 +400,9 @@ def test_money_is_rendered_at_the_scale_it_is_reported_at():
 
 
 def test_a_bar_is_empty_rather_than_absent_when_there_is_nothing():
-    assert bar(0, 0, width=4).plain == "····"
-    assert bar(2, 4, width=4).plain == "██··"
-    assert bar(9, 9, width=4).plain == "████"
+    assert bar(0, 0, width=4).plain == "────"
+    assert bar(2, 4, width=4).plain == "━━──"
+    assert bar(9, 9, width=4).plain == "━━━━"
 
 
 def test_a_snapshot_reports_a_bad_roster_rather_than_failing(curated: Path, monkeypatch):

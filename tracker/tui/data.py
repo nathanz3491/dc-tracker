@@ -20,41 +20,44 @@ from typing import Any
 
 from rich.text import Text
 
+from tracker import theme
+
 #: Provenance markers, matching what the CLI prints. A value is not just a number:
 #: `derived` came from a Census lookup nobody said out loud, `unconfirmed` was
 #: extracted and could not be quoted, `inferred` is a model's judgement. Rendering
 #: them identically is how a spreadsheet ends up quoting an inference.
 TIER_STYLE: dict[str, str] = {
-    "reported": "green",
-    "derived": "cyan",
-    "unconfirmed": "yellow",
-    "inferred": "magenta",
-    "defaulted": "dim",
+    "reported": theme.SUCCESS,
+    "derived": theme.CHART[4],
+    "unconfirmed": theme.WARNING,
+    "inferred": theme.CHART[3],
+    "defaulted": theme.MUTED,
 }
 
-#: Phase colours, warm as a project gets closer to serving traffic.
+#: Phase colours, warm as a project gets closer to serving traffic: Meridian's
+#: lavender, amber and terracotta series, then its success green.
 PHASE_STYLE: dict[str, str] = {
-    "announced": "blue",
-    "permitting": "cyan",
-    "construction": "yellow",
-    "operational": "green",
-    "cancelled": "red",
-    "paused": "red",
+    "announced": theme.CHART[4],
+    "permitting": theme.PRIMARY,
+    "construction": theme.CHART[2],
+    "operational": theme.SUCCESS,
+    "cancelled": theme.DANGER,
+    "paused": theme.DANGER,
 }
 
 SEVERITY_STYLE: dict[str, str] = {
-    "blocking": "bold red",
-    "material": "yellow",
-    "watch": "dim",
+    "blocking": f"bold {theme.DANGER}",
+    "material": theme.WARNING,
+    "watch": theme.MUTED,
 }
 
 STATUS_STYLE: dict[str, str] = {
-    "absent": "red",
-    "thin": "yellow",
-    "covered": "green",
+    "absent": theme.DANGER,
+    "thin": theme.WARNING,
+    "covered": theme.SUCCESS,
 }
 
-NA = Text("-", style="dim")
+NA = Text("-", style=theme.MUTED)
 
 
 def fmt_mw(value: float | None) -> Text:
@@ -85,25 +88,26 @@ def fmt_count(value: int | None) -> Text:
     return Text(f"{value:,}") if value else NA
 
 
-def bar(value: float, total: float, width: int = 14, style: str = "green") -> Text:
+def bar(value: float, total: float, width: int = 14, style: str = theme.SUCCESS) -> Text:
     """A proportion, drawn. Empty is drawn as empty rather than omitted.
 
     Bars are the whole argument for this interface over the CLI's tables: "9 of 12
     fields" is a number you have to compare by hand across thirty rows, and a bar
-    is a shape you compare at a glance.
+    is a shape you compare at a glance. Thin lines, as `tracker loop` draws them:
+    a full block is drawn by several terminal fonts as a slab with a grid through it.
     """
     if total <= 0:
-        return Text("·" * width, style="dim")
+        return Text("─" * width, style=theme.TRACK)
     filled = max(0, min(width, round(width * value / total)))
-    out = Text("█" * filled, style=style)
-    out.append("·" * (width - filled), style="dim")
+    out = Text("━" * filled, style=style)
+    out.append("─" * (width - filled), style=theme.TRACK)
     return out
 
 
 def confidence_cell(value: int | None) -> Text:
     """1..3, coloured. One source can never reach 3 however authoritative."""
     score = value or 0
-    style = "green" if score >= 3 else "yellow" if score == 2 else "red"
+    style = theme.SUCCESS if score >= 3 else theme.WARNING if score == 2 else theme.DANGER
     return Text("●" * score + "○" * (3 - score), style=style)
 
 
@@ -119,7 +123,7 @@ def value_with_tier(project: dict[str, Any], field_name: str, rendered: Text) ->
     if not tier or tier == "reported":
         return rendered
     out = rendered.copy()
-    out.append(f" {tier}", style=TIER_STYLE.get(tier, "dim"))
+    out.append(f" {tier}", style=TIER_STYLE.get(tier, theme.MUTED))
     return out
 
 

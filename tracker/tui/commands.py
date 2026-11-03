@@ -49,12 +49,13 @@ from textual.message import Message
 from textual.widgets import Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+from tracker import theme
 from tracker.tui import completion as completion_mod
 from tracker.webui import catalog
 from tracker.webui import runner as runner_mod
 
 #: Cost markers in the list. `llm` spends money; `destroys` cannot be undone.
-COST_MARK = {"llm": ("$", "yellow"), "free": (" ", "dim")}
+COST_MARK = {"llm": ("$", theme.WARNING), "free": (" ", theme.MUTED)}
 
 #: Characters of flag names the detail will print before it says "+N more".
 #:
@@ -67,9 +68,9 @@ FLAG_BUDGET = 110
 #: Colour per candidate kind, so the list says what sort of word it is offering.
 CANDIDATE_STYLE = {
     "command": "bold",
-    "flag": "cyan",
-    "choice": "magenta",
-    "value": "green",
+    "flag": theme.PRIMARY,
+    "choice": theme.CHART[4],
+    "value": theme.SUCCESS,
 }
 
 
@@ -216,7 +217,9 @@ class CommandsPane(Vertical):
             ]
             if not matching:
                 continue
-            option_list.add_option(Option(Text(label.upper(), style="bold dim"), disabled=True))
+            option_list.add_option(
+                Option(Text(label.upper(), style=f"bold {theme.MUTED}"), disabled=True)
+            )
             for name in matching:
                 option_list.add_option(Option(self._label(self._commands[name]), id=name))
                 self._order.append(name)
@@ -224,15 +227,15 @@ class CommandsPane(Vertical):
             self.show_command(self._order[0])
 
     def _label(self, command: catalog.Command) -> Text:
-        mark, style = COST_MARK.get(command.cost, (" ", "dim"))
+        mark, style = COST_MARK.get(command.cost, (" ", theme.MUTED))
         line = Text(f"{mark} ", style=style)
         line.append(command.name, style="bold" if command.cost == "llm" else "")
         # Marks rather than words: this column is two dozen rows tall and every
         # character of width it spends is width the command names lose.
         if command.destroys:
-            line.append(" x", style="red")
+            line.append(" x", style=theme.DANGER)
         if command.blocked:
-            line.append(" ~", style="dim")
+            line.append(" ~", style=theme.MUTED)
         return line
 
     def show_command(self, name: str, *, focus_flag: Any = None) -> None:
@@ -248,13 +251,13 @@ class CommandsPane(Vertical):
         head = Text()
         head.append(f"tracker {command.name}", style="bold")
         if command.cost == "llm":
-            head.append("   $ spends tokens, needs the name typed back", style="yellow")
+            head.append("   $ spends tokens, needs the name typed back", style=theme.WARNING)
         if command.destroys:
-            head.append(f"   x {command.destroys}", style="red")
+            head.append(f"   x {command.destroys}", style=theme.DANGER)
         if command.blocked:
-            head.append(f"   cannot run from here: {command.blocked}", style="dim")
+            head.append(f"   cannot run from here: {command.blocked}", style=theme.MUTED)
 
-        summary = Text(command.help or "", style="dim")
+        summary = Text(command.help or "", style=theme.MUTED)
 
         flags = Text()
         shown = 0
@@ -270,19 +273,19 @@ class CommandsPane(Vertical):
                 continue
             if flags:
                 flags.append("  ")
-            style = "magenta" if flag.positional else "cyan"
+            style = theme.CHART[4] if flag.positional else theme.PRIMARY
             flags.append(rendered, style=f"reverse {style}" if focused else style)
             shown += 1
         hidden = len(command.flags) - shown
         if hidden > 0:
-            flags.append(f"  +{hidden} more", style="dim")
+            flags.append(f"  +{hidden} more", style=theme.MUTED)
         if not command.flags:
-            flags = Text("no options", style="dim")
+            flags = Text("no options", style=theme.MUTED)
 
         parts = [head, summary, Text(), flags]
         if focus_flag is not None and getattr(focus_flag, "help", ""):
             hint = Text()
-            hint.append(f"{focus_flag.name}  ", style="bold cyan")
+            hint.append(f"{focus_flag.name}  ", style=theme.BOLD_PRIMARY)
             hint.append(str(focus_flag.help))
             parts += [Text(), hint]
         self.query_one("#command-detail", Static).update(Group(*parts))
@@ -300,7 +303,7 @@ class CommandsPane(Vertical):
         for candidate in self._completions.items:
             label = Text(candidate.text, style=CANDIDATE_STYLE.get(candidate.kind, ""))
             if candidate.hint:
-                label.append(f"   {candidate.hint}", style="dim")
+                label.append(f"   {candidate.hint}", style=theme.MUTED)
             widget.add_option(Option(label))
         has_items = bool(self._completions.items)
         widget.display = has_items
@@ -413,20 +416,24 @@ class CommandsPane(Vertical):
         try:
             cmd, flags = catalog.parse_command_line(text)
         except catalog.InvalidRequest as exc:
-            self._status(Text(str(exc), style="red"))
+            self._status(Text(str(exc), style=theme.DANGER))
             return
         command = self._commands.get(cmd)
         if command is None:
-            self._status(Text(f"unknown command {cmd!r}", style="red"))
+            self._status(Text(f"unknown command {cmd!r}", style=theme.DANGER))
             return
         if command.blocked:
-            self._status(Text(f"{cmd} cannot run from here: {command.blocked}", style="yellow"))
+            self._status(
+                Text(f"{cmd} cannot run from here: {command.blocked}", style=theme.WARNING)
+            )
             return
         self.hide_completions()
         if command.needs_confirmation:
             self._pending = (cmd, flags)
             why = command.destroys or "spends LLM tokens."
-            self._status(Text(f"`{cmd}` {why}  Type the command name to run it.", style="yellow"))
+            self._status(
+                Text(f"`{cmd}` {why}  Type the command name to run it.", style=theme.WARNING)
+            )
             self._ask_confirmation()
             return
         self._start(cmd, flags, confirm=None)
@@ -460,15 +467,15 @@ class CommandsPane(Vertical):
             # resized since the last run, and the child can only be told once.
             run = self._runner.start(cmd, flags, confirm=confirm, columns=self._columns())
         except runner_mod.Busy as exc:
-            self._status(Text(str(exc), style="yellow"))
+            self._status(Text(str(exc), style=theme.WARNING))
             return
         except catalog.InvalidRequest as exc:
-            self._status(Text(str(exc), style="red"))
+            self._status(Text(str(exc), style=theme.DANGER))
             return
         self._clear_confirmation()
         log.auto_scroll = True
-        log.write(Text(f"\n$ tracker {cmd}", style="bold cyan"))
-        self._status(Text(f"running {cmd} …   ctrl+k cancels", style="cyan"))
+        log.write(Text(f"\n$ tracker {cmd}", style=theme.BOLD_PRIMARY))
+        self._status(Text(f"running {cmd} …   ctrl+k cancels", style=theme.PRIMARY))
         self.query_one("#command-line", Input).focus()
         self._pump(run.id)
 
@@ -509,13 +516,15 @@ class CommandsPane(Vertical):
 
     def _finished(self, summary: dict[str, Any]) -> None:
         status = str(summary.get("status") or "?")
-        style = {"ok": "green", "failed": "red", "cancelled": "yellow"}.get(status, "dim")
+        style = {"ok": theme.SUCCESS, "failed": theme.DANGER, "cancelled": theme.WARNING}.get(
+            status, theme.MUTED
+        )
         touched = summary.get("projects_touched")
         line = Text(f"{summary.get('cmd', '')} {status}", style=style)
         if summary.get("duration_s") is not None:
-            line.append(f"  {summary['duration_s']}s", style="dim")
+            line.append(f"  {summary['duration_s']}s", style=theme.MUTED)
         if touched:
-            line.append(f"  {touched} project(s) changed", style="dim")
+            line.append(f"  {touched} project(s) changed", style=theme.MUTED)
         # The log keeps the record; the status line says what to do next. Writing
         # the same sentence to both put two identical lines a row apart, which is
         # how a screen ends up looking like it stuttered.
@@ -525,8 +534,8 @@ class CommandsPane(Vertical):
         log.scroll_end(animate=False)
         self._status(
             Text.assemble(
-                ("ready", "dim"),
-                ("   pageup/pagedown scroll back, shift+end returns to the tail", "dim"),
+                ("ready", theme.MUTED),
+                ("   pageup/pagedown scroll back, shift+end returns to the tail", theme.MUTED),
             )
         )
         # A run that wrote rows makes every read pane stale, and a stale pane beside
@@ -536,9 +545,9 @@ class CommandsPane(Vertical):
 
     def action_cancel_run(self) -> None:
         if self._runner is not None and self._runner.cancel():
-            self._status(Text("cancelling …", style="yellow"))
+            self._status(Text("cancelling …", style=theme.WARNING))
         else:
-            self._status(Text("nothing is running", style="dim"))
+            self._status(Text("nothing is running", style=theme.MUTED))
 
     def action_clear_log(self) -> None:
         self.query_one("#command-log", RichLog).clear()

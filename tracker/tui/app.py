@@ -17,6 +17,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
+from tracker import theme
 from tracker.tui.commands import CommandsPane
 from tracker.tui.data import Snapshot
 from tracker.tui.views import CapexPane, CoveragePane, OverviewPane, ProjectsPane, QueuePane
@@ -112,6 +113,10 @@ class TrackerApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        # Meridian's dark tokens (`tracker.theme`), so the widgets' own colours and
+        # the `$primary`/`$panel`/`$error` above match `tracker loop` and the web.
+        self.register_theme(theme.textual_theme())
+        self.theme = "meridian"
         self.sub_title = str(self.db_path)
         self.reload_data()
 
@@ -212,8 +217,8 @@ class TrackerApp(App):
     def render_startup_report(self) -> Text:
         """For `--check`: what, if anything, failed to fill."""
         if not self.startup_problems:
-            return Text("every pane filled", style="green")
-        return Text("\n".join(self.startup_problems), style="red")
+            return Text("every pane filled", style=theme.SUCCESS)
+        return Text("\n".join(self.startup_problems), style=theme.DANGER)
 
 
 __all__ = ["TrackerApp"]

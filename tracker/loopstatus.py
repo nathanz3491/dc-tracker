@@ -24,7 +24,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from tracker import overnight, spend
+from tracker import overnight, spend, theme
 
 _CEILINGS: Final = re.compile(
     r"^\s+ceilings\s+(?P<hours>[\d.]+)h, (?P<rounds>\d+) rounds, ¥(?P<cny>[\d.]+)"
@@ -289,9 +289,9 @@ def live(night: Night, runs: Path) -> Live:
 # terminal fonts draw as one solid slab, so the used part could not be told apart.
 
 #: Colours for the time line's segments, longest phase first; the rest is "other".
-_PALETTE: Final = ("dodger_blue1", "orange1", "medium_purple1", "spring_green2", "gold1")
+_PALETTE: Final = theme.CHART
 
-_DIM: Final = "grey35"
+_DIM: Final = theme.TRACK
 
 
 def bar(
@@ -303,7 +303,9 @@ def bar(
     filled = round(fraction * width)
     if fraction > 0 and filled == 0:
         filled = 1  # a sliver of use still shows
-    colour = colour or ("green" if fraction < 0.7 else "yellow" if fraction < 0.9 else "red")
+    colour = colour or (
+        theme.SUCCESS if fraction < 0.7 else theme.WARNING if fraction < 0.9 else theme.DANGER
+    )
     out = Text(full * filled, style=colour)
     out.append(empty * (width - filled), style=_DIM)
     return out
@@ -339,9 +341,9 @@ def _spent(night: Night, state: Live) -> float | None:
 
 
 def _section(title: str, note: str = "") -> Text:
-    out = Text(f"\n{title}", style="bold")
+    out = Text(f"\n{title}", style=theme.BOLD_PRIMARY)
     if note:
-        out.append(f"   {note}", style="grey50")
+        out.append(f"   {note}", style=theme.MUTED)
     return out
 
 
@@ -349,16 +351,16 @@ def _headline(night: Night, state: Live, now: dt.datetime) -> Group:
     """Three sentences: what state it is in, why it stopped or what it is doing, the money."""
     end = _end(night, state, now)
     if state.running:
-        badge = Text(" ● RUNNING ", style="bold black on green")
+        badge = Text(" ● RUNNING ", style=theme.badge(theme.SUCCESS))
         when = f"since {night.started:%a %m-%d %H:%M}, {duration(end - night.started)} so far"
     elif night.complete:
-        badge = Text(" ✓ FINISHED ", style="bold black on cyan")
+        badge = Text(" ✓ FINISHED ", style=theme.badge(theme.PRIMARY))
         when = (
             f"{night.started:%a %m-%d}, {night.started:%H:%M} → {end:%H:%M}"
             f"  ({duration(end - night.started)})"
         )
     else:
-        badge = Text(" ✗ CUT OFF ", style="bold white on red")
+        badge = Text(" ✗ CUT OFF ", style=theme.badge(theme.DANGER))
         when = f"started {night.started:%a %m-%d %H:%M}, last heard of at {end:%H:%M}"
     lines = [Text.assemble(badge, "  ", (when, "bold"))]
     phase = night.current_phase() if state.running else None
@@ -366,16 +368,16 @@ def _headline(night: Night, state: Live, now: dt.datetime) -> Group:
         lines.append(
             Text.assemble(
                 "Now in ",
-                (phase.name, "bold green"),
+                (phase.name, f"bold {theme.SUCCESS}"),
                 f" for {duration(now - phase.started)}",
-                (f" — {phase.detail}" if phase.detail else "", "grey50"),
+                (f" — {phase.detail}" if phase.detail else "", theme.MUTED),
             )
         )
     elif night.stop:
         lines.append(Text(f"Stopped: {_WHY.get(night.stop, night.stop)}."))
     elif not night.complete:
         lines.append(
-            Text("It ended without finishing: a reset, a power cut or a kill.", style="red")
+            Text("It ended without finishing: a reset, a power cut or a kill.", style=theme.DANGER)
         )
     cny = _spent(night, state)
     if cny is not None and night.cny_cap:
@@ -391,13 +393,13 @@ def _budget(night: Night, state: Live, now: dt.datetime, ascii_only: bool) -> Ta
     table.add_column(style="bold", min_width=8)
     table.add_column(justify="right", min_width=4)
     table.add_column(no_wrap=True)
-    table.add_column(style="grey50")
+    table.add_column(style=theme.MUTED)
 
     def row(label: str, used: float, cap: float | None, shown: str) -> None:
         if cap:
             table.add_row(label, f"{used / cap:.0%}", bar(used / cap, ascii_only=ascii_only), shown)
         else:
-            table.add_row(label, "", Text("no ceiling", style="grey50"), shown)
+            table.add_row(label, "", Text("no ceiling", style=theme.MUTED), shown)
 
     cny = _spent(night, state)
     if cny is not None:
@@ -447,7 +449,7 @@ def _timeline(night: Night, state: Live, now: dt.datetime, ascii_only: bool, wid
     other = sum(s for _, s in spent[len(_PALETTE) :])
     segments = [(name, s, colour) for (name, s), colour in zip(named, _PALETTE, strict=False)]
     if other:
-        segments.append(("other", other, "grey50"))
+        segments.append(("other", other, theme.MUTED))
     # In the order they ran would be truer, but phases repeat every round; grouped by
     # kind, the longest first, is what answers "where did the time go".
     line = Text()
@@ -463,18 +465,18 @@ def _timeline(night: Night, state: Live, now: dt.datetime, ascii_only: bool, wid
             legend.append("   ")
         legend.append("■ " if not ascii_only else "# ", style=colour)
         legend.append(name, style="bold")
-        legend.append(f" {duration(dt.timedelta(seconds=seconds))}", style="grey50")
+        legend.append(f" {duration(dt.timedelta(seconds=seconds))}", style=theme.MUTED)
     return Group(line, legend)
 
 
 def _arrow(before: int, after: int, ascii_only: bool) -> Text:
     diff = after - before
     if diff == 0:
-        return Text("   no change", style="grey50")
+        return Text("   no change", style=theme.MUTED)
     # Every count here is work left, so down is good.
     if diff < 0:
-        return Text(f"{'v' if ascii_only else '▼'} {-diff:>5,} fewer", style="green")
-    return Text(f"{'^' if ascii_only else '▲'} {diff:>5,} more", style="yellow")
+        return Text(f"{'v' if ascii_only else '▼'} {-diff:>5,} fewer", style=theme.SUCCESS)
+    return Text(f"{'^' if ascii_only else '▲'} {diff:>5,} more", style=theme.WARNING)
 
 
 def _progress(night: Night, ascii_only: bool) -> Table | None:
@@ -493,13 +495,13 @@ def _progress(night: Night, ascii_only: bool) -> Table | None:
         ("rows below T2", start.below, latest.below),
     ):
         table.add_row(
-            label, f"{a:,}", Text("→", style="grey50"), f"{b:,}", _arrow(a, b, ascii_only)
+            label, f"{a:,}", Text("→", style=theme.MUTED), f"{b:,}", _arrow(a, b, ascii_only)
         )
     return table
 
 
 def _rounds(night: Night, state: Live, now: dt.datetime, ascii_only: bool) -> Table:
-    table = Table(box=None, padding=(0, 2), show_edge=False, header_style="grey50")
+    table = Table(box=None, padding=(0, 2), show_edge=False, header_style=theme.MUTED)
     for name, justify in (
         ("#", "right"),
         ("start", "left"),
@@ -514,9 +516,12 @@ def _rounds(night: Night, state: Live, now: dt.datetime, ascii_only: bool) -> Ta
         following = night.rounds[i + 1].cny_at_start if i + 1 < len(night.rounds) else final_cny
         cost = f"¥{following - rnd.cny_at_start:.2f}" if following is not None else "-"
         open_ = rnd.ended is None and state.running
-        took = Text(duration((rnd.ended or end) - rnd.started), style="bold green" if open_ else "")
+        took = Text(
+            duration((rnd.ended or end) - rnd.started),
+            style=f"bold {theme.SUCCESS}" if open_ else "",
+        )
         if open_:
-            effect = Text("under way", style="bold green")
+            effect = Text("under way", style=f"bold {theme.SUCCESS}")
         elif rnd.before and rnd.after:
             effect = Text()
             for label, a, b in (
@@ -525,12 +530,12 @@ def _rounds(night: Night, state: Live, now: dt.datetime, ascii_only: bool) -> Ta
                 ("below T2", rnd.before.below, rnd.after.below),
             ):
                 cell = f"{label} {b - a:+,}" if a != b else ""
-                effect.append(f"{cell:<16}", style="green" if b < a else "yellow")
+                effect.append(f"{cell:<16}", style=theme.SUCCESS if b < a else theme.WARNING)
             effect.rstrip()
             if not effect.plain:
-                effect = Text("nothing", style="grey50")
+                effect = Text("nothing", style=theme.MUTED)
         else:
-            effect = Text("-", style="grey50")
+            effect = Text("-", style=theme.MUTED)
         table.add_row(str(rnd.number), f"{rnd.started:%H:%M}", took, cost, effect)
     return table
 
@@ -542,25 +547,28 @@ def _phases(night: Night, now: dt.datetime, ascii_only: bool) -> Table | None:
     table = Table.grid(padding=(0, 2))
     table.add_column()
     table.add_column(style="bold", no_wrap=True)
-    table.add_column(no_wrap=True, style="grey50")
+    table.add_column(no_wrap=True, style=theme.MUTED)
     table.add_column(justify="right", no_wrap=True)
-    table.add_column(style="grey50", overflow="ellipsis", no_wrap=True, max_width=56)
+    table.add_column(style=theme.MUTED, overflow="ellipsis", no_wrap=True, max_width=56)
     for p in night.rounds[-1].phases:
         running = p.ended is None
         mark = (">" if running else "+") if ascii_only else ("▶" if running else "✓")
         took = duration((p.ended or now) - p.started)
         table.add_row(
-            Text(mark, style="bold green" if running else "cyan"),
-            Text(p.name, style="bold green" if running else "bold"),
+            Text(mark, style=f"bold {theme.SUCCESS}" if running else theme.PRIMARY),
+            Text(p.name, style=f"bold {theme.SUCCESS}" if running else "bold"),
             f"{p.started:%H:%M}",
-            Text(took + (" so far" if running else ""), style="bold green" if running else ""),
+            Text(
+                took + (" so far" if running else ""),
+                style=f"bold {theme.SUCCESS}" if running else "",
+            ),
             p.detail,
         )
     return table
 
 
 def _history(nights: list[Night], state: Live, now: dt.datetime, ascii_only: bool) -> Table:
-    table = Table(box=None, padding=(0, 2), show_edge=False, header_style="grey50")
+    table = Table(box=None, padding=(0, 2), show_edge=False, header_style=theme.MUTED)
     table.add_column("night", no_wrap=True)
     table.add_column("took", justify="right")
     table.add_column("spent", justify="right")
@@ -571,22 +579,22 @@ def _history(nights: list[Night], state: Live, now: dt.datetime, ascii_only: boo
     for n in shown:
         tonight = n is nights[-1] and state.running
         if tonight:
-            mark, colour, why = ("▶", "green", "still running")
+            mark, colour, why = ("▶", theme.SUCCESS, "still running")
         elif n.complete:
-            mark, colour, why = ("✓", "cyan", n.stop or "finished")
+            mark, colour, why = ("✓", theme.PRIMARY, n.stop or "finished")
         else:
-            mark, colour, why = ("✗", "red", "cut off")
+            mark, colour, why = ("✗", theme.DANGER, "cut off")
         if ascii_only:
             mark = {"▶": ">", "✓": "+", "✗": "x"}[mark]
         cny = state.cny if tonight else n.cny_closing
         took = duration(_end(n, state if tonight else Live(False), now) - n.started)
         if cny is None:
-            share = Text("-", style="grey50")
+            share = Text("-", style=theme.MUTED)
         elif n.cny_cap:
-            share = bar(cny / n.cny_cap, 20, colour="dodger_blue1", ascii_only=ascii_only)
-            share.append(f" {cny / n.cny_cap:.0%}", style="grey50")
+            share = bar(cny / n.cny_cap, 20, colour=theme.PRIMARY, ascii_only=ascii_only)
+            share.append(f" {cny / n.cny_cap:.0%}", style=theme.MUTED)
         else:
-            share = bar(cny / top, 20, colour="grey50", ascii_only=ascii_only)
+            share = bar(cny / top, 20, colour=theme.MUTED, ascii_only=ascii_only)
         table.add_row(
             Text.assemble((f"{mark} ", colour), f"{n.started:%a %m-%d}"),
             took,
@@ -603,7 +611,7 @@ def render(
     """The whole page for the latest night, with the nights before it underneath."""
     now = now or dt.datetime.now()
     if not nights:
-        return Text("the nightly log holds no nights yet", style="yellow")
+        return Text("the nightly log holds no nights yet", style=theme.WARNING)
     night = nights[-1]
     parts: list[RenderableType] = [_headline(night, state, now)]
     parts += [
@@ -636,9 +644,13 @@ def render(
         ]
     return Panel(
         Group(*parts),
-        title="[bold]nightly loop[/bold]",
+        title=Text("nightly loop", style=theme.BOLD_PRIMARY),
         title_align="left",
-        border_style="green" if state.running else "cyan" if night.complete else "red",
+        border_style=theme.SUCCESS
+        if state.running
+        else theme.PRIMARY
+        if night.complete
+        else theme.DANGER,
         padding=(1, 2),
         expand=False,
     )

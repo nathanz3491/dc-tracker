@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **`tracker loop` and `tracker tui` wear Meridian's design tokens** (`tracker/theme.py`).
+  Both used the terminal's stock named colours — cyan, magenta, a blue for "how much
+  of the ceiling" — which matched nothing else the project shows. They now take
+  Meridian's dark palette, copied once into `tracker/theme.py` and named by role
+  (success, warning, danger, primary, the five chart series), so a colour is changed
+  in one place: the TUI registers it as a Textual theme (espresso background, amber
+  accents), and `tracker loop`'s badges, bars, time-line stretches and headings use the
+  same values. The dark set rather than the light one, because a terminal's background
+  is the reader's and both machines' are dark. The TUI's coverage bars are thin lines
+  now too, like `tracker loop`'s: full blocks drew as a gridded slab.
+
 - **The money ceiling is a day's, shared by every run that day** (`tracker/spend.py` —
   `day_allowance`, `day_start`). The loop reads OpenCode Go's usage when it starts and
   divides what is left of the month by the nights left; a second run the same day was

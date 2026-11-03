@@ -19,6 +19,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Input, Static
 
+from tracker import theme
 from tracker.tui.data import (
     NA,
     PHASE_STYLE,
@@ -76,15 +77,18 @@ class OverviewPane(Pane):
         field_table.add_column("field")
         field_table.add_column("", justify="right")
         field_table.add_column("filled")
-        field_table.add_column("why", style="dim")
+        field_table.add_column("why", style=theme.MUTED)
         for gap in gaps:
             pct = gap.get("pct")
             applicable = gap.get("applicable") or 0
             filled = gap.get("filled") or 0
             if pct is None:
-                shown, drawn = Text("n/a", style="dim"), Text("unmeasurable", style="dim")
+                shown, drawn = (
+                    Text("n/a", style=theme.MUTED),
+                    Text("unmeasurable", style=theme.MUTED),
+                )
             else:
-                style = "green" if pct >= 90 else "yellow" if pct >= 50 else "red"
+                style = theme.SUCCESS if pct >= 90 else theme.WARNING if pct >= 50 else theme.DANGER
                 shown = Text(f"{pct}%", style=style)
                 drawn = bar(filled, applicable, style=style)
             field_table.add_row(
@@ -111,11 +115,11 @@ class OverviewPane(Pane):
             risk_table.add_row(
                 entry["category"],
                 fmt_mw(entry["mw"]),
-                bar(entry["mw"], worst, style="red"),
+                bar(entry["mw"], worst, style=theme.DANGER),
                 Text(str(entry["projects"])),
             )
         if not exposure:
-            risk_table.add_row(Text("nothing open", style="dim"), NA, Text(""), NA)
+            risk_table.add_row(Text("nothing open", style=theme.MUTED), NA, Text(""), NA)
 
         summary = Group(
             headline,
@@ -135,16 +139,17 @@ class OverviewPane(Pane):
     def _coverage_line(snapshot: Snapshot) -> Text:
         report = snapshot.coverage
         if report is None:
-            return Text("coverage unavailable", style="dim")
+            return Text("coverage unavailable", style=theme.MUTED)
         absent = len(report.absent)
         thin = len(report.thin)
         line = Text("operators: ", style="bold")
-        line.append(f"{absent} with no row at all", style="red" if absent else "green")
-        line.append(f", {thin} thin", style="yellow" if thin else "dim")
-        line.append(f", {len(report.covered)} covered", style="green")
+        line.append(f"{absent} with no row at all", style=theme.DANGER if absent else theme.SUCCESS)
+        line.append(f", {thin} thin", style=theme.WARNING if thin else theme.MUTED)
+        line.append(f", {len(report.covered)} covered", style=theme.SUCCESS)
         if report.unrostered:
             line.append(
-                f"  ({len(report.unrostered)} spelling(s) no roster entry claims)", style="dim"
+                f"  ({len(report.unrostered)} spelling(s) no roster entry claims)",
+                style=theme.MUTED,
             )
         return line
 
@@ -154,9 +159,9 @@ class OverviewPane(Pane):
         line.append(f"{len(snapshot.queue)} candidate(s) waiting")
         failed = sum(entry["count"] for entry in snapshot.failed)
         if failed:
-            line.append(f", {failed} URL(s) never read", style="yellow")
+            line.append(f", {failed} URL(s) never read", style=theme.WARNING)
         thin = sum(1 for p in projects if (p.get("filled") or 0) < 9)
-        line.append(f"  ·  {thin} project(s) below 9 of 12 fields", style="dim")
+        line.append(f"  ·  {thin} project(s) below 9 of 12 fields", style=theme.MUTED)
         return line
 
 
@@ -222,7 +227,7 @@ class ProjectsPane(Pane):
             self.show_detail(rows[0]["id"])
         else:
             self.query_one("#project-detail", Static).update(
-                Text("nothing matches that filter", style="dim")
+                Text("nothing matches that filter", style=theme.MUTED)
             )
 
     def show_detail(self, project_id: int) -> None:
@@ -279,7 +284,10 @@ def _project_row(project: dict[str, Any]) -> list[Text]:
         Text(location[:20]),
         Text(phase, style=PHASE_STYLE.get(phase, "")),
         fmt_mw(project.get("mw_planned")),
-        Text(f"{filled}/12", style="green" if filled >= 9 else "yellow" if filled >= 6 else "red"),
+        Text(
+            f"{filled}/12",
+            style=theme.SUCCESS if filled >= 9 else theme.WARNING if filled >= 6 else theme.DANGER,
+        ),
         confidence_cell(project.get("confidence")),
         fmt_usd(project.get("investment_usd")),
     ]
@@ -294,17 +302,17 @@ TRACK_ORDER = ("site", "permits", "power", "construction", "commercial")
 def _detail(project: dict[str, Any]) -> Group:
     """One project, with what each value rests on and where it stands."""
     head = Text()
-    head.append(f"#{project.get('id')}  ", style="dim")
+    head.append(f"#{project.get('id')}  ", style=theme.MUTED)
     head.append(f"{project.get('company') or '?'} — {project.get('name') or '?'}\n", style="bold")
     location = ", ".join(
         part
         for part in (project.get("city") or project.get("county"), project.get("state"))
         if part
     )
-    head.append(location or "location unknown", style="dim")
+    head.append(location or "location unknown", style=theme.MUTED)
 
     facts = Table.grid(padding=(0, 2))
-    facts.add_column(style="dim", justify="right")
+    facts.add_column(style=theme.MUTED, justify="right")
     facts.add_column()
     for label, key, renderer in (
         ("phase", "phase", lambda v: Text(str(v), style=PHASE_STYLE.get(str(v), ""))),
@@ -315,7 +323,7 @@ def _detail(project: dict[str, Any]) -> Group:
         ("customer", "customer", lambda v: Text(str(v))),
         ("announced", "first_announced", lambda v: Text(str(v))),
         ("online", "expected_online", lambda v: Text(str(v))),
-        ("blocker", "blocker", lambda v: Text(str(v), style="yellow")),
+        ("blocker", "blocker", lambda v: Text(str(v), style=theme.WARNING)),
     ):
         value = project.get(key)
         rendered = NA if value in (None, "") else renderer(value)
@@ -323,7 +331,7 @@ def _detail(project: dict[str, Any]) -> Group:
     facts.add_row("confidence", confidence_cell(project.get("confidence")))
 
     tracks = Table.grid(padding=(0, 2))
-    tracks.add_column(style="dim", justify="right")
+    tracks.add_column(style=theme.MUTED, justify="right")
     tracks.add_column()
     tracks.add_column()
     standing = (project.get("standing") or {}).get("tracks") or []
@@ -334,14 +342,20 @@ def _detail(project: dict[str, Any]) -> Group:
             continue
         reached = len(state.get("reached") or [])
         total = max(reached, len(state.get("reached") or []) + (0 if state.get("complete") else 1))
-        style = "green" if state.get("complete") else "red" if state.get("blockers") else "yellow"
+        style = (
+            theme.SUCCESS
+            if state.get("complete")
+            else theme.DANGER
+            if state.get("blockers")
+            else theme.WARNING
+        )
         label = Text(str(state.get("status") or "?"), style=style)
         if state.get("blockers"):
-            label.append(f"  ← {', '.join(state['blockers'][:2])}", style="red")
+            label.append(f"  ← {', '.join(state['blockers'][:2])}", style=theme.DANGER)
         tracks.add_row(name, bar(reached, total or 1, width=10, style=style), label)
 
     risks = Table.grid(padding=(0, 2))
-    risks.add_column(style="dim", justify="right")
+    risks.add_column(style=theme.MUTED, justify="right")
     risks.add_column()
     open_risks = [r for r in (project.get("risks") or []) if r.get("status") == "open"][:5]
     for risk in open_risks:
@@ -352,10 +366,10 @@ def _detail(project: dict[str, Any]) -> Group:
             Text(f"{risk.get('category')}: {(risk.get('summary') or '')[:52]}"),
         )
     if not open_risks:
-        risks.add_row("", Text("no open obstacles recorded", style="dim"))
+        risks.add_row("", Text("no open obstacles recorded", style=theme.MUTED))
 
     sources = Table.grid(padding=(0, 2))
-    sources.add_column(style="dim", justify="right")
+    sources.add_column(style=theme.MUTED, justify="right")
     sources.add_column()
     for source in (project.get("sources") or [])[:6]:
         sources.add_row(
@@ -396,17 +410,17 @@ class CoveragePane(Pane):
         report = snapshot.coverage
         head = self.query_one("#coverage-head", Static)
         if report is None:
-            head.update(Text("coverage unavailable — see the roster file", style="yellow"))
+            head.update(Text("coverage unavailable — see the roster file", style=theme.WARNING))
             return
 
         line = Text()
         line.append(f"{len(report.rows)} rostered operator(s)  ", style="bold")
-        line.append(f"{len(report.absent)} with no row at all", style="red")
-        line.append(f"  {len(report.thin)} thin", style="yellow")
-        line.append(f"  {len(report.covered)} covered", style="green")
+        line.append(f"{len(report.absent)} with no row at all", style=theme.DANGER)
+        line.append(f"  {len(report.thin)} thin", style=theme.WARNING)
+        line.append(f"  {len(report.covered)} covered", style=theme.SUCCESS)
         line.append(
             f"\n{report.rostered_projects} of {report.projects_total} project(s) claimed by an entry",
-            style="dim",
+            style=theme.MUTED,
         )
         head.update(line)
 
@@ -423,14 +437,14 @@ class CoveragePane(Pane):
             )
             table.add_row(
                 Text(row.name, style=STATUS_STYLE[row.status]),
-                Text(row.kind, style="dim"),
+                Text(row.kind, style=theme.MUTED),
                 Text(row.status, style=STATUS_STYLE[row.status]),
                 Text(str(row.projects)) if row.projects else NA,
-                bar(row.mw_planned, biggest or 1, width=10, style="green")
+                bar(row.mw_planned, biggest or 1, width=10, style=theme.SUCCESS)
                 if row.projects
-                else Text("·" * 10, style="dim"),
+                else Text("─" * 10, style=theme.TRACK),
                 Text(str(len(row.states))) if row.states else NA,
-                Text(spellings or row.operator.note[:40], style="dim"),
+                Text(spellings or row.operator.note[:40], style=theme.MUTED),
                 key=row.name,
             )
         self._side(report)
@@ -450,11 +464,11 @@ class CoveragePane(Pane):
         for name, count, mw in report.unrostered[:20]:
             table.add_row(Text(str(count)), Text(name[:34]), fmt_mw(mw))
         if not report.unrostered:
-            table.add_row(NA, Text("every company is rostered", style="dim"), NA)
+            table.add_row(NA, Text("every company is rostered", style=theme.MUTED), NA)
         hint = Text(
             "\neach is an operator to add to seed/operators.toml,\nor a spelling to alias onto one "
             "already there",
-            style="dim",
+            style=theme.MUTED,
         )
         self.query_one("#coverage-side", Static).update(Group(table, hint))
 
@@ -515,18 +529,22 @@ class CapexPane(Pane):
         # speaks for a third of the database looks authoritative and is not.
         head.append(
             f"{attributed:.0f}% of {total} project(s) traced to an end customer",
-            style="green" if attributed >= 60 else "yellow" if attributed >= 30 else "red",
+            style=theme.SUCCESS
+            if attributed >= 60
+            else theme.WARNING
+            if attributed >= 30
+            else theme.DANGER,
         )
         head.append(
             f"  ·  {coverage.get('with_capacity_pct', 0):.0f}% carry a cited capacity"
             f"  ·  {coverage.get('in_timeline_pct', 0):.0f}% are datable",
-            style="dim",
+            style=theme.MUTED,
         )
         duplicates = (capex.get("duplicates") or {}).get("double_counted_mw") or 0
         if duplicates:
             head.append(
                 f"\n{duplicates:,.0f} MW would be counted twice — `duplicates` and `merge` fix it",
-                style="yellow",
+                style=theme.WARNING,
             )
         self.query_one("#capex-head", Static).update(head)
 
@@ -554,8 +572,10 @@ class QueuePane(Pane):
             deepens = entry.get("depth")
             queue_table.add_row(
                 Text(str(entry.get("title") or entry.get("url") or "")[:60]),
-                Text(f"#{deepens}", style="green") if deepens else Text("new", style="dim"),
-                Text(str(entry.get("feed") or "")[:26], style="dim"),
+                Text(f"#{deepens}", style=theme.SUCCESS)
+                if deepens
+                else Text("new", style=theme.MUTED),
+                Text(str(entry.get("feed") or "")[:26], style=theme.MUTED),
             )
         failed_table = self.query_one("#failed-table", DataTable)
         failed_table.clear()
@@ -563,20 +583,21 @@ class QueuePane(Pane):
             failed_table.add_row(
                 Text(str(entry.get("host"))[:30]),
                 Text(str(entry.get("count"))),
-                Text(str(entry.get("http_status") or "-"), style="yellow"),
+                Text(str(entry.get("http_status") or "-"), style=theme.WARNING),
             )
 
         head = Text()
         head.append(f"{len(snapshot.queue)} candidate(s) waiting", style="bold")
         deepening = sum(1 for e in snapshot.queue if e.get("depth"))
         head.append(
-            f"  ·  {deepening} cover a project already tracked, so those go first", style="dim"
+            f"  ·  {deepening} cover a project already tracked, so those go first",
+            style=theme.MUTED,
         )
         failed = sum(e["count"] for e in snapshot.failed)
         if failed:
             head.append(
                 f"\n{failed} URL(s) could not be read — `sync --retry-failed`, or `--browser`",
-                style="yellow",
+                style=theme.WARNING,
             )
         self.query_one("#queue-head", Static).update(head)
 
