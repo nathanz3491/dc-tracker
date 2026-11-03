@@ -18,7 +18,10 @@ on a schedule:
   by the stage (:data:`CADENCE`) — daily for campuses still being decided or built,
   less often for operating ones, and daily for every campus of a company a reader
   watches. A missed night is late news, not lost news: the next look's window
-  reaches back to the last one.
+  reaches back to the last one. **The follow-ups of one company's campuses go out
+  together**, one search for as many of their towns as a query holds, its pages
+  turned while full (:func:`group_queries`): a day of one town's news is under two
+  results, and a search is a credit whatever it returns.
 
 A result is kept when its headline and snippet pass the discovery filter in
 `seed/feeds.toml`, or name this campus, and its date falls in the window. Kept results
@@ -226,6 +229,8 @@ class CampusLook:
     results: int = 0
     kept: int = 0
     queued: int = 0
+    #: Campuses its search covered, this one among them: 1 for a search of its own.
+    together: int = 1
 
 
 @dataclass
@@ -243,10 +248,16 @@ class WatchReport:
     golive_queued: int = 0
     #: Listing pages the go-live check queued to read again (:func:`relist`).
     golive_relisted: int = 0
+    #: A company search's results kept for naming none of its campuses, and of them
+    #: queued (as `watch:company:<key>`).
+    unplaced: int = 0
+    unplaced_queued: int = 0
+    #: What the company searches returned, before the filter.
+    group_results: int = 0
 
     @property
     def queued(self) -> int:
-        return sum(look.queued for look in self.looks)
+        return sum(look.queued for look in self.looks) + self.unplaced_queued
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
@@ -258,9 +269,13 @@ class WatchReport:
             ("campuses never looked at", self.due_baselines),
             ("campuses looked at", len(self.looks)),
             ("of them first looks", sum(1 for look in self.looks if look.baseline)),
+            ("of them in a company's search", sum(1 for look in self.looks if look.together > 1)),
             ("searches", self.queries),
-            ("results", sum(look.results for look in self.looks)),
-            ("kept by the filter", sum(look.kept for look in self.looks)),
+            (
+                "results",
+                sum(look.results for look in self.looks if look.together == 1) + self.group_results,
+            ),
+            ("kept by the filter", sum(look.kept for look in self.looks) + self.unplaced),
             ("queued", self.queued),
             ("searches failed", self.failures),
         ]
@@ -541,6 +556,197 @@ def plan_queries(project: Project, look: NewsWatch | None, *, now: dt.datetime) 
     return [
         Query(project.id, f"{subject} data center", "news", window_for(since, now), since, False)
     ]
+
+
+# --- Follow-ups sent together ---------------------------------------------------------
+#
+# A follow-up covers a day or three of one town's news, and most come back nearly
+# empty: on 2026-11-03, 1,083 searches returned 2,011 results, under two each, at a
+# credit apiece. Serper's news endpoint returns ten results a page whatever `num`
+# asks for, at a credit a page, so the saving is in filling the pages: the follow-ups
+# of one company's campuses go out as one search, `"Company" ("Town A" OR "Town B"
+# OR ...) data center`, and its pages are turned while they come back full. Measured
+# on the host the same night, fifteen companies over a week: 53 credits kept 228
+# results where one search per campus spent 99 to keep 202.
+
+#: Words one search may hold: Google reads the first 32 of a query.
+GROUP_WORDS: Final = 30
+
+#: Pages one company search may turn. A page short of ten is the last.
+GROUP_PAGES: Final = 5
+
+#: A full page.
+PAGE: Final = 10
+
+#: A follow-up this far behind is sent on its own: its window would widen the
+#: company's whole search to its own.
+GROUP_MAX_GAP: Final = dt.timedelta(days=14)
+
+
+@dataclass(frozen=True)
+class GroupQuery:
+    """One search for the follow-ups of several campuses of one company."""
+
+    company_key: str
+    members: tuple[int, ...]
+    text: str
+    window: str
+    since: dt.datetime
+
+
+def _words(term: str) -> int:
+    return len(re.sub(r'["()]', " ", term).split())
+
+
+def _terms(project: Project) -> list[str]:
+    """The quoted places and names a campus's own search anchors on."""
+    return [f'"{w}"' for w in [*_places(project), *_names(project)] if w]
+
+
+def _group_company_term(projects: list[Project]) -> str | None:
+    """The OR of every name the campuses' companies go by, three at most."""
+    names: list[str] = []
+    for project in projects:
+        names += re.findall(r'"([^"]+)"', _company_term(project) or "")
+    # Google ignores case: "STACK" and "Stack Infrastructure" are one name twice.
+    unique = list({n.lower(): n for n in reversed(names)}.values())[::-1][:3]
+    if not unique:
+        return None
+    if len(unique) == 1:
+        return f'"{unique[0]}"'
+    return "(" + " OR ".join(f'"{n}"' for n in unique) + ")"
+
+
+def split_followups(
+    later: list[tuple[Project, NewsWatch]], *, now: dt.datetime
+) -> tuple[list[tuple[str, list[tuple[Project, NewsWatch]]]], list[tuple[Project, NewsWatch]]]:
+    """(companies whose follow-ups go out together, each with its campuses; the
+    follow-ups sent one by one), both in `later`'s order of who is most overdue.
+
+    A campus goes alone when it is its company's only one due, has no company or
+    nothing to anchor on, or is more than :data:`GROUP_MAX_GAP` behind.
+    """
+    from tracker.dedup import company_key
+
+    by_company: dict[str, list[tuple[Project, NewsWatch]]] = {}
+    alone: list[tuple[Project, NewsWatch]] = []
+    for project, look in later:
+        key = company_key(project.company)
+        if (
+            not key
+            or anchor(project) is None
+            or _company_term(project) is None
+            or now - look.checked_at > GROUP_MAX_GAP
+        ):
+            alone.append((project, look))
+            continue
+        by_company.setdefault(key, []).append((project, look))
+    groups = []
+    for key, members in by_company.items():
+        if len(members) == 1:
+            alone.append(members[0])
+        else:
+            groups.append((key, members))
+    order = {project.id: i for i, (project, _) in enumerate(later)}
+    alone.sort(key=lambda item: order[item[0].id])
+    return groups, alone
+
+
+def group_queries(
+    key: str, members: list[tuple[Project, NewsWatch]], *, now: dt.datetime
+) -> list[GroupQuery]:
+    """The company's searches: as many campuses' places in each as fit in
+    :data:`GROUP_WORDS`, each reaching back to the earliest last look among them."""
+    term = _group_company_term([project for project, _ in members])
+    if term is None:
+        return []
+    fixed = _words(term) + 2  # "data center"
+    chunks: list[tuple[list[tuple[Project, NewsWatch]], list[str]]] = []
+    current: list[tuple[Project, NewsWatch]] = []
+    held: list[str] = []
+    for project, look in members:
+        seen = {t.lower() for t in held}
+        mine = [t for t in dict.fromkeys(_terms(project)) if t.lower() not in seen]
+        if current and fixed + sum(_words(t) + 1 for t in [*held, *mine]) > GROUP_WORDS:
+            chunks.append((current, held))
+            current, held = [], []
+            mine = list(dict.fromkeys(_terms(project)))
+        current.append((project, look))
+        held += mine
+    if current:
+        chunks.append((current, held))
+    out = []
+    for chunk, places in chunks:
+        since = min(look.checked_at for _, look in chunk)
+        where = places[0] if len(places) == 1 else f"({' OR '.join(places)})"
+        out.append(
+            GroupQuery(
+                key,
+                tuple(project.id for project, _ in chunk),
+                f"{term} {where} data center",
+                window_for(since, now),
+                since,
+            )
+        )
+    return out
+
+
+def judge_group(
+    hits: list[Any],
+    query: GroupQuery,
+    members: list[Project],
+    *,
+    spec: Any,
+    identities: dict[int, Any],
+    implied: dict[str, str],
+    now: dt.datetime,
+) -> list[tuple[int | None, Any]]:
+    """(the campus each result is about, or None; it as a candidate) for the results
+    worth reading — the rule :func:`judge` applies to one campus's results.
+
+    A result is labelled `watch:#<id>` for the campus it names (the identity match,
+    else the first whose town or name it prints), and `watch:company:<key>` when it
+    names none of them: the crawl's identity check decides either way, but the
+    go-live flag counts only a campus's own label (`discover.deciding`)."""
+    from tracker.ingest import screen
+    from tracker.ingest.discover import (
+        Candidate,
+        first_term,
+        matches_known_project,
+        normalize_haystack,
+    )
+
+    ids = [identities[p.id] for p in members if p.id in identities]
+    terms = {p.id: [t.strip('"').lower() for t in _terms(p)] for p in members}
+    probe = Query(0, query.text, "news", query.window, query.since, False)
+    out: list[tuple[int | None, Any]] = []
+    for hit, text, stored in _screened(hits, probe, now=now):
+        haystack = f"{text} {urlsplit(hit.url).path}"
+        named = matches_known_project(hit.url, text, ids, implied_companies=implied)
+        named = named if named in terms else None
+        keep = spec.matches(haystack)[0]
+        if not keep and not (
+            screen.off_topic(haystack)
+            and first_term(spec.topic, normalize_haystack(haystack)) is None
+        ):
+            keep = named is not None
+        if not keep:
+            continue
+        low = text.lower()
+        owner = named or next((pid for pid, ts in terms.items() if any(t in low for t in ts)), None)
+        out.append(
+            (
+                owner,
+                Candidate(
+                    url=hit.url,
+                    title=hit.title or hit.url,
+                    feed=f"watch:#{owner}" if owner else f"watch:company:{query.company_key}",
+                    published_at=stored,
+                    source_type="general_media",
+                ),
+            )
+        )
+    return out
 
 
 # --- Who is due -------------------------------------------------------------------
@@ -904,8 +1110,9 @@ def run(
 
     The go-live searches come first (`golive_query`): a campus past its online date
     is not shown as a suspected delay until one has run, so they are the searches a
-    reader is waiting on. `golive`, `followups` and `baselines` cap how many campuses
-    of each kind (None: all of them); `max_queries` caps the searches. Commits after
+    reader is waiting on. Then the follow-ups that share a company, a search for
+    several at once (:func:`group_queries`), then the rest one by one, then first
+    looks. `golive`, `followups` and `baselines` cap how many campuses of each kind (None: all of them); `max_queries` caps the searches. Commits after
     every campus, so a run cut short keeps what it did and the next run carries on.
     """
     from tracker import delays as delays_mod
@@ -923,14 +1130,14 @@ def run(
     run_id = run_id or now.strftime("watch-%Y%m%dT%H%M%S")
     later, fresh = due(session, now=now, project_ids=project_ids)
     report.due_followups, report.due_baselines = len(later), len(fresh)
-    plan = later[:followups] if followups is not None else later
-    plan += fresh[:baselines] if baselines is not None else fresh
+    groups, alone = split_followups(later[:followups] if followups is not None else later, now=now)
+    plan = alone + (fresh[:baselines] if baselines is not None else fresh)
     checks = [] if golive == 0 else delays_mod.awaiting_search(session, today=now.date())
     if project_ids:
         checks = [item for item in checks if item[0] in project_ids]
     report.due_golive = len(checks)
     checks = checks[:golive] if golive is not None else checks
-    if not plan and not checks:
+    if not plan and not groups and not checks:
         return report
 
     if provider is None:
@@ -995,6 +1202,89 @@ def run(
         project.golive_checked_at = now
         report.golive_checked += 1
         session.commit()
+
+    # The follow-ups of a company's campuses, one search for several of them.
+    for key, members in groups:
+        for gq in group_queries(key, members, now=now):
+            chunk = [(p, look) for p, look in members if p.id in gq.members]
+            hits: list[Any] = []
+            sent = 0
+            stop = None
+            complete = False
+            for page in range(1, GROUP_PAGES + 1):
+                if max_queries is not None and report.queries + 1 > max_queries:
+                    stop = f"the run's search allowance is spent ({report.queries} sent)"
+                    break
+                try:
+                    got = provider.news(gq.text, window=gq.window, page=page)
+                except QuotaExhausted as exc:
+                    stop = str(exc)
+                    break
+                except SearchError as exc:
+                    report.failures += 1
+                    failures_running += 1
+                    log.warning("watch search failed for %s: %s", key, exc)
+                    if failures_running >= 5:
+                        stop = f"five searches failed in a row; the last: {exc}"
+                    break
+                failures_running = 0
+                report.queries += 1
+                sent += 1
+                hits += got
+                if len(got) < PAGE:
+                    complete = True
+                    break
+            else:
+                # Fifty results in a window of a day or three: the oldest are lost,
+                # and the next look starts after them. Said, so it can be measured.
+                complete = True
+                log.info("company search for %s filled %d pages", key, GROUP_PAGES)
+            report.group_results += len(hits)
+            if not sent:
+                if stop:
+                    report.stopped = stop
+                    return report
+                continue
+            judged = judge_group(
+                hits,
+                gq,
+                [p for p, _ in chunk],
+                spec=spec,
+                identities=identities,
+                implied=implied,
+                now=now,
+            )
+            for owner, candidate in judged:
+                if owner is None:
+                    report.unplaced += 1
+                    report.unplaced_queued += len(
+                        queue_candidates(session, [candidate], run_id=run_id, report=queue_report)
+                    )
+            for project, look in chunk:
+                mine = [c for owner, c in judged if owner == project.id]
+                queued = queue_candidates(session, mine, run_id=run_id, report=queue_report)
+                result = CampusLook(
+                    project.id,
+                    f"{project.company or '?'} — {project.name}",
+                    baseline=False,
+                    queries=sent,
+                    results=len(mine),
+                    kept=len(mine),
+                    queued=len(queued),
+                    together=len(chunk),
+                )
+                if complete:
+                    look.checked_at = now
+                look.queries = (look.queries or 0) + sent
+                look.results = (look.results or 0) + len(mine)
+                look.queued = (look.queued or 0) + len(queued)
+                if queued:
+                    look.last_queued_at = now
+                report.looks.append(result)
+            session.commit()
+            if stop:
+                report.stopped = stop
+                return report
 
     for project, look in plan:
         queries = plan_queries(project, look, now=now)
@@ -1085,6 +1375,7 @@ __all__ = [
     "CampusLook",
     "CompanyLook",
     "CompanyReport",
+    "GroupQuery",
     "Query",
     "WatchReport",
     "anchor",
@@ -1092,10 +1383,13 @@ __all__ = [
     "companies_due",
     "company_query",
     "due",
+    "group_queries",
     "judge",
     "judge_company",
+    "judge_group",
     "plan_queries",
     "run",
     "run_companies",
+    "split_followups",
     "window_for",
 ]

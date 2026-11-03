@@ -1008,7 +1008,8 @@ class Night:
         # --- news: first, so nothing later can cost the day's news ----------------
         # The one phase that adds rows. First round only: the queue does not change
         # between rounds. Polling the feeds and walking the archives costs nothing;
-        # the news watch is one search a campus (prepaid credit, under
+        # the news watch is a search a campus on a first look and a search for
+        # several of a company's campuses after (prepaid credit, under
         # `--search-cap`); each article read is one extraction (about ¥0.03), and the
         # read's identity check — one call, only when a record nearly matches a row —
         # is what keeps a campus already held under another name from becoming its

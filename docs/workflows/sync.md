@@ -138,7 +138,22 @@ for any campus of a company a reader watches. "Daily" allows eight hours' slack
 hours skipped every daily campus on a night that began a few seconds early; at six
 hours, the first look at every campus, run by hand at 00:11 on 10-19, made them all
 due at 18:11, seven minutes after that night's watch began. A look whose search
-fails leaves the clock where it was, so the next one reaches back past it. A campus's **first** look reaches back a year,
+fails leaves the clock where it was, so the next one reaches back past it.
+**The follow-ups of one company's campuses go out as one search**
+(`watch.split_followups`, `watch.group_queries`): `"Meta" ("Kuna" OR "Rayville" OR
+...) data center`, as many towns as fit in Google's 32 words, from the earliest last
+look among them, its pages turned while they come back full (Serper's news endpoint
+returns ten a page whatever it is asked for, at a credit a page). A day of one town's
+news is nearly nothing -- on 11-03, 1,083 one-campus searches returned 2,011 results
+-- and a search is a credit whatever it returns. Measured the same night on fifteen
+companies over a week, the shared search spent 53 credits and kept 228 results
+where one search a campus spent 99 and kept 202; each found stories the other did
+not, most of them general (the midterms, Kansai). Each result is labelled for the
+campus it names (`watch.judge_group`), or `watch:company:<key>` when it names none,
+and every campus in the search gets its clock moved only when all its pages went
+through. A campus goes alone when it is its company's only one due, has no company,
+or is more than 14 days behind (`GROUP_MAX_GAP`), whose window would widen the
+company's. On 11-04 that made 996 follow-ups about 500 searches. A campus's **first** look reaches back a year,
 with a second search for the words its stage is waiting on ("online", "energized",
 "delayed" for one under construction); up to `--baselines` campuses get one a
 night, largest first, so switching the watch on catches the whole database up in
@@ -922,7 +937,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `walk_sitemap`, `index_children`, `_MEDIA_SITEMAP`, `parse_feed` (newest `lastmod` first), `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | The keyword filter, and what it dropped | `tracker/seed/feeds.toml` — `[filter]`; `tests/fixtures/keyword_cases.json`; `tracker/ingest/discover.py` — `normalize_haystack`, `_SEPARATORS`, `_term_pattern`, `_term_regex`, `_tier`, `_TERM_START`, `term_in`, `first_term`, `_terms`, `FilterSpec.matches`, `judge_candidates`, `known_project_test`, `_GENERIC_NAME_TOKENS`, `_company_words`, `record_seen`, `rejudge`, `TOO_OLD`; `tracker/dedup.py` — `company_aliases`; `tracker/ingest/wiki.py` — `_keyword_pass`, `_substantive`; migration `0039_news_watch` (`seen_url`); `tracker/cli/sync.py` — `discover --rejudge` |
 | Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`, `RememberingFetcher`, `RecentWalkFetcher`, `walk_cache`, `WALK_FRESH`; `tracker/ingest/enrich.py` — `sweep_archives`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
-| The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `relist`, `LISTING_STALE`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
+| The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `relist`, `LISTING_STALE`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `split_followups`, `group_queries`, `judge_group`, `GROUP_WORDS`, `GROUP_PAGES`, `GROUP_MAX_GAP`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`, `SEARCH_CNY`, `FETCH_CNY`, `report`, `summary`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `tracker/overnight.py` — `Night.run_round`, the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |

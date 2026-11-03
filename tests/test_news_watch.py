@@ -722,6 +722,119 @@ def test_a_companys_news_is_queued_and_its_next_search_waits_a_week(session):
     assert [key for key, _, _ in later] == ["meta"]
 
 
+# --- follow-ups sent together ------------------------------------------------------------
+
+
+class FakePages(FakeNews):
+    """A news search whose results come a page at a time."""
+
+    def __init__(self, pages, **kw):
+        super().__init__(**kw)
+        self.pages = pages
+
+    def news(self, query, *, page=1, window="qdr:w"):
+        self._spend()
+        self.calls.append(("news", query, window))
+        return self.pages[page - 1] if page <= len(self.pages) else []
+
+
+def _looked(session, *campuses, at=NOW):
+    for campus in campuses:
+        session.add(NewsWatch(project_id=campus.id, baseline_at=at, checked_at=at))
+    session.flush()
+
+
+def test_a_companys_follow_ups_go_out_as_one_search_and_each_result_to_its_campus(session):
+    """On 2026-11-03 1,083 follow-ups, one a campus, returned 2,011 results at a
+    credit each; one search for a company's towns fills its pages instead."""
+    kuna = _campus(session, 200)
+    rayville = _campus(session, 201, name="Hyperion", city="Rayville", county="Richland Parish")
+    _looked(session, kuna, rayville)
+    provider = FakePages(
+        [
+            [
+                _hit("https://news.test/kuna", "Meta's Kuna data center is now online"),
+                _hit("https://news.test/hyperion", "Meta Hyperion data center campus expands"),
+                _hit("https://news.test/lea", "Meta plans data center campus in Lea County"),
+            ]
+        ]
+    )
+    report = watch.run(
+        session, provider=provider, now=NOW + dt.timedelta(days=1), feeds_path=_feeds(session)
+    )
+    assert len(provider.calls) == 1
+    text = provider.calls[0][1]
+    assert text.startswith('"Meta" (') and '"Kuna"' in text and '"Rayville"' in text
+    queued = {row.url: row.feed for row in session.scalars(select(IngestUrl))}
+    assert queued == {
+        "https://news.test/kuna": f"watch:#{kuna.id}",
+        "https://news.test/hyperion": f"watch:#{rayville.id}",
+        "https://news.test/lea": "watch:company:meta",
+    }
+    assert report.queries == 1 and report.queued == 3
+    assert dict(report.as_rows())["of them in a company's search"] == 2
+    for campus in (kuna, rayville):
+        assert session.get(NewsWatch, campus.id).checked_at == NOW + dt.timedelta(days=1)
+
+
+def test_a_company_search_turns_its_pages_while_they_come_back_full(session):
+    a = _campus(session, 210)
+    b = _campus(session, 211, name="Hyperion", city="Rayville", county="Richland Parish")
+    _looked(session, a, b)
+    full = [_hit(f"https://news.test/{n}", f"Kuna data center campus {n}") for n in range(10)]
+    provider = FakePages([full, full[:3]])
+    watch.run(
+        session, provider=provider, now=NOW + dt.timedelta(days=1), feeds_path=_feeds(session)
+    )
+    assert len(provider.calls) == 2, "the second page was short, so it was the last"
+
+
+def test_a_failed_company_search_leaves_every_campus_window_open(session):
+    from tracker.ingest.search import SearchError
+
+    a = _campus(session, 220)
+    b = _campus(session, 221, name="Hyperion", city="Rayville", county="Richland Parish")
+    _looked(session, a, b)
+
+    class Broken(FakeNews):
+        def news(self, query, *, page=1, window="qdr:w"):
+            raise SearchError("proxy 502")
+
+    watch.run(
+        session, provider=Broken(), now=NOW + dt.timedelta(days=1), feeds_path=_feeds(session)
+    )
+    assert {session.get(NewsWatch, c.id).checked_at for c in (a, b)} == {NOW}
+
+
+def test_a_campus_far_behind_or_alone_in_its_company_is_searched_on_its_own():
+    now = NOW + dt.timedelta(days=1)
+    meta = [Project(id=n, name=f"Meta {n}", company="Meta", city=f"Town{n}") for n in (1, 2, 3)]
+    foo = Project(id=4, name="Foo One", company="Foo Corp", city="Elsewhere")
+    looks = [NewsWatch(project_id=p.id, baseline_at=NOW, checked_at=NOW) for p in [*meta, foo]]
+    looks[2].checked_at = now - dt.timedelta(days=20)
+    groups, alone = watch.split_followups(list(zip([*meta, foo], looks, strict=True)), now=now)
+    assert [(key, [p.id for p, _ in members]) for key, members in groups] == [("meta", [1, 2])]
+    assert [p.id for p, _ in alone] == [3, 4]
+
+
+def test_a_company_with_many_campuses_is_split_into_searches_google_reads_whole():
+    now = NOW + dt.timedelta(days=1)
+    members = [
+        (
+            Project(id=n, name=f"Site {n}", company="Google", city=f"Springfield Heights {n}"),
+            NewsWatch(project_id=n, baseline_at=NOW, checked_at=NOW - dt.timedelta(hours=n)),
+        )
+        for n in range(1, 13)
+    ]
+    queries = watch.group_queries("google", members, now=now)
+    assert len(queries) > 1
+    assert sorted(pid for q in queries for pid in q.members) == list(range(1, 13))
+    for query in queries:
+        assert watch._words(query.text) <= watch.GROUP_WORDS
+        oldest = min(look.checked_at for p, look in members if p.id in query.members)
+        assert query.since == oldest, "each reaches back to its earliest last look"
+
+
 # --- the morning's account --------------------------------------------------------------
 
 

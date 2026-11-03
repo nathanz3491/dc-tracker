@@ -12,6 +12,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The news watch searches a company's campuses together, so its nightly searches
+  roughly halve.** Searches have been the night's binding limit: on 11-03 all 2,000
+  were gone by 21:05 and the research left rows unsearched. The watch sent one
+  search per campus every day, and a day of one town's news is close to nothing —
+  1,083 searches returned 2,011 results, under two each — while every search costs
+  a credit whatever it returns. Now the follow-ups of one company's campuses go out
+  as one search, `"Meta" ("Kuna" OR "Rayville" OR ...) data center`, as many towns
+  as Google reads in a query, with further pages fetched only while they come back
+  full. Serper's news search returns ten results a page whatever it is asked for,
+  so the saving is in filling pages, not in asking for more. Tested on the host
+  first: fifteen companies over a week, 53 credits kept 228 results where one
+  search per campus spent 99 credits and kept 202. Each result still goes to the
+  campus it names, or to the company when it names none. A campus searches alone
+  when it is its company's only one due or is more than 14 days behind. Tomorrow's
+  996 follow-ups plan to about 500 searches instead of about 1,000, which leaves
+  the research the searches it ran out of.
 - **`tracker loop` and `tracker tui` wear Meridian's design tokens** (`tracker/theme.py`).
   Both used the terminal's stock named colours — cyan, magenta, a blue for "how much
   of the ceiling" — which matched nothing else the project shows. They now take

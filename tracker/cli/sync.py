@@ -1694,10 +1694,11 @@ def news(
 
     The research that fills a row asks what it is missing, and stops asking once it is
     full; this asks **what has been said about the campus since we last looked**. Each
-    campus is one news search for its company and its town, county or name, limited
+    campus is a news search for its company and its town, county or name, limited
     to the time since its last look, on a schedule set by its stage: daily while it
     is being decided or built, every three days once it operates, daily for any
-    campus of a company a reader watches.
+    campus of a company a reader watches. The campuses of one company that are due
+    together share a search, its pages turned while they come back full.
 
     **A campus's first look reaches back a year**, with a second search for the words
     its stage is waiting on ("online", "energized", "delayed" for one under
