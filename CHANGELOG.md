@@ -12,6 +12,15 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The money ceiling is a day's, shared by every run that day** (`tracker/spend.py` —
+  `day_allowance`, `day_start`). The loop reads OpenCode Go's usage when it starts and
+  divides what is left of the month by the nights left; a second run the same day was
+  handed a whole new share on top of the first's (2026-11-01: ¥43.18, then ¥43.18
+  again after the first run had spent ¥16.06). Today's limit is now worked out from
+  Go's windows with today's spend added back, as they stood when the day began, and
+  each run gets what is left of it. A day runs noon to noon, Beijing time, so a night
+  past midnight is one day. The token ceiling follows from what is left.
+
 - **The nightly token ceiling follows the money ceiling** (`tracker/overnight.py` —
   `token_ceiling`). It was a fixed 25,000,000 tokens, and once the yuan ceiling rose
   with OpenCode Go's month it was the stop that bound: 2026-11-01 ended at ¥16.06 of a

@@ -506,6 +506,29 @@ def test_a_tracker_past_its_share_gets_nothing_and_no_night_passes_the_cap():
     assert spend.go_allowance(last_day, [], now=LOOP_STARTS) == spend.NIGHT_MAX_CNY
 
 
+def test_a_second_run_the_same_day_gets_only_what_is_left_of_the_days_limit():
+    """2026-11-01: the night stopped at ¥16.06 of ¥43.18, and a run started again at
+    22:02 would have been handed ¥43.18 a second time."""
+    first = spend.day_allowance(_go(), _spent(23), now=LOOP_STARTS)
+    # The first run spent ¥16.06 that evening (19:00 in Beijing, the same day).
+    evening = dt.datetime(2026, 10, 31, 11, 0, tzinfo=dt.UTC)
+    calls = [*_spent(23), spend.parse(_night(evening, 16.06))]
+    # Go's reading after that run: the month and the week are fuller by the same spend.
+    after = _go(monthly=31 + 16.06 / PLAN_CNY * 100, weekly=25 + 16.06 / PLAN_CNY * 100 / 0.5)
+    resumed = spend.day_allowance(after, calls, now=dt.datetime(2026, 10, 31, 14, 2, tzinfo=dt.UTC))
+
+    assert resumed.today == pytest.approx(first.today, abs=0.05), "the day's limit holds"
+    assert resumed.spent == pytest.approx(16.06, abs=0.01)
+    assert resumed.tonight == pytest.approx(first.today - 16.06, abs=0.05)
+
+
+def test_a_night_is_one_day_until_noon():
+    assert spend.day_start(dt.datetime(2026, 11, 1, 18, 30, tzinfo=dt.UTC)) == spend.day_start(
+        dt.datetime(2026, 11, 2, 3, 0, tzinfo=dt.UTC)  # 02:30 and 11:00 in Beijing
+    )
+    assert spend.day_start(dt.datetime(2026, 11, 2, 4, 0, tzinfo=dt.UTC)).day == 2  # noon
+
+
 def test_the_loop_reads_gos_windows_and_falls_back_on_the_ledgers(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(spend, "read_go_usage", lambda: _go())
     assert spend.main(["allowance", str(tmp_path)]) == 0

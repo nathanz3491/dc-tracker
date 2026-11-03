@@ -286,26 +286,67 @@ def go_allowance(usage: GoUsage, calls: Iterable[Call], *, now: dt.datetime) -> 
     A night that overspends shows in the next night's reading, so a wrong plan
     figure corrects itself night by night.
     """
+    return day_allowance(usage, calls, now=now).tonight
+
+
+@dataclass(frozen=True)
+class DayAllowance:
+    """Today's money limit, what today's earlier runs spent of it, and what is left."""
+
+    today: float
+    spent: float
+    tonight: float
+
+
+def day_start(now: dt.datetime) -> dt.datetime:
+    """When the tracker's day began: the latest noon, Beijing time.
+
+    Noon, not midnight, so a night that runs from 18:01 past midnight is one day, and
+    a run resumed at 02:00 is still part of it.
+    """
+    local = now.astimezone(BEIJING)
+    noon = local.replace(hour=12, minute=0, second=0, microsecond=0)
+    return noon if local >= noon else noon - dt.timedelta(days=1)
+
+
+def day_allowance(usage: GoUsage, calls: Iterable[Call], *, now: dt.datetime) -> DayAllowance:
+    """Today's limit from the Go windows as they stood when the day began, less today's spend.
+
+    :func:`go_allowance` used to divide what was left by the nights left, so a second
+    run the same day was handed a whole new night's share on top of the first's
+    (2026-11-01: ¥43.18, then ¥43.18 again after the first run spent ¥16.06). So the
+    day's limit is worked out with today's spend added back to every room, which is
+    the reading Go would have given at noon, and today's runs share it.
+    """
     plan = GO_MONTHLY_USD * CNY_PER_USD
     if now.tzinfo is None:
         now = now.replace(tzinfo=dt.UTC)
+    began = day_start(now)
+    calls = list(calls)
 
     def nights(until: dt.datetime) -> int:
-        return max(1, math.ceil((until - now).total_seconds() / 86400))
+        return max(1, math.ceil((until - began).total_seconds() / 86400))
 
+    def spent_since(when: dt.datetime) -> float:
+        return total(c for c in calls if c.when is not None and when <= c.when <= now)
+
+    today = spent_since(began) / plan * 100  # in percent of the month, like the rooms
     month = usage.monthly
-    start = cycle_start(month.resets_at)
-    mine = total(c for c in calls if c.when is not None and start <= c.when <= now) / plan * 100
-    tracker_room = max(0.0, TRACKER_SHARE * 100 - mine)
-    account_room = max(0.0, ACCOUNT_CEILING * 100 - month.percent)
+    mine = spent_since(cycle_start(month.resets_at)) / plan * 100
+    tracker_room = max(0.0, TRACKER_SHARE * 100 - mine) + today
+    account_room = max(0.0, ACCOUNT_CEILING * 100 - month.percent) + today
     percent = min(tracker_room, account_room) / nights(month.resets_at)
     if usage.weekly is not None:
         week_room = max(0.0, ACCOUNT_CEILING * 100 - usage.weekly.percent) * GO_WEEKLY_SHARE
-        percent = min(percent, week_room / nights(usage.weekly.resets_at))
+        percent = min(percent, (week_room + today) / nights(usage.weekly.resets_at))
+    day = max(0.0, min(NIGHT_MAX_CNY, percent / 100 * plan))
+    spent = today / 100 * plan
+    left = max(0.0, day - spent)
     if usage.rolling is not None:
+        # Go's five hours is a live limit, not a share of the day: it caps what is left.
         rolling_room = max(0.0, ACCOUNT_CEILING * 100 - usage.rolling.percent) * GO_ROLLING_SHARE
-        percent = min(percent, rolling_room)
-    return max(0.0, min(NIGHT_MAX_CNY, percent / 100 * plan))
+        left = min(left, rolling_room / 100 * plan)
+    return DayAllowance(today=day, spent=spent, tonight=left)
 
 
 def read_all(directory: Path | str) -> list[Call]:
@@ -629,11 +670,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             tonight = allowance(calls, now=now)
             why = "from the ledgers (Go's usage could not be read)"
         else:
-            tonight = go_allowance(usage, calls, now=now)
+            day = day_allowance(usage, calls, now=now)
+            tonight = day.tonight
             week = f", week {usage.weekly.percent:g}%" if usage.weekly else ""
             why = (
                 f"from Go: month {usage.monthly.percent:g}%{week}, resets "
-                f"{usage.monthly.resets_at:%Y-%m-%d}"
+                f"{usage.monthly.resets_at:%Y-%m-%d}; today's limit CNY {day.today:.2f}, "
+                f"CNY {day.spent:.2f} already spent today"
             )
         print(f"{tonight:.2f}")
         print(f"tonight's ceiling CNY {tonight:.2f}, {why}", file=sys.stderr)
