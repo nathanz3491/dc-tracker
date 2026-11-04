@@ -400,6 +400,34 @@ def test_a_capacity_the_tranches_filled_is_traced_to_their_sentences():
     two.mw_planned = 250.0
     assert not backing(two, "mw_planned").via, "a figure the tranches do not add up to"
 
+    # 2026-11-04: a tranche with no figure of its own, counted at the one another name
+    # for it states, crashed the night's report.
+    alias = tranche("building-a-alt", "First building", 100.0, "planned", "a 100 MW building")
+    named_twice = _stored(
+        mw_planned=300.0,
+        sources=[release],
+        blocks=[
+            tranche("building-a", "Building A", None, "planned"),
+            alias,
+            tranche("building-b", "Building B", 200.0, "planned", "Building B is 200 MW"),
+        ],
+        nesting=[
+            NS(
+                block_key="building-a-alt",
+                relation="same_as",
+                target_key="building-a",
+                decided_by="operator",
+                reason="",
+                confidence=None,
+            )
+        ],
+    )
+    got = backing(named_twice, "mw_planned")
+    assert got.via.startswith(
+        "the sum of 2 tranches: 'Building A' 100 MW, stated as 'First building', "
+        "'Building B' 200 MW"
+    )
+
 
 def test_a_census_lookup_is_shown_as_a_derivation_not_as_a_missing_quote():
     from tracker.changes import backing

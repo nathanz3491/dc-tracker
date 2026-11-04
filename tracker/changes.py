@@ -245,10 +245,11 @@ def _reconciled(
             if (block.customer or "").strip().casefold() == wanted:
                 yield _tranche(block, "customer", urls)
     elif field_name in ("mw_planned", "mw_built") and isinstance(value, int | float) and blocks:
-        from tracker.blocks import rollup, structure
+        from tracker.blocks import rollup, structure, tranche_tree
 
         # The tree `reconcile` filled it from, so the sum checked here is that sum.
-        got = rollup(blocks, structure(project))
+        nested = structure(project)
+        got = rollup(blocks, nested)
         total = got.mw_planned if field_name == "mw_planned" else got.mw_built
         if total is None or not math.isclose(total, value, rel_tol=1e-9, abs_tol=1e-6):
             return
@@ -260,7 +261,19 @@ def _reconciled(
         # Several tranches add up to the figure. One sentence is shown — the first
         # one any of them carries — and every tranche is named with its megawatts,
         # so the arithmetic can be checked against the line above it.
-        named = ", ".join(f"{b.label!r} {b.mw:g} MW" for b in summed[:4])
+        # A tranche stating no figure counts the one another name for it states —
+        # Fairwater's "Fairwater 1" on 2026-11-04, which crashed this line.
+        figure_from = tranche_tree(project, nested).figure_from
+
+        def stated(block: Any) -> str:
+            if block.mw is not None:
+                return f"{block.label!r} {block.mw:g} MW"
+            twin = figure_from.get(block.block_key)
+            if twin is None or twin.mw is None:
+                return repr(block.label)
+            return f"{block.label!r} {twin.mw:g} MW, stated as {twin.label!r}"
+
+        named = ", ".join(stated(b) for b in summed[:4])
         more = f" and {len(summed) - 4} more" if len(summed) > 4 else ""
         quoted = next((b for b in summed if _load(b.quotes).get("mw")), summed[0])
         first = _tranche(quoted, "mw", urls)

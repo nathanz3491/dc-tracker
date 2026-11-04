@@ -98,6 +98,13 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **The morning report of what a night changed crashed, and 11-04's was lost.** A
+  campus capacity added up from several tranches is shown with each tranche's
+  megawatts; a tranche whose figure is stated only under another name for it has
+  none of its own, and printing it stopped the report. Seven campuses are built that
+  way (Fairwater, Project Rainier and EdgeCore Mesa among them), and 11-04 was the
+  first night one of them changed. Such a tranche is now shown with the figure it
+  counts and the name that states it (`tracker/changes.py` — `_reconciled`).
 - **The night's findings record went to a folder called `file:`** (`tracker/labels.py`
   — `db_path_of`). A read-only connection names its database as an SQLite URI, and
   the label log took the URI for a path, so on 2026-11-01 the 449 findings landed in
