@@ -1123,11 +1123,39 @@ class DeepSeekFetcher:
     returns is a line in the night's spend ledger (`spend.FETCH_MODEL`), counted apart
     from the model's money.
     `TRACKER_DEEPSEEK_FETCH=0` takes the rung out.
+
+    **A page is sent once, ever** (:meth:`answered`). A page it could not read stays
+    failed in the queue and was escalated again every night it was retried: of 3,385
+    escalations in the 14 nights to 11-04, 522 were a page already sent. The answer
+    is remembered in its own cache; an empty balance, a rate limit or DeepSeek's own
+    outage is not an answer, and is asked again.
+
+    **Nor a page behind a subscription** (:data:`PAYWALLED`): what it would bring back
+    is the teaser our own clients already got. Those hosts were 11% of escalations.
     """
 
     VIA = "deepseek-fetch"
     PATH = "/v1/tools/fetch"
     TIMEOUT_S = 60.0
+
+    #: Hosts whose articles are for subscribers. bizjournals.com alone was 288 of
+    #: the 3,385 escalations in the 14 nights to 11-04.
+    PAYWALLED: Final = frozenset(
+        {
+            "bizjournals.com",
+            "bloomberg.com",
+            "costar.com",
+            "ft.com",
+            "nytimes.com",
+            "seekingalpha.com",
+            "spglobal.com",
+            "theinformation.com",
+            "wsj.com",
+        }
+    )
+
+    #: Answers that are about DeepSeek's account or service, not the page.
+    _NOT_AN_ANSWER: Final = frozenset({402, 429})
 
     #: Set by the first "insufficient balance" (HTTP 402) a process meets; the rung
     #: then stands down for the rest of the process rather than ask again for every
@@ -1144,15 +1172,36 @@ class DeepSeekFetcher:
         """Whether this install may use it: switched on, and a DeepSeek key to pay with."""
         return bool(settings.deepseek_fetch and settings.has_api_key())
 
+    @classmethod
+    def paywalled(cls, url: str) -> bool:
+        host = (urlsplit(url).hostname or "").lower()
+        return any(host == h or host.endswith("." + h) for h in cls.PAYWALLED)
+
+    @staticmethod
+    def _record(url: str) -> Path:
+        from tracker.config import cache_dir
+
+        return cache_path(url, cache_dir("deepseek-fetch"))
+
+    @classmethod
+    def answered(cls, url: str) -> str | None:
+        """What DeepSeek answered when this page was sent before, or None if never."""
+        record = cls._record(url)
+        return record.read_text(encoding="utf-8").strip() if record.exists() else None
+
+    def _skip(self, url: str, why: str) -> FetchResult:
+        return FetchResult(
+            url, False, error=f"DeepSeek fetch skipped: {why}", fetched_at=utcnow(), via=self.VIA
+        )
+
     async def fetch(self, url: str) -> FetchResult:
         if self._EMPTY.is_set():
-            return FetchResult(
-                url,
-                False,
-                error="DeepSeek fetch skipped: the DeepSeek account has no balance",
-                fetched_at=utcnow(),
-                via=self.VIA,
-            )
+            return self._skip(url, "the DeepSeek account has no balance")
+        if self.paywalled(url):
+            return self._skip(url, "a subscriber's page; it would return the teaser")
+        before = self.answered(url)
+        if before is not None:
+            return self._skip(url, f"sent before ({before})")
         if not await permitted(url, self.settings, lambda u: _get_text(u, self.settings)):
             return refused(url)
         key = (
@@ -1179,6 +1228,10 @@ class DeepSeekFetcher:
         except ValueError:
             body = {}
         data = body.get("data", body) if isinstance(body, dict) else {}
+        if response.status_code < 500 and response.status_code not in self._NOT_AN_ANSWER:
+            self._record(url).write_text(
+                f"{utcnow():%Y-%m-%d}, HTTP {response.status_code}", encoding="utf-8"
+            )
         if response.status_code == 402 and not self._EMPTY.is_set():
             self._EMPTY.set()
             log.warning(

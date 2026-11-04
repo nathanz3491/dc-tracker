@@ -121,6 +121,45 @@ def test_an_empty_balance_stands_the_rung_down_for_the_run(tmp_path):
         fetch.DeepSeekFetcher._EMPTY.clear()
 
 
+def test_a_page_it_answered_for_is_never_sent_again(tmp_path):
+    """Of 3,385 escalations in the 14 nights to 11-04, 522 were a page already sent:
+    a page it cannot read stays failed in the queue and is retried night after night."""
+    settings = _settings(tmp_path)
+    # A router of its own: the global one hands back an earlier test's route for the
+    # same pattern, whose count this request does not move.
+    with respx.mock() as router:
+        route = router.post(ENDPOINT).respond(404, json={"error": {"message": "failed"}})
+        asyncio.run(DeepSeekFetcher(settings).fetch("https://www.wtvr.com/a"))
+        again = asyncio.run(DeepSeekFetcher(settings).fetch("https://www.wtvr.com/a"))
+    assert route.call_count == 1
+    assert not again.ok and "sent before" in again.error and "HTTP 404" in again.error
+
+
+@pytest.mark.parametrize("status", [402, 429, 503])
+def test_an_answer_about_deepseek_not_the_page_is_asked_again(tmp_path, status):
+    fetch.DeepSeekFetcher._EMPTY.clear()
+    try:
+        with respx.mock:
+            respx.post(ENDPOINT).respond(status, json={"error": {"message": "busy"}})
+            asyncio.run(DeepSeekFetcher(_settings(tmp_path)).fetch("https://x.test/a"))
+        assert DeepSeekFetcher.answered("https://x.test/a") is None
+    finally:
+        fetch.DeepSeekFetcher._EMPTY.clear()
+
+
+@pytest.mark.parametrize(
+    "url", ["https://www.bizjournals.com/phoenix/news/a", "https://www.bloomberg.com/news/b"]
+)
+def test_a_subscribers_page_is_not_sent(url):
+    """It would bring back the teaser our own clients already got. bizjournals.com
+    alone was 288 of the 3,385 escalations in the 14 nights to 11-04."""
+    with respx.mock(assert_all_called=False):
+        route = respx.post(ENDPOINT).respond(200, json={"data": {"content": "x"}})
+        result = asyncio.run(DeepSeekFetcher(_settings()).fetch(url))
+    assert route.call_count == 0 and not result.ok and "subscriber" in result.error
+    assert not DeepSeekFetcher.paywalled("https://www.notbloomberg.com/a")
+
+
 def test_a_network_error_is_reported_not_raised(tmp_path):
     with respx.mock:
         respx.post(ENDPOINT).mock(side_effect=httpx.ConnectError("refused"))

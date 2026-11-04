@@ -492,7 +492,10 @@ local-news pages Cloudflare, CloudFront and Varnish refused every client of ours
 It is billed to the DeepSeek account, 5 yuan per 1,000 pages it returns, so that
 account needs a balance; model calls never spend it, since every one goes to OpenCode
 Go (`TRACKER_RESERVE_WHEN=always`). With no balance, the first refusal stands the rung
-down for the run. Each page is a line in the night's
+down for the run. A page is sent to it once, ever — the answer is remembered, so a
+page it could not read is not paid for again each night it is retried — and never a
+subscriber's page (bizjournals, Bloomberg, the NYT, the FT, …), whose text would be
+the teaser our own clients already got. Each page is a line in the night's
 spend ledger, apart from the model's money, and the morning report prices the pages
 beside it. A publisher every rung has refused lately is learned and its pages set aside
 (`tracker queue unreadable` lists them); one of its pages is read once a week through
