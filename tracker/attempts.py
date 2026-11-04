@@ -175,6 +175,16 @@ def exhausted(project: Any, *, max_attempts: int = DEFAULT_MAX_ATTEMPTS) -> set[
     }
 
 
+def asked_since(project: Any, day: dt.date) -> bool:
+    """Whether any field of this row was looked for on or after `day`.
+
+    A row asked about earlier the same night has had its search: its pages are the
+    same pages, and a second pass would pay to be told the same nothing. A line that
+    never said when it was written counts as not asked, so it does not hide a row.
+    """
+    return any(a.day is not None and a.day >= day for a in attempts(project).values())
+
+
 def record(
     project: Any, fields: list[str] | tuple[str, ...] | set[str], *, by: str = "agent"
 ) -> None:
@@ -216,6 +226,7 @@ def _line_field(line: str) -> str | None:
 __all__ = [
     "DEFAULT_MAX_ATTEMPTS",
     "Attempt",
+    "asked_since",
     "attempts",
     "evidence_count",
     "exhausted",

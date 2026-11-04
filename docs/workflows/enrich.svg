@@ -41,7 +41,7 @@
 <text x="367.0" y="354.9" font-size="10" fill="#5C6B73" text-anchor="middle">--t2: fewest T2 gaps first</text>
 <text x="367.0" y="368.5" font-size="10" fill="#5C6B73" text-anchor="middle">--pipeline: being built, no</text>
 <text x="367.0" y="382.1" font-size="10" fill="#5C6B73" text-anchor="middle">date or MW, largest first</text>
-<text x="367.0" y="395.7" font-size="10" fill="#5C6B73" text-anchor="middle"></text>
+<text x="367.0" y="395.7" font-size="10" fill="#5C6B73" text-anchor="middle">--fresh: none asked today</text>
 <text x="367.0" y="409.3" font-size="10" fill="#5C6B73" text-anchor="middle">--budget is the real ceiling</text>
 <polyline points="234.0,218.0 278.0,218.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>
 <polyline points="234.0,272.0 278.0,272.0" fill="none" stroke="#5C6B73" stroke-width="1.8" stroke-linejoin="round" marker-end="url(#a5C6B73)"/>

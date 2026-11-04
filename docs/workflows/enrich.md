@@ -94,6 +94,18 @@ since 2026-10-31, when the nights' volumes rose by half; 30 on 120 when the pass
 out of the 80 rows the T2 pass had alone. Rows asked twice with nothing found are
 passed over exactly as above, so the same campuses do not come back every night.
 
+**`--fresh` makes a second pass the same night take new rows**, with `--select` or
+`--all`: a row with any field looked for today (UTC, the day `tracker.attempts` stamps
+on its lines) is passed over. A field gets two attempts, so without it a row the first
+pass asked about is still on the list, closest-first hands it to the second pass, and
+that pass searches the same pages for the same nothing — how enrich came to be 86% of
+the bill on the nights of 2026-09-24 to 09-29, and why it was cut to one round. Since
+2026-11-04 the overnight loop enriches in two rounds again, the second with `--fresh`
+on both the pipeline and the T2 pass: grouping the news watch's searches by company
+freed about 500 searches a night, and on 11-03 enrich left ¥29.63 and seven hours
+unused while 681 rows below T2 still had fields worth asking about and round 1 reached
+75 (`attempts.asked_since`).
+
 ## `--basics`: the fields that say what a project is
 
 A modifier rather than a fourth way of choosing rows — it changes which *fields* are
@@ -387,7 +399,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `ArchiveSweep`, `will_harvest`; `tracker/ingest/discover.py` — `RecentWalkFetcher`, `RememberingFetcher`, `walk_cache`, `WALK_FRESH`, `run` (the walk it keeps) |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/attempts.py` — `asked_since`; `tracker/overnight.py` — `enrich_rounds`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |

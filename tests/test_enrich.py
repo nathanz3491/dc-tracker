@@ -1802,6 +1802,34 @@ def test_t2_selection_takes_rows_the_tier_fails_fewest_missing_first(session):
     assert enrich.t2_gaps(one_short) == {"investment_usd"}
 
 
+def test_a_later_pass_the_same_night_goes_on_to_rows_not_yet_asked(session):
+    """A field gets two attempts, so a row the first pass asked about stays on the
+    list; closest-first handed the same rows to a second pass to search the same
+    pages again. Since 11-04 the loop's second enrich round passes them over."""
+    from tracker import attempts
+
+    asked = _full_but_blocker(session, company="Asked Co", city="Ames", investment_usd=None)
+    attempts.record(asked, ["investment_usd"])
+    built = add_project(
+        session, city="Abilene", company="Built Co", phase="construction", mw_planned=900.0
+    )
+    attempts.record(built, ["expected_online"])
+    waiting = add_project(session, city="Mesa", company="Waiting Co")
+    unbuilt = add_project(
+        session, city="Reno", company="Unbuilt Co", phase="permitting", mw_planned=20.0
+    )
+    today = utcnow().date()
+
+    assert asked.id in enrich.select_projects(session, None, target=12, toward_t2=True)
+    later = enrich.select_projects(session, None, target=12, toward_t2=True, skip_asked_since=today)
+    assert asked.id not in later and waiting.id in later
+    assert asked.id not in enrich.select_projects(session, 10, target=12, skip_asked_since=today)
+    assert enrich.select_pipeline(session, 10, skip_asked_since=today) == [unbuilt.id]
+    assert asked.id in enrich.select_projects(
+        session, None, target=12, toward_t2=True, skip_asked_since=today + dt.timedelta(days=1)
+    ), "asked yesterday is not asked tonight"
+
+
 def test_a_refused_dispute_is_not_asked_again_on_the_same_claims(session):
     """A refusal writes nothing to the row, so nothing stopped the same question
     coming back every round. It is remembered against the claims it was shown."""

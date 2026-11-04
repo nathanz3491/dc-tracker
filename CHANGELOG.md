@@ -12,6 +12,15 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly loop fills empty fields on twice as many rows: enrich runs a second
+  round, on rows the first did not reach.** Once the news watch halved its searches,
+  the night had searches, money and hours left over that nothing used — on 11-03
+  ¥29.63 and seven hours — while 681 rows below T2 still had fields worth asking
+  about and one round reached 75. A second round used to be dropped because it
+  re-picked the same rows and searched the same pages for nothing (86% of the bill on
+  09-24 to 09-29, for one fact). It now passes over every row asked about earlier the
+  same day (`enrich --fresh`, `attempts.asked_since`; `--enrich-rounds` defaults to 2).
+
 - **The news watch searches a company's campuses together, so its nightly searches
   roughly halve.** Searches have been the night's binding limit: on 11-03 all 2,000
   were gone by 21:05 and the research left rows unsearched. The watch sent one

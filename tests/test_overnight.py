@@ -363,7 +363,7 @@ ROUND_ONE = [
     ("clean", "--snapshot", "--since", "1"),
 ]  # fmt: skip
 
-LATER_ROUND = [
+ROUND_TWO = [
     ("backfill", "dates", "--apply"),
     ("ingest", "geo"),
     ("backfill", "scope", "--apply"),
@@ -374,6 +374,8 @@ LATER_ROUND = [
     ("risks", "confirm", "--limit", "40"),
     ("logic", "resolve", "--limit", "60"),
     ("tranches", "review", "--limit", "20"),
+    ("enrich", "--select", "45", "--pipeline", "--budget", "180", "--fresh"),
+    ("enrich", "--select", "75", "--t2", "--target", "0", "--budget", "300", "--fresh"),
     ("backfill", "derive"),
     ("clean", "--snapshot", "--since", "1"),
 ]
@@ -396,9 +398,10 @@ def _report(snap: Path) -> list[tuple[str, ...]]:
 def test_the_night_runs_every_phase_in_order_and_the_first_round_does_more(tmp_path):
     """The whole night, command by command: the news first, then free, duplicates
     ahead of every phase that pays to read one row, audit, risks, logic, tranches,
-    the two enrich passes, reread and recheck in round 1 only, a settle per round,
-    then the morning report. Identical to the shell's order except that round 1 no
-    longer runs the Census lookup twice with nothing in between that adds a row."""
+    the two enrich passes (again in round 2, on rows round 1 did not ask about),
+    reread and recheck in round 1 only, a settle per round, then the morning report.
+    Identical to the shell's order except that round 1 no longer runs the Census
+    lookup twice with nothing in between that adds a row."""
     run = go(
         make(
             tmp_path,
@@ -407,7 +410,7 @@ def test_the_night_runs_every_phase_in_order_and_the_first_round_does_more(tmp_p
         )
     )
     assert run.status == 0
-    assert run.stub.calls == ROUND_ONE + LATER_ROUND + _report(tmp_path / "before.db")
+    assert run.stub.calls == ROUND_ONE + ROUND_TWO + _report(tmp_path / "before.db")
     assert run.stub.heads[("logic", "check")] == 12
     assert run.stub.heads[("duplicates",)] == 2
     assert run.stub.heads[("duplicates", "mixed")] == 2
@@ -754,7 +757,7 @@ def test_the_defaults_are_the_shells():
     assert (o.hours, o.rounds, o.dry_rounds) == (10, 20, 2)
     assert (o.findings, o.pairs, o.audit, o.risks, o.nest) == (60, 40, 60, 40, 20)
     assert (o.pipeline, o.pipeline_budget, o.enrich, o.enrich_budget, o.enrich_rounds) == (
-        45, 180, 75, 300, 1,
+        45, 180, 75, 300, 2,
     )  # fmt: skip
     assert (o.discover, o.screen, o.baselines, o.search_cap) == (1350, True, 300, 2000)
     assert (o.dates, o.reread, o.recheck, o.min_confidence) == (150, 180, 180, "0.85")
@@ -889,8 +892,23 @@ def test_enrich_rounds_extends_both_enrich_passes(tmp_path):
             counts=[(50, 50, 50), (40, 40, 40), (30, 30, 30)],
         )
     )
-    assert sum(1 for c in run.stub.calls if c[0] == "enrich") == 4
+    enrich = [c for c in run.stub.calls if c[0] == "enrich"]
+    assert len(enrich) == 4
+    # Round 2 goes on to rows round 1 did not ask about, rather than searching the
+    # same pages again.
+    assert ["--fresh" in c for c in enrich] == [False, False, True, True]
     assert sum(1 for c in run.stub.calls if c[:2] == ("ingest", "reread")) == 1
+
+
+def test_enrich_stops_after_its_rounds(tmp_path):
+    run = go(
+        make(
+            tmp_path,
+            ["--rounds", "3", "--enrich-rounds", "1", "--discover", "0"],
+            counts=[(50, 50, 50), (40, 40, 40), (30, 30, 30), (20, 20, 20)],
+        )
+    )
+    assert sum(1 for c in run.stub.calls if c[0] == "enrich") == 2
 
 
 @pytest.mark.parametrize(

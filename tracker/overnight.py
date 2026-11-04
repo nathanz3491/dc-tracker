@@ -72,10 +72,12 @@ THE PHASE ORDER IS THE ARGUMENT. The news first, then cheapest and most-blocking
             expensive rung (~77,000 tokens a row) AND the largest tier lever
             there is: every one of the 283 rows sitting at T1 is held there by
             `fields_present` alone. Those rows are not wrong, they are empty, and
-            nothing above this line can move one. It runs in the FIRST round only
-            (`--enrich-rounds`): what it reads changes when articles are ingested,
-            not when a merge or a ruling lands, and on the nights of 2026-09-24 to
-            09-29 it was 86% of the bill, round after round, for one new fact.
+            nothing above this line can move one. It runs in the first TWO rounds
+            only (`--enrich-rounds`), the second on rows the first did not ask
+            about (`enrich --fresh`): what it reads changes when articles are
+            ingested, not when a merge or a ruling lands, and on the nights of
+            2026-09-24 to 09-29, asking the same rows again, it was 86% of the
+            bill, round after round, for one new fact.
             It picks rows with `--t2` — the ones below T2 for missing fields,
             fewest missing first — where `--target 0` alone had sorted the
             FULLEST rows first and spent every round on rows already past the bar.
@@ -340,7 +342,11 @@ class Options:
     pipeline_budget: int = 180
     enrich: int = 75
     enrich_budget: int = 300
-    enrich_rounds: int = 1
+    # Round 2 takes the rows round 1 did not ask about (`enrich --fresh`). Grouping the
+    # news watch's searches by company (v6.5.1) freed about 500 searches a night, and
+    # on 11-03 enrich still left ¥29.63 and seven hours unused: 681 rows below T2
+    # had fields worth asking about and round 1 reached 75.
+    enrich_rounds: int = 2
     discover: int = 1350
     # Have a model read the queued headlines first and set aside what cannot be campus
     # news (`ingest queue --screen`). On, for pages about a place abroad only:
@@ -475,7 +481,8 @@ def parser() -> argparse.ArgumentParser:
         "--enrich-rounds",
         type=int,
         default=d.enrich_rounds,
-        help="enrich in the first N rounds only (default 1)",
+        help="enrich in the first N rounds only, each after the first on rows not yet "
+        "asked about tonight (default 2)",
     )
     a(
         "--discover",
@@ -1150,11 +1157,13 @@ class Night:
         # --- enrich: last, and the largest lever ---------------------------------------
         # Every row sitting at T1 is held there by `fields_present` alone. Nothing above
         # this line can move one, because they are not wrong — they are empty. First
-        # round(s) only: a second pass the same night finds the same pages, and a page
+        # round(s) only, and after the first only on rows not asked about tonight
+        # (`--fresh`): a second pass over the same rows finds the same pages, and a page
         # it has read is not read again, so it was paying to be told so. `--t2` picks
         # the rows that tier fails, fewest missing first.
         # The forward views first: campuses being built or permitted that lack the date
         # or the capacity the supply chart and the delay flags read (`--pipeline`).
+        fresh = ("--fresh",) if number > 1 else ()
         if number <= o.enrich_rounds and o.pipeline > 0:
             if self.capped("pipeline"):
                 return True
@@ -1163,15 +1172,16 @@ class Night:
                 f"or capacity, {o.pipeline_budget} article budget"
             )
             self.tracker(
-                "enrich", "--select", o.pipeline, "--pipeline", "--budget", o.pipeline_budget
-            )
+                "enrich", "--select", o.pipeline, "--pipeline", "--budget", o.pipeline_budget,
+                *fresh,
+            )  # fmt: skip
         if o.do_enrich and number <= o.enrich_rounds:
             if self.capped("enrich"):
                 return True
             log.phase(f"enrich — {o.enrich} row(s) below T2, {o.enrich_budget} article budget")
             self.tracker(
                 "enrich", "--select", o.enrich, "--t2", "--target", "0",
-                "--budget", o.enrich_budget,
+                "--budget", o.enrich_budget, *fresh,
             )  # fmt: skip
 
         # Re-read, from the article cache, what an older prompt extracted. The gate has

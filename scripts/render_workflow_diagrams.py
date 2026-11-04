@@ -331,7 +331,7 @@ def enrich() -> Canvas:
 
     order = c.box(
         278, 196, 178, 234, "Rows, ordered",
-        ["closest to the target first,", "capacity breaks the tie;", "finished rows, and rows with", "nothing fillable left to ask,", "are passed over", "", "--basics: fewest defining", "fields missing first", "--t2: fewest T2 gaps first", "--pipeline: being built, no", "date or MW, largest first", "", "--budget is the real ceiling"],
+        ["closest to the target first,", "capacity breaks the tie;", "finished rows, and rows with", "nothing fillable left to ask,", "are passed over", "", "--basics: fewest defining", "fields missing first", "--t2: fewest T2 gaps first", "--pipeline: being built, no", "date or MW, largest first", "--fresh: none asked today", "--budget is the real ceiling"],
         role="cool2",
     )
     for b in (ids, sel, allr, basc):

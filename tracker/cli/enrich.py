@@ -34,7 +34,7 @@ from tracker.cli._shared import (
 from tracker.config import cache_dir as article_cache
 from tracker.config import get_settings
 from tracker.db import AlreadyRunning, acquire_write_lock, init_db, session_scope
-from tracker.models import Project
+from tracker.models import Project, utcnow
 
 
 @app.command()
@@ -166,6 +166,17 @@ def enrich(
             ),
         ),
     ] = False,
+    fresh: Annotated[
+        bool,
+        typer.Option(
+            "--fresh",
+            help=(
+                "With --select/--all: pass over rows already asked about today (UTC), "
+                "so a second pass the same night takes new rows instead of searching "
+                "the same pages again. The overnight loop's later enrich rounds."
+            ),
+        ),
+    ] = False,
     reread: Annotated[
         bool,
         typer.Option(
@@ -266,6 +277,9 @@ def enrich(
     if pipeline and not (select or enrich_all):
         _fail("--pipeline is a way of choosing rows; pass it with --select N or --all")
         return
+    if fresh and not (select or enrich_all):
+        _fail("--fresh is a way of choosing rows; pass it with --select N or --all")
+        return
     if pipeline and (t2 or basics or fields):
         _fail(
             "--pipeline chooses its own rows and fields; pass it without --t2, --basics or --fields"
@@ -348,6 +362,9 @@ def enrich(
         raise
     atexit.register(release_lock)
 
+    # The day `tracker.attempts` stamps its lines with, so "today" means the same day.
+    asked_since = utcnow().date() if fresh else None
+
     census = _db_path().parent / "raw" / "census"
     try:
         with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
@@ -368,7 +385,10 @@ def enrich(
                 )
             elif pipeline:
                 chosen = enrich_mod.select_pipeline(
-                    session, None if enrich_all else select, max_attempts=max_attempts
+                    session,
+                    None if enrich_all else select,
+                    max_attempts=max_attempts,
+                    skip_asked_since=asked_since,
                 )
                 wanted += [p for p in chosen if p not in wanted]
                 if not wanted:
@@ -395,6 +415,7 @@ def enrich(
                     # nothing of is not handed to the harvest either.
                     max_attempts=max_attempts,
                     toward_t2=t2,
+                    skip_asked_since=asked_since,
                 )
                 wanted += [p for p in chosen if p not in wanted]
                 if not wanted:

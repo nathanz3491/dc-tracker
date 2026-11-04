@@ -32,6 +32,7 @@ were genuinely attempted and missed.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from dataclasses import dataclass
 from dataclasses import field as dc_field
@@ -1016,6 +1017,7 @@ def select_projects(
     target: int = DEFAULT_TARGET_FIELDS,
     max_attempts: int | None = None,
     toward_t2: bool = False,
+    skip_asked_since: dt.date | None = None,
 ) -> list[int]:
     """The projects worth spending a bounded budget on, best first.
 
@@ -1060,10 +1062,18 @@ def select_projects(
     2026-09-29 twelve of the fifteen rows enrich chose were that shape, at 11 of 12,
     chosen again every round, each re-reading four articles to gain nothing.
     `max_attempts=0` ("ask every time") still takes them.
+
+    **`skip_asked_since` leaves out rows already asked about since that day.** A
+    field gets two attempts, so a row the night's first pass asked about stays
+    pursuable, and closest-first would hand the same rows to a second pass to search
+    the same pages again. With it, a later pass the same night goes on down the list.
     """
     from sqlalchemy import case, desc
 
     from tracker import attempts
+
+    def fresh(project: Project) -> bool:
+        return skip_asked_since is None or not attempts.asked_since(project, skip_asked_since)
 
     filled = sum(
         (case((getattr(Project, f).is_not(None), 1), else_=0) for f in TRACKED_FIELDS),
@@ -1085,7 +1095,7 @@ def select_projects(
         for project_id in ranked:
             project = session.get(Project, project_id)
             short = t2_gaps(project)
-            if short and pursuable(project, max_attempts=cap, fields=short):
+            if short and pursuable(project, max_attempts=cap, fields=short) and fresh(project):
                 missing[project_id] = len(short)
         ordered = sorted(missing, key=lambda pid: missing[pid])
         return ordered if limit is None else ordered[:limit]
@@ -1094,7 +1104,10 @@ def select_projects(
     for project_id in ranked:
         if limit is not None and len(chosen) >= limit:
             break
-        if cap > 0 and not pursuable(session.get(Project, project_id), max_attempts=cap):
+        project = session.get(Project, project_id)
+        if cap > 0 and not pursuable(project, max_attempts=cap):
+            continue
+        if not fresh(project):
             continue
         chosen.append(project_id)
     return chosen
@@ -1109,7 +1122,11 @@ PIPELINE_FIELDS: Final = ("expected_online", "mw_planned")
 
 
 def select_pipeline(
-    session: Session, limit: int | None, *, max_attempts: int | None = None
+    session: Session,
+    limit: int | None,
+    *,
+    max_attempts: int | None = None,
+    skip_asked_since: dt.date | None = None,
 ) -> list[int]:
     """Campuses being built or permitted that lack an online date or planned capacity.
 
@@ -1124,7 +1141,8 @@ def select_pipeline(
     its date moves the forward views more than a 20 MW one. A campus is skipped when
     both of its missing fields have been asked about to the limit with nothing
     published since (`pursuable`), and comes back the moment it gains a citation that
-    was.
+    was. `skip_asked_since` passes over campuses asked about since that day, as in
+    `select_projects`.
     """
     from sqlalchemy import desc, or_
 
@@ -1142,6 +1160,8 @@ def select_pipeline(
         project = session.get(Project, project_id)
         short = {name for name in PIPELINE_FIELDS if getattr(project, name) is None}
         if cap > 0 and not pursuable(project, max_attempts=cap, fields=short):
+            continue
+        if skip_asked_since is not None and attempts.asked_since(project, skip_asked_since):
             continue
         chosen.append(project_id)
     return chosen
