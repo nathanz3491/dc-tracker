@@ -338,7 +338,7 @@ STARTED_UTC = "2026-10-29 22:01:00"
 ROUND_ONE = [
     ("suspect", "score"),
     ("discover", "--no-show"),
-    ("news", "--baselines", "300", "--max-queries", "1500"),
+    ("news", "--baselines", "300", "--max-queries", "1200"),
     ("ingest", "queue", "--new-first", "--limit", "1350", "--screen"),
     ("ingest", "geo"),
     (
@@ -508,7 +508,7 @@ def test_a_night_with_nothing_left_stops_settled(tmp_path):
 
 # Each paid phase, and the command that runs just before its ceiling check.
 CEILINGS = [
-    ("news", (), ("news", "--baselines", "300", "--max-queries", "1500"), ("ingest", "queue")),
+    ("news", (), ("news", "--baselines", "300", "--max-queries", "1200"), ("ingest", "queue")),
     ("duplicates", (), ("ingest", "geo"), ("duplicates", "resolve")),
     ("duplicates", ("--discover", "0"), ("logic", "resolve", "--auto", "--apply"), ("duplicates",)),
     ("audit", ("--discover", "0"), ("duplicates", "resolve"), ("audit",)),
@@ -759,7 +759,7 @@ def test_the_defaults_are_the_shells():
     assert (o.pipeline, o.pipeline_budget, o.enrich, o.enrich_budget, o.enrich_rounds) == (
         45, 180, 75, 300, 2,
     )  # fmt: skip
-    assert (o.discover, o.screen, o.baselines, o.search_cap) == (1350, True, 300, 2000)
+    assert (o.discover, o.screen, o.baselines, o.search_cap) == (1350, True, 300, 1700)
     assert (o.dates, o.reread, o.recheck, o.min_confidence) == (150, 180, 180, "0.85")
     assert (o.merge, o.cny, o.tokens, o.backup_every) == (True, None, None, 5)
     assert (o.judgement_effort, o.extraction_effort, o.agent_effort) == ("high", None, None)
@@ -773,7 +773,7 @@ def test_every_child_gets_the_nights_settings(tmp_path):
         "TRACKER_SPEND_CEILING_CNY": "15",
         # ¥15 at ¥0.61 a million is 24.6 million tokens; the cap sits 20% above.
         "TRACKER_SPEND_CEILING_TOKENS": "29508196",
-        "TRACKER_SEARCH_CAP": "2000",
+        "TRACKER_SEARCH_CAP": "1700",
         "TRACKER_DEEPSEEK_JUDGEMENT_EFFORT": "high",
     }
     assert run.stub.envs and all(env == expected for env in run.stub.envs)

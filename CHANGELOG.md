@@ -12,6 +12,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly searches cost 15% less: the cap falls from 2,000 to 1,700 a night,
+  and campuses with nothing new are searched weekly instead of daily.** Every night
+  spent all 2,000 searches, about 60,000 credits a month, and the credit was running
+  out. Over the 14 nights to 11-04, 396 of the 892 campuses searched daily and 221 of
+  the 350 operating ones produced no readable article. A campus first looked at two
+  weeks ago or more that has gained no citation since is now looked at weekly. No
+  news is lost, since each search covers everything since the last; it arrives up to
+  a week later, and a campus is daily again the night after anything new is cited for
+  it. A campus a reader watches is never treated as quiet.
+
+- **DeepSeek's page reader is no longer asked twice for the same page, nor for a
+  subscriber's page.** Of 3,385 pages sent its way in 14 nights, 522 were repeats of
+  a page it had already been asked about, and 11% were on paywalled sites
+  (bizjournals.com alone 288) where it would only fetch the teaser. Together that is
+  about a quarter of its bill.
+
 - **The nightly loop fills empty fields on twice as many rows: enrich runs a second
   round, on rows the first did not reach.** Once the news watch halved its searches,
   the night had searches, money and hours left over that nothing used — on 11-03

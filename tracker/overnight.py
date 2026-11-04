@@ -110,7 +110,7 @@ October's savings and then left two nights with nothing. Before that it was a fl
 stopped at its fixed point with seven hours to spare, so the volumes below were
 raised the same day. `--cny N` still sets a flat ceiling for one night. Web searches
 are a separate bill (prepaid Serper credit, about ¥0.007 each): the ledger records
-them and `--search-cap` (default 2000 a night, `TRACKER_SEARCH_CAP`) stops every
+them and `--search-cap` (default 1700 a night, `TRACKER_SEARCH_CAP`) stops every
 command at it; the news watch, which runs first, may use all but 500 of them, so the
 research that runs later still has searches to send. The money ceiling does not
 count them, and the closing line and the spend report price them beside the model
@@ -355,7 +355,10 @@ class Options:
     # (`headlines.ACTED_ON`).
     screen: bool = True
     baselines: int = 300
-    search_cap: int = 2000
+    # 1,700 from 11-04, 2,000 before: every night spent all 2,000 and the credit
+    # was running out; quiet campuses are looked at weekly from the same day, which
+    # frees about the difference.
+    search_cap: int = 1700
     dates: int = 150
     reread: int = 180
     recheck: int = 180
@@ -511,7 +514,7 @@ def parser() -> argparse.ArgumentParser:
         "--search-cap",
         type=int,
         default=d.search_cap,
-        help="web searches the whole night may send (default 2000); the news watch may use all but 500, which the research keeps",
+        help="web searches the whole night may send (default 1700); the news watch may use all but 500, which the research keeps",
     )
     a(
         "--dates",

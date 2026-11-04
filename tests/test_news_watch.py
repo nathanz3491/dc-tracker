@@ -651,6 +651,48 @@ def test_a_watched_companys_operating_campus_is_looked_at_daily(session):
     assert [p.id for p, _ in followups] == [campus.id]
 
 
+def test_a_campus_with_nothing_new_in_two_weeks_is_looked_at_weekly(session):
+    """Over 14 nights to 11-04, 396 of 892 campuses searched daily produced nothing
+    readable, and their searches were half the night's."""
+    from tracker import accounts
+
+    quiet = _campus(session, 2, phase="construction")
+    young = _campus(session, 3, name="Hyperion", city="Rayville", phase="construction")
+    long_ago, lately = NOW - dt.timedelta(days=30), NOW - dt.timedelta(days=2)
+    session.add(NewsWatch(project_id=quiet.id, baseline_at=long_ago, checked_at=lately))
+    session.add(
+        NewsWatch(project_id=young.id, baseline_at=NOW - dt.timedelta(days=5), checked_at=lately)
+    )
+    # An old citation is not news: it was first seen before the two weeks.
+    session.add(Source(project_id=quiet.id, url="https://news.test/old", source_type="trade_press"))
+    session.add(
+        IngestUrl(url="https://news.test/old", run_id="t", status="ok", first_seen_at=long_ago)
+    )
+    session.flush()
+
+    assert [p.id for p, _ in watch.due(session, now=NOW)[0]] == [young.id], (
+        "a campus first looked at five days ago is still daily"
+    )
+    assert quiet.id in [p.id for p, _ in watch.due(session, now=NOW + dt.timedelta(days=5))[0]]
+
+    session.add(Source(project_id=quiet.id, url="https://news.test/new", source_type="trade_press"))
+    session.add(
+        IngestUrl(url="https://news.test/new", run_id="t", status="ok", first_seen_at=lately)
+    )
+    session.flush()
+    assert quiet.id in [p.id for p, _ in watch.due(session, now=NOW)[0]], (
+        "a new citation, from anywhere, makes it daily again"
+    )
+
+    session.delete(session.scalars(select(Source).where(Source.url.endswith("/new"))).one())
+    account = accounts.create(session, "reader@example.com", "a long enough password 1")
+    session.add(Watch(account_id=account.id, entry="Meta", company_key="meta"))
+    session.flush()
+    assert quiet.id in [p.id for p, _ in watch.due(session, now=NOW)[0]], (
+        "a campus a reader watches is never quiet"
+    )
+
+
 def test_the_search_cap_stops_the_watch_and_keeps_what_it_did(session):
     a = _campus(session, 3, mw_planned=900.0)
     b = _campus(

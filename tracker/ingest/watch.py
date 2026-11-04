@@ -16,8 +16,9 @@ on a schedule:
   once (`tracker watch --all`).
 * **Every later look covers only what is new since the last one**, at a cadence set
   by the stage (:data:`CADENCE`) — daily for campuses still being decided or built,
-  less often for operating ones, and daily for every campus of a company a reader
-  watches. A missed night is late news, not lost news: the next look's window
+  less often for operating ones, weekly for a campus nothing new has been cited for
+  in two weeks (:data:`QUIET_AFTER`), and daily for every campus of a company a
+  reader watches. A missed night is late news, not lost news: the next look's window
   reaches back to the last one. **The follow-ups of one company's campuses go out
   together**, one search for as many of their towns as a query holds, its pages
   turned while full (:func:`group_queries`): a day of one town's news is under two
@@ -62,6 +63,17 @@ DEFAULT_CADENCE: Final = dt.timedelta(days=3)
 
 #: A watched company's campuses are looked at no less often than this.
 WATCHED_CADENCE: Final = dt.timedelta(days=1)
+
+#: A campus that has gained no citation first seen in this long, and was first looked
+#: at at least this long ago, is quiet: it is looked at every QUIET_CADENCE instead.
+#: Measured over 14 nights to 11-04: 396 of the 892 campuses searched daily and 221
+#: of the 350 operational ones produced no readable article, while their searches
+#: were half the night's. A quiet campus loses no news -- the next look's window
+#: reaches back to the last -- it hears it up to a week later, and is daily again
+#: the night after any citation arrives, from the watch or anywhere else. A campus a
+#: reader watches is never quiet.
+QUIET_AFTER: Final = dt.timedelta(days=14)
+QUIET_CADENCE: Final = dt.timedelta(days=7)
 
 #: How far back a campus's first look reaches.
 BASELINE_DAYS: Final = 365
@@ -759,9 +771,38 @@ def watched_keys(session: Session) -> tuple[set[str], set[int]]:
     return keys, ids
 
 
-def cadence(project: Project, *, watched: bool) -> dt.timedelta:
+def cadence(project: Project, *, watched: bool, quiet: bool = False) -> dt.timedelta:
     every = CADENCE.get(project.phase or "", DEFAULT_CADENCE)
-    return min(every, WATCHED_CADENCE) if watched else every
+    if watched:
+        return min(every, WATCHED_CADENCE)
+    return max(every, QUIET_CADENCE) if quiet else every
+
+
+def recently_cited(session: Session, *, now: dt.datetime) -> set[int]:
+    """Campuses holding a citation first seen within :data:`QUIET_AFTER`.
+
+    By when the page was first queued, not `source.fetched_at`, which a re-read of
+    a campus's own citations stamps again without anything new having been said.
+    """
+    from tracker.models import IngestUrl, Source
+
+    return set(
+        session.scalars(
+            select(Source.project_id)
+            .join(IngestUrl, IngestUrl.url == Source.url)
+            .where(IngestUrl.first_seen_at >= now - QUIET_AFTER)
+            .distinct()
+        )
+    )
+
+
+def is_quiet(look: NewsWatch, *, cited: set[int], now: dt.datetime) -> bool:
+    """Looked at for :data:`QUIET_AFTER` and nothing new cited in that time."""
+    return (
+        look.baseline_at is not None
+        and look.baseline_at <= now - QUIET_AFTER
+        and look.project_id not in cited
+    )
 
 
 def due(
@@ -771,10 +812,11 @@ def due(
     project_ids: list[int] | None = None,
 ) -> tuple[list[tuple[Project, NewsWatch]], list[tuple[Project, NewsWatch | None]]]:
     """(campuses due a follow-up, most overdue first; campuses never looked at,
-    largest first)."""
+    largest first). A quiet campus is due weekly (:data:`QUIET_AFTER`)."""
     from tracker.dedup import company_key
 
     keys, ids = watched_keys(session)
+    cited = recently_cited(session, now=now)
     stmt = select(Project, NewsWatch).outerjoin(NewsWatch, NewsWatch.project_id == Project.id)
     if project_ids:
         stmt = stmt.where(Project.id.in_(project_ids))
@@ -785,7 +827,7 @@ def due(
             fresh.append((project, look))
             continue
         watched = project.id in ids or company_key(project.company) in keys
-        every = cadence(project, watched=watched)
+        every = cadence(project, watched=watched, quiet=is_quiet(look, cited=cited, now=now))
         gap = now - look.checked_at
         overdue = gap / every
         if gap >= every - EARLY or project_ids:
@@ -1371,6 +1413,8 @@ __all__ = [
     "COMPANY_FIRST_DAYS",
     "COMPANY_MIN_CAMPUSES",
     "NEXT_WORDS",
+    "QUIET_AFTER",
+    "QUIET_CADENCE",
     "WATCHED_COMPANY_CADENCE",
     "CampusLook",
     "CompanyLook",
@@ -1384,10 +1428,12 @@ __all__ = [
     "company_query",
     "due",
     "group_queries",
+    "is_quiet",
     "judge",
     "judge_company",
     "judge_group",
     "plan_queries",
+    "recently_cited",
     "run",
     "run_companies",
     "split_followups",

@@ -133,7 +133,14 @@ halves of "Amazon (AWS)"; Meta for a row filed as Facebook), and its town, count
 distinctive name — limited to the dates since its last look and sorted newest first
 (a page of ten ranked by relevance could be filled by the week's older stories),
 daily for a campus being decided or built, every three days once it operates, daily
-for any campus of a company a reader watches. "Daily" allows eight hours' slack
+for any campus of a company a reader watches. **A quiet campus is looked at weekly**:
+one first looked at two weeks ago or more that has gained no citation first seen in
+the last two weeks (`QUIET_AFTER`, `QUIET_CADENCE`, `is_quiet`). Over the 14 nights
+to 2026-11-04, 396 of the 892 campuses searched daily and 221 of the 350 operating
+ones produced no readable article. Nothing is lost by it — the next look's window
+reaches back to the last — the news arrives up to a week later, and any new
+citation, from the watch or anywhere else, makes the campus daily again the next
+night. A campus a reader watches is never quiet. "Daily" allows eight hours' slack
 (`EARLY`): the watch starts after discovery, whose length varies, and an exact 24
 hours skipped every daily campus on a night that began a few seconds early; at six
 hours, the first look at every campus, run by hand at 00:11 on 10-19, made them all
@@ -217,8 +224,9 @@ Results pass the same filter and are queued as `watch:company:<key>`, read in th
 watch's turn. About 20 searches a night once the first pass is done.
 
 **Searches have their own cap.** They are prepaid credit, not the model bill, so
-the spend ledger records each one (model `serper`) and `TRACKER_SEARCH_CAP` — 2,000
-a night from the loop, of which the watch, running first, may use all but 500 —
+the spend ledger records each one (model `serper`) and `TRACKER_SEARCH_CAP` — 1,700
+a night from the loop since 2026-11-04 (2,000 before, every one of them spent), of
+which the watch, running first, may use all but 500 —
 stops every command at it, the research's searches included. Outside the money
 ceiling is not outside the report: the spend report and the news report price them at
 about ¥0.007 each (`spend.SEARCH_CNY`, Serper's $50 for 50,000) beside the model spend,
@@ -937,7 +945,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Discover, archives, search | `tracker/ingest/discover.py` — `run`, `load_config`, `load_sitemaps`, `sweep_sitemaps`, `walk_sitemap`, `index_children`, `_MEDIA_SITEMAP`, `parse_feed` (newest `lastmod` first), `queue_candidates`; `tracker/ingest/search.py`; `tracker/normalize.py` — `canonical_url`, `url_identity`, `url_variants`; `tracker/backfill.py` — `repair_urls` |
 | The keyword filter, and what it dropped | `tracker/seed/feeds.toml` — `[filter]`; `tests/fixtures/keyword_cases.json`; `tracker/ingest/discover.py` — `normalize_haystack`, `_SEPARATORS`, `_term_pattern`, `_term_regex`, `_tier`, `_TERM_START`, `term_in`, `first_term`, `_terms`, `FilterSpec.matches`, `judge_candidates`, `known_project_test`, `_GENERIC_NAME_TOKENS`, `_company_words`, `record_seen`, `rejudge`, `TOO_OLD`; `tracker/dedup.py` — `company_aliases`; `tracker/ingest/wiki.py` — `_keyword_pass`, `_substantive`; migration `0039_news_watch` (`seen_url`); `tracker/cli/sync.py` — `discover --rejudge` |
 | Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`, `RememberingFetcher`, `RecentWalkFetcher`, `walk_cache`, `WALK_FRESH`; `tracker/ingest/enrich.py` — `sweep_archives`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
-| The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `relist`, `LISTING_STALE`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `split_followups`, `group_queries`, `judge_group`, `GROUP_WORDS`, `GROUP_PAGES`, `GROUP_MAX_GAP`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
+| The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `relist`, `LISTING_STALE`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `recently_cited`, `is_quiet`, `QUIET_AFTER`, `QUIET_CADENCE`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `split_followups`, `group_queries`, `judge_group`, `GROUP_WORDS`, `GROUP_PAGES`, `GROUP_MAX_GAP`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`, `SEARCH_CNY`, `FETCH_CNY`, `report`, `summary`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `tracker/overnight.py` — `Night.run_round`, the news phase |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
