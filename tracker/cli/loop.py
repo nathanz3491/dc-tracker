@@ -45,6 +45,13 @@ def _payload(night: loopstatus.Night, state: loopstatus.Live) -> dict:
         "spent": {"cny": state.cny, "tokens": state.tokens, "searches": state.searches},
         "at_start": vars(night.at_start) if night.at_start else None,
         "now": vars(night.latest) if night.latest else None,
+        "chosen_by": night.chosen_by,
+        "fell_back": night.fell_back or None,
+        "stop_why": night.stop_why or None,
+        "referee": night.referee,
+        "accuracy": night.accuracy or None,
+        "director_cny": state.director_cny,
+        "steps": [r.as_json() for r in state.steps],
     }
 
 

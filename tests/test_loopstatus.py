@@ -132,3 +132,95 @@ def test_cli_without_a_log_points_at_the_host(tmp_path, monkeypatch):
     result = CliRunner().invoke(app, ["loop"])
     assert result.exit_code == 1
     assert "no nightly log" in result.output
+
+
+# --- directed nights (`tracker.night`) ---------------------------------------------------
+
+DIRECTED = """\
+[2026-11-06 18:01:00] overnight starting  (pid 77)
+    ceilings  10h, 20 rounds, ¥40.00, 80000000 tokens, 1700 searches
+    spend     /Users/x/repo/data/runs/overnight-20261106-180100.spend
+    steps     chosen by the director (director), inside the same ceilings
+    at start  400 finding(s), 30 duplicate group(s), 760 row(s) below T2
+[2026-11-06 18:01:10] round 1 of 20  (¥0.00, ~0 tokens, 599m left)
+    referee: logic: effort low raised to high — it rules on published values
+    referee: added audit 30: the night's floor is 30 findings
+--- 18:01:10  news — feeds and archives, the campus news watch, 900 queued article(s) read
+--- 18:40:00  duplicates — 20 pair(s)
+[2026-11-06 19:00:00] the director failed (a check-in ran past 15 minutes) — the rest of the night runs the fixed schedule
+--- 19:00:05  audit — implausible figures, 60 at a time
+--- 19:20:00  settle — re-derive and score
+  round 1: findings 400 -> 390 (-10)  groups 30 -> 29 (-1)  below-T2 760 -> 740 (-20)
+    accuracy  answer key: 1 became right, 0 stopped being right (of 33); 0 value(s) set back to a week ago; 2 value(s) with nothing behind them
+"""
+
+
+def _directed():
+    lines = io.StringIO(LOG + "\n" + DIRECTED)
+    return loopstatus.parse(line for line in lines if loopstatus.wanted(line))
+
+
+def test_a_directed_night_says_who_chose_and_why_it_handed_over():
+    nights = _directed()
+    night = nights[-1]
+    assert night.chosen_by == "director" and nights[0].chosen_by == "fixed"
+    assert night.fell_back == "a check-in ran past 15 minutes"
+    assert night.fell_back_at == dt.datetime(2026, 11, 6, 19, 0)
+    assert [p.name for p in night.rounds[0].phases] == ["news", "duplicates", "audit", "settle"]
+    assert night.rounds[0].phases[1].ended == dt.datetime(2026, 11, 6, 19, 0, 5), (
+        "the director's line ends no phase"
+    )
+    assert len(night.referee) == 2 and night.referee[1].startswith("added audit 30")
+    assert night.accuracy.startswith("answer key: 1 became right")
+
+
+def test_a_director_that_stops_the_night_says_why():
+    stopped = (
+        DIRECTED
+        + "[2026-11-06 19:21:00] the director stopped the night: nothing left worth the money\n"
+    )
+    night = loopstatus.parse(line for line in io.StringIO(stopped) if loopstatus.wanted(line))[-1]
+    assert night.stop == "director stopped" and night.stop_why == "nothing left worth the money"
+
+
+def test_render_shows_the_director_its_spend_steps_and_referee(tmp_path):
+    from tracker.night.record import StepRecord
+
+    steps = [
+        StepRecord(night="20261106-180100", mode="director", round=1, index=1, kind="audit",
+                   origin="floor", size=30, started="", minutes=4.0, cny=0.4, result=6,
+                   expect={"result": 4}),
+        StepRecord(night="20261106-180100", mode="director", round=1, index=2, kind="enrich",
+                   origin="director", size=20, started="", minutes=30.0, cny=3.1, searches=120,
+                   result=0, exits=[1]),
+    ]  # fmt: skip
+    state = loopstatus.Live(running=True, cny=5.0, director_cny=0.8, steps=steps)
+    page = _draw(_directed(), state, dt.datetime(2026, 11, 6, 19, 30))
+    assert "Steps chosen by the director until it failed at 19:00" in page
+    assert "¥0.80 of its own ¥5" in page
+    assert "Step by step" in page and "+6 below" in page
+    assert "(expected +4)" in page and "failed (exit 1)" in page
+    assert "The referee" in page and "2 change(s)" in page
+    assert "accuracy: answer key: 1 became right" in page
+    assert "director, fell back" in page, "the history says who chose each night"
+
+
+def test_the_record_is_matched_to_its_night_by_the_start(tmp_path):
+    from tracker.night import record
+
+    night = _directed()[-1]
+    for stamp in ("20261106-180058", "20261105-180100"):
+        record.append(
+            tmp_path / record.FILENAME,
+            record.StepRecord(
+                night=stamp,
+                mode="director",
+                round=1,
+                index=1,
+                kind="audit",
+                origin="director",
+                size=30,
+                started="",
+            ),
+        )
+    assert [r.night for r in loopstatus.night_steps(night, tmp_path)] == ["20261106-180058"]

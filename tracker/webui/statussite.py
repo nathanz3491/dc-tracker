@@ -388,6 +388,8 @@ class Night:
     outcome: str = "interrupted"  # complete | interrupted | running
     stop: str | None = None  # settled | spend_limit | time_limit
     minutes: int | None = None
+    #: Who chose the steps: fixed | director | director, fell back (`tracker.night`).
+    chosen_by: str = "fixed"
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -397,6 +399,7 @@ class Night:
             "outcome": self.outcome,
             "stop": self.stop,
             "minutes": self.minutes,
+            "chosen_by": self.chosen_by,
         }
 
 
@@ -430,8 +433,19 @@ def parse_nights(lines: Iterable[str], *, tz: dt.tzinfo, running: bool = False) 
                 night.stop = "spend_limit"
             elif overnight.WALL_CLOCK in text:
                 night.stop = "time_limit"
-            elif overnight.FIXED_POINT in text or overnight.SETTLED in text:
+            elif (
+                overnight.FIXED_POINT in text
+                or overnight.SETTLED in text
+                or text.startswith(overnight.DIRECTOR_STOPPED)
+            ):
+                # A director that ends its night ends it as the fixed point does: the
+                # night finished its work, nothing stopped it.
                 night.stop = night.stop or "settled"
+            elif text.startswith(overnight.DIRECTOR_FAILED):
+                night.chosen_by = "director, fell back"
+            continue
+        if line.startswith(overnight.STEPS_LINE) and nights and "director (" in line:
+            nights[-1].chosen_by = "director"
             continue
         phase = _PHASE.match(line)
         if phase and nights:
@@ -535,7 +549,9 @@ def read_nights(runs_dir: Path) -> list[Night]:
         tz = dt.datetime.now().astimezone().tzinfo
         with path.open(encoding="utf-8", errors="replace") as handle:
             # Only the lines this reads, so a 13 MB log costs one pass and no copy.
-            wanted = (line for line in handle if line.startswith(("[", "--- ")))
+            wanted = (
+                line for line in handle if line.startswith(("[", "--- ", overnight.STEPS_LINE))
+            )
             _night_cache["nights"] = parse_nights(wanted, tz=tz, running=running)
         _night_cache["key"] = key
     nights = [Night(**vars(night)) for night in _night_cache["nights"]]

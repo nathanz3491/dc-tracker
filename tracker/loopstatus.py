@@ -6,6 +6,11 @@ is in and for how long, whether the rounds are still moving anything. This reads
 same log (`data/runs/overnight.log`, whose formats are the contract at the top of
 `tracker.overnight`) and the night's spend ledger, and draws the answers as bars.
 
+On a directed night (`tracker.night`) it also says who is choosing the steps, whether
+the director had to hand them back and why, what the director itself has spent, every
+change the referee made to its plans, the accuracy check, and — from the step record
+(`data/runs/steps.jsonl`) — what each step cost and did against what was predicted.
+
 The parse is pure — lines in, a `Night` out — so the tests feed it a log; reading the
 files and the lock, and drawing, are the two thin layers either side.
 """
@@ -45,7 +50,17 @@ _PHASE: Final = re.compile(r"^--- (\d\d:\d\d:\d\d)  (.*)$")
 _CLOSING_CNY: Final = re.compile(re.escape(overnight.COMPLETE) + r" — \d+m, ¥([\d.]+)")
 
 #: Lines the parse reads; everything else in the log is the phases' own output.
-_WANTED: Final = ("[", "--- ", overnight.ROUND_LINE, "    ceilings", "    at start", "    spend ")
+_WANTED: Final = (
+    "[",
+    "--- ",
+    overnight.ROUND_LINE,
+    "    ceilings",
+    "    at start",
+    "    spend ",
+    overnight.STEPS_LINE,
+    overnight.REFEREE_LINE,
+    overnight.ACCURACY_LINE,
+)
 
 #: How many past nights the history shows.
 NIGHTS_SHOWN: Final = 7
@@ -58,6 +73,7 @@ _STOPS: Final = (
     (overnight.SPEND_CEILING, "money ceiling", "hit the money ceiling"),
     (overnight.TOKEN_CEILING, "token ceiling", "hit the token ceiling"),
     (overnight.WALL_CLOCK, "time limit", "hit the time limit"),
+    (overnight.DIRECTOR_STOPPED, "director stopped", "the director stopped the night"),
 )
 _WHY: Final = {short: long for _, short, long in _STOPS}
 #: `spend ceiling reached (¥16.06 of ¥43.18, ~25280576 of 25000000 tokens)`: one line
@@ -118,6 +134,18 @@ class Night:
     ended: dt.datetime | None = None
     cny_closing: float | None = None
     last_seen: dt.datetime | None = None
+    #: Who chose the steps (`tracker.night`): fixed, director, or fixed with the
+    #: director predicting in the background.
+    chosen_by: str = "fixed"
+    #: Why the director handed the night to the fixed schedule, and when.
+    fell_back: str = ""
+    fell_back_at: dt.datetime | None = None
+    #: The director's reason for ending the night.
+    stop_why: str = ""
+    #: Every change the referee made to the director's plans, in order.
+    referee: list[str] = field(default_factory=list)
+    #: The latest accuracy check.
+    accuracy: str = ""
 
     @property
     def complete(self) -> bool:
@@ -166,6 +194,13 @@ def parse(lines: Iterable[str]) -> list[Night]:
                 continue
             night = nights[-1]
             night.last_seen = at
+            # The director's own lines say who is choosing; they end no phase.
+            if text.startswith(overnight.DIRECTOR_FAILED) or text.startswith(
+                "the director could not be set up"
+            ):
+                why = text.partition("(")[2].rpartition(")")[0] or text
+                night.fell_back, night.fell_back_at = why, at
+                continue
             _close(night, at)
             rnd = _ROUND_START.match(text)
             if rnd:
@@ -185,6 +220,8 @@ def parse(lines: Iterable[str]) -> list[Night]:
             for needle, short, _ in _STOPS:
                 if needle in text:
                     night.stop = _which_ceiling(text) or short
+                    if needle == overnight.DIRECTOR_STOPPED:
+                        night.stop_why = text.partition(": ")[2]
                     break
             else:
                 if night.rounds and not night.complete:
@@ -226,6 +263,12 @@ def parse(lines: Iterable[str]) -> list[Night]:
             night.at_start = Counts(int(m["findings"]), int(m["groups"]), int(m["below"]))
         elif (m := _LEDGER.match(line)) is not None:
             night.ledger = Path(m["path"])
+        elif line.startswith(overnight.STEPS_LINE):
+            night.chosen_by = "director" if "director (" in line else "fixed, predicted"
+        elif line.startswith(overnight.REFEREE_LINE):
+            night.referee.append(line[len(overnight.REFEREE_LINE) :].strip())
+        elif line.startswith(overnight.ACCURACY_LINE):
+            night.accuracy = line[len(overnight.ACCURACY_LINE) :].strip()
     return nights
 
 
@@ -240,6 +283,10 @@ class Live:
     cny: float | None = None
     tokens: int | None = None
     searches: int | None = None
+    #: What the director's own calls cost tonight.
+    director_cny: float | None = None
+    #: Tonight's steps from the record (`data/runs/steps.jsonl`), in the order they ran.
+    steps: list = field(default_factory=list)
 
 
 def read_log(path: Path) -> list[Night]:
@@ -276,9 +323,27 @@ def live(night: Night, runs: Path) -> Live:
             state.cny = spend.total(calls)
             state.tokens = sum(c.tokens for c in calls)
             state.searches = spend.searches(calls)
+            state.director_cny = spend.total(c for c in calls if c.command == "director")
         except Exception:  # a pricing bug costs the figure, never the page
             pass
+    state.steps = night_steps(night, runs)
     return state
+
+
+def night_steps(night: Night, runs: Path) -> list:
+    """The record's steps for `night`: its stamp is the night's start, give or take the
+    seconds between the shell naming it and the loop logging it."""
+    from tracker.night import record
+
+    out = []
+    for r in record.read(runs / record.FILENAME):
+        try:
+            stamp = dt.datetime.strptime(r.night, "%Y%m%d-%H%M%S")
+        except ValueError:
+            continue
+        if abs((stamp - night.started).total_seconds()) <= 300:
+            out.append(r)
+    return out
 
 
 # --- drawing --------------------------------------------------------------------------
@@ -374,11 +439,15 @@ def _headline(night: Night, state: Live, now: dt.datetime) -> Group:
             )
         )
     elif night.stop:
-        lines.append(Text(f"Stopped: {_WHY.get(night.stop, night.stop)}."))
+        why = f" — {night.stop_why}" if night.stop_why else ""
+        lines.append(Text(f"Stopped: {_WHY.get(night.stop, night.stop)}{why}."))
     elif not night.complete:
         lines.append(
             Text("It ended without finishing: a reset, a power cut or a kill.", style=theme.DANGER)
         )
+    chooser = _chooser(night)
+    if chooser is not None:
+        lines.append(chooser)
     cny = _spent(night, state)
     if cny is not None and night.cny_cap:
         left = night.cny_cap - cny
@@ -386,6 +455,31 @@ def _headline(night: Night, state: Live, now: dt.datetime) -> Group:
         tail = f"; ¥{left:.2f} {'still available' if state.running else 'went unused'}"
         lines.append(Text(f"It {verb} ¥{cny:.2f} of tonight's ¥{night.cny_cap:.2f}{tail}."))
     return Group(*lines)
+
+
+def _chooser(night: Night) -> Text | None:
+    """Who chose tonight's steps, and whether the director had to hand them back."""
+    if night.chosen_by == "director":
+        if night.fell_back:
+            at = f" at {night.fell_back_at:%H:%M}" if night.fell_back_at else ""
+            return Text.assemble(
+                "Steps chosen by ",
+                ("the director", "bold"),
+                f" until it failed{at} ({night.fell_back}); the fixed schedule took over.",
+                style=theme.WARNING,
+            )
+        return Text.assemble(
+            "Steps chosen by ", ("the director", "bold"), ", inside the same ceilings."
+        )
+    if night.chosen_by == "fixed, predicted":
+        tail = f" (its predictions stopped: {night.fell_back})" if night.fell_back else ""
+        return Text(
+            f"The fixed schedule; the director predicted each step in the background{tail}.",
+            style=theme.MUTED,
+        )
+    if night.fell_back:
+        return Text(f"The fixed schedule ({night.fell_back}).", style=theme.MUTED)
+    return None
 
 
 def _budget(night: Night, state: Live, now: dt.datetime, ascii_only: bool) -> Table:
@@ -411,6 +505,15 @@ def _budget(night: Night, state: Live, now: dt.datetime, ascii_only: bool) -> Ta
     if state.searches is not None:
         cap = f" of {night.searches_cap:,}" if night.searches_cap else ""
         row("searches", state.searches, night.searches_cap, f"{state.searches:,}{cap}")
+    if night.chosen_by != "fixed" and state.director_cny is not None:
+        from tracker.night.director import BUDGET_CNY
+
+        row(
+            "director",
+            state.director_cny,
+            BUDGET_CNY,
+            f"¥{state.director_cny:.2f} of its own ¥{BUDGET_CNY:g}",
+        )
     took = _end(night, state, now) - night.started
     if night.hours:
         row(
@@ -567,6 +670,69 @@ def _phases(night: Night, now: dt.datetime, ascii_only: bool) -> Table | None:
     return table
 
 
+#: Steps the step-by-step table shows; the earliest are summarised above it.
+STEPS_SHOWN: Final = 16
+
+
+def _steps(state: Live, ascii_only: bool) -> Table | None:
+    """Tonight's steps from the record: what each cost and did, against the prediction."""
+    if not state.steps:
+        return None
+    from tracker.night.steps import KINDS
+
+    table = Table(box=None, padding=(0, 2), show_edge=False, header_style=theme.MUTED)
+    for name, justify in (
+        ("#", "right"),
+        ("step", "left"),
+        ("size", "right"),
+        ("by", "left"),
+        ("cost", "right"),
+        ("searches", "right"),
+        ("took", "right"),
+        ("result", "left"),
+    ):
+        table.add_column(name, justify=justify)  # type: ignore[arg-type]
+    for r in state.steps[-STEPS_SHOWN:]:
+        kind = KINDS.get(r.kind)
+        unit = kind.result if kind else ""
+        if r.failed:
+            result = Text(f"failed (exit {', '.join(map(str, r.exits))})", style=theme.DANGER)
+        elif r.result is None:
+            result = Text("-", style=theme.MUTED)
+        else:
+            colour = (
+                theme.SUCCESS if r.result > 0 else theme.WARNING if r.result < 0 else theme.MUTED
+            )
+            result = Text(f"{r.result:+,} {unit}", style=colour)
+        expected = r.expect.get("result")
+        if expected is not None:
+            result.append(f"  (expected {expected:+g})", style=theme.MUTED)
+        table.add_row(
+            str(r.round),
+            Text(r.kind, style="bold"),
+            str(r.size) if r.size else "",
+            Text(r.origin, style=theme.MUTED),
+            f"¥{r.cny:.2f}",
+            f"{r.searches:,}" if r.searches else "",
+            duration(dt.timedelta(minutes=r.minutes)),
+            result,
+        )
+    return table
+
+
+def _referee(night: Night) -> Group | None:
+    if not night.referee:
+        return None
+    lines = [
+        Text(
+            f"{len(night.referee)} change(s) to the director's plans tonight; the latest:",
+            style=theme.MUTED,
+        )
+    ]
+    lines += [Text(f"  {change}") for change in night.referee[-4:]]
+    return Group(*lines)
+
+
 def _history(nights: list[Night], state: Live, now: dt.datetime, ascii_only: bool) -> Table:
     table = Table(box=None, padding=(0, 2), show_edge=False, header_style=theme.MUTED)
     table.add_column("night", no_wrap=True)
@@ -574,6 +740,7 @@ def _history(nights: list[Night], state: Live, now: dt.datetime, ascii_only: boo
     table.add_column("spent", justify="right")
     table.add_column("of its ceiling", no_wrap=True)
     table.add_column("ended", no_wrap=True)
+    table.add_column("steps by", no_wrap=True)
     shown = nights[-NIGHTS_SHOWN:]
     top = max((n.cny_closing or 0 for n in shown), default=0) or 1
     for n in shown:
@@ -601,6 +768,12 @@ def _history(nights: list[Night], state: Live, now: dt.datetime, ascii_only: boo
             f"¥{cny:.2f}" if cny is not None else "-",
             share,
             Text(why, style=colour if tonight or not n.complete else ""),
+            Text(
+                "director" + (", fell back" if n.fell_back else "")
+                if n.chosen_by == "director"
+                else "fixed",
+                style=theme.MUTED if n.chosen_by != "director" else "",
+            ),
         )
     return table
 
@@ -631,8 +804,22 @@ def render(
             else "counted when a round ends; none has ended yet"
         )
         parts += [_section("Did it help?", note), progress]
+        if night.accuracy:
+            parts.append(Text(f"accuracy: {night.accuracy}", style=theme.MUTED))
     if night.rounds:
         parts += [_section("Round by round"), _rounds(night, state, now, ascii_only)]
+    steps = _steps(state, ascii_only)
+    if steps is not None:
+        hidden = len(state.steps) - STEPS_SHOWN
+        note = (
+            f"the last {STEPS_SHOWN} of {len(state.steps)}"
+            if hidden > 0
+            else "from the step record"
+        )
+        parts += [_section("Step by step", note), steps]
+    referee = _referee(night)
+    if referee is not None:
+        parts += [_section("The referee"), referee]
     if state.running:
         phases = _phases(night, now, ascii_only)
         if phases is not None:
