@@ -326,7 +326,7 @@ def test_past_nights_are_rebuilt_from_the_log_and_their_ledgers(tmp_path):
     got = record_mod.backfill(log, tmp_path, tz)
     assert [(r.kind, r.size, r.round) for r in got] == [
         ("news", 1350, 1),
-        ("twins", 0, 1),
+        ("twins", 60, 1),
         ("audit", 60, 1),
         ("enrich", 75, 1),
     ]

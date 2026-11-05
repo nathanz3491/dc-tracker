@@ -434,6 +434,12 @@ def backfill(log_path: Path, ledgers: Path, tz: dt.tzinfo, *, since: str = "") -
             ]
             cost = cost_of(mine)
             index += 1
+            if kind == "twins":
+                # Its phase line names no size; it has always asked about at most this
+                # many rows, and priced per step it read as ¥1.56 "a unit".
+                from tracker.night.steps import TWINS
+
+                size = TWINS
             out.append(
                 StepRecord(
                     night=stamp,
