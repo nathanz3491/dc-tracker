@@ -49,6 +49,7 @@ from tracker.cli import answers as _answers  # noqa: F401
 from tracker.cli import suspect as _suspect  # noqa: F401
 from tracker.cli import lock as _lock  # noqa: F401
 from tracker.cli import loop as _loop  # noqa: F401
+from tracker.cli import director as _director  # noqa: F401
 from tracker.cli import duplicates as _duplicates  # noqa: F401
 from tracker.cli import serve as _serve  # noqa: F401
 from tracker.cli import people as _people  # noqa: F401

@@ -642,6 +642,22 @@ def spend_stage(name: str) -> Iterator[None]:
         _STAGE[0] = previous
 
 
+#: A command name that replaces argv's for the ledger: the loop director's calls are
+#: made by the loop's own process, whose argv says `run`.
+_COMMAND: list[str] = [""]
+
+
+@contextmanager
+def spend_command(name: str) -> Iterator[None]:
+    """Record every paid call inside this block under command `name` in the ledger."""
+    previous = _COMMAND[0]
+    _COMMAND[0] = name
+    try:
+        yield
+    finally:
+        _COMMAND[0] = previous
+
+
 def _command() -> str:
     """The `tracker` subcommand this process is running, for the ledger's third column.
 
@@ -649,6 +665,8 @@ def _command() -> str:
     `duplicates resolve`, `enrich`. Enough to attribute a night's spend to a phase,
     which is the question the morning report answers with it.
     """
+    if _COMMAND[0]:
+        return _COMMAND[0]
     words: list[str] = []
     for arg in sys.argv[1:]:
         if arg.startswith("-") or len(words) == 2:
@@ -1894,6 +1912,7 @@ __all__ = [
     "judgement_extractor",
     "parse_json_object",
     "reasoning_extractor",
+    "spend_command",
     "spend_stage",
     "split_thinking",
     "without_thinking",

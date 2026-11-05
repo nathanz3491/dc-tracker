@@ -121,6 +121,35 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Every other night, a model chooses the loop's steps — inside rules enforced by
+  code.** The fixed schedule ran the same steps at the same sizes every night and could
+  not move effort to what was working: on 11-04 a round that searched 481 times gave
+  seven rows a fact while a round with no searches gave eighteen. On a directed night
+  the loop director decides which steps run, how big, in what order and when to stop,
+  re-planning after every three steps in one conversation, and may put enrich on rows
+  it names. A referee checks every step it asks for: sizes within range and within 1.5x
+  of a fixed night, the order rules, the night's floors, a fresh second enrich pass and
+  no third, and no step that rules on published values below today's effort. Every
+  ceiling stays where it was. A director that fails, overspends its ¥5, or presides
+  over a round that loses two answers in the answer key hands the rest of the night to
+  the fixed schedule. Nights alternate by date; on fixed nights the director predicts
+  each step's cost and yield in the background, so whether to trust it is measurable
+  (`tracker/night/`, `tracker/overnight.py`, `docs/loop-director.md`).
+- **Every night records what each step cost and produced** (`data/runs/steps.jsonl`):
+  cost sliced from the spend ledger, time, exit status, and the counts before and
+  after. The morning report gains "how the night was chosen"; `tracker director steps`,
+  `prices`, `plan` and `guard` read it, and `backfill` rebuilds cost and time for the
+  nights before it existed.
+- **The accuracy check** (`tracker/night/guard.py`): answers in the key a night turned
+  wrong, values set back to what they were a week ago, and values with nothing behind
+  them — what a night is judged on besides its counts.
+- **`tracker loop` shows the director**: who chose tonight's steps and whether it handed
+  them back, its own spend, the referee's changes, the accuracy check, and a
+  step-by-step table of cost and result against the prediction; the history says who
+  chose each night. The status page reads a night the director stopped as finished.
+- **`tracker director note "…"`** steers the next directed night; **`logic resolve
+  --project N`** limits the agent to named rows; an agent step can carry a short note
+  from the director, which says where to look and cannot change what counts as evidence.
 - **`tracker loop`: the nightly loop at a glance** (`tracker/loopstatus.py`,
   `tracker/cli/loop.py`). `overnight.sh --status` printed the night's raw round lines,
   which said whether the loop was running and little else — not how much of tonight's

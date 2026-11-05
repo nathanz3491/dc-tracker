@@ -447,6 +447,16 @@ campus after all leaves it the same way: rule the odd name out (`tracker logic
 rule-out ID name --citation N`). Nothing here creates the other campus's row; a
 reading filed under another key, or `tracker ingest manual`, does.
 
+## When the loop director runs it
+
+On a directed night ([The loop director](../loop-director.md)) the twin pass after the
+news is placed by the night, never chosen, and runs as on every night. The regular
+pass is sized by the director with a floor of 20 pairs a night, and the referee keeps
+it ahead of every step in a round that pays to read a row it may fold. The fold floor
+(`--min-confidence`) is not the director's to change, and the agent never runs below
+today's effort: this is the only step that deletes rows. The agent's task may end with
+the director's note on where to look, up to 300 characters.
+
 ## Source map
 
 Touching any of these means the poster is in scope. Re-render with
@@ -455,7 +465,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Concern | Where |
 | --- | --- |
 | The five detection passes | `tracker/capex.py` — `suspected_duplicates`, `_pair_evidence`, `_locality_buckets`, `_locality_word`, `_one_edit_apart`, `_counties`, `_shared_figures` |
-| A new row against its likeliest twin | `tracker/capex.py` — `twin_pairs`, `_place_words`; `tracker/triage.py` — `resolve_pairs(pairs=)`; `tracker/cli/duplicates.py` — `duplicates_resolve(--created-since, --limit)`; `tracker/overnight.py` — `Night.run_round` (`twin_since`), `TWIN_DAYS`, `TWINS`, `ingest geo` before the pass |
+| A new row against its likeliest twin | `tracker/capex.py` — `twin_pairs`, `_place_words`; `tracker/triage.py` — `resolve_pairs(pairs=)`; `tracker/cli/duplicates.py` — `duplicates_resolve(--created-since, --limit)`; `tracker/night/steps.py` — `commands` (`twins`), `fixed_round`, `TWIN_DAYS`, `TWINS`; `tracker/overnight.py` — `Night.run_step` (`twin_since`), `ingest geo` before the pass; `tracker/night/referee.py` — `order`, floors |
 | The party signal, and the guard on it | `tracker/parties.py` — `shared_across_companies`, `_identifying_keys`, `_NOT_IDENTIFYING_ROLES`, `keys_for` |
 | One company, one key | `tracker/dedup.py` — `company_key`, `_company_slug`, `_reduce`, `_alias_table`, `_COMPANY_SUFFIXES`, `_COMPANY_ALIASES`, `same_operator`, `use_person_aliases`, `alias_listeners`; `tracker/seed/operators.toml` — `aliases`; `tracker/companies.py` — `add_alias`, `load_aliases`, `sync`; `tracker/db.py` — `_read_company_aliases`; migration `0043_company`; `tracker/parties.py` — `split_names`, `same_company_names`, `_folded`, `known_keys` |
 | Every key a row answers to | `tracker/keys.py` — `sync`, `remember`, `natural_key`, `renormalise`; `tracker/upsert.py` — `upsert_record` (end); `tracker/merge.py` — `merge_projects`; `tracker/derive.py` — `run`; `tracker/cli/quality.py` — `init` |

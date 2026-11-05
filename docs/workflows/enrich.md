@@ -389,6 +389,24 @@ Both invisible from the outside, and both shaped the current call:
   beside them so a divergence is visible. The sweep also ran at `--budget 0`, where
   nothing is read; `run_many` skips it there now.
 
+## When the loop director runs it
+
+On a directed night ([The loop director](../loop-director.md)) enrich runs three ways.
+The two selecting passes are the same commands as on a fixed night, at sizes the
+director chooses: `--pipeline` and `--t2`, a second one the same night always
+`--fresh`, never a third. The third way is new: **rows the director names**,
+`enrich ID … --target 0 --budget N --fields F,…`, at most 40 rows a step, none merged
+away and none already asked about today, with the attempt limit (`--max-attempts`)
+left as it is. Everything above happens to those rows unchanged — harvest, extract,
+settle, then the agent on what is still missing.
+
+Two things can differ per step. The agent pass may run at an effort the director
+sets — the only step allowed below today's, because its job is finding pages; the
+reading and the settle stay at theirs. And the agent's task may end with a note of up
+to 300 characters on where to look (`tracker/agent.py`, `_director_note`). The note
+cannot reach the quote check: a value is still kept only when its sentence is in the
+page.
+
 ## Source map
 
 Touching any of these means the poster is in scope. Re-render with
@@ -399,7 +417,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `ArchiveSweep`, `will_harvest`; `tracker/ingest/discover.py` — `RecentWalkFetcher`, `RememberingFetcher`, `walk_cache`, `WALK_FRESH`, `run` (the walk it keeps) |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/attempts.py` — `asked_since`; `tracker/overnight.py` — `enrich_rounds`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/attempts.py` — `asked_since`; `tracker/overnight.py` — `enrich_rounds`; `tracker/night/steps.py` — `fixed_round`, `commands` (`pipeline`, `enrich`, `rows`); `tracker/night/referee.py` — `review_step`, `SELECTING_PASSES`, `ROWS_STEPS`; `tracker/agent.py` — `_director_note`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |

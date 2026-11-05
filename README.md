@@ -233,6 +233,19 @@ Web searches are another bill — prepaid Serper credit, about ¥0.007 each — 
 beside the model spend: on 2026-10-19, 780 searches came to about ¥5.54 against
 ¥9.89 on models (`python -m tracker.spend summary <ledger>` puts both on one line).
 
+**Every other night a model chooses the steps** (since 2026-11-05). On a directed night
+the loop director decides which steps run, how big, in what order and when to stop,
+re-planning after every three; on the night between, the fixed schedule runs and the
+director only predicts what each step will cost and yield. The model chooses; code
+decides whether the choice is allowed, runs it as the same commands, and measures it.
+Every ceiling stays in code, a referee clamps sizes, keeps the order rules, adds the
+night's floors and never lets effort drop on a step that rules on published values,
+and a director that fails — or a round that loses answers in the answer key — hands
+the rest of the night to the fixed schedule. Every night now records what each step
+cost and produced (`data/runs/steps.jsonl`). `tracker director note "…"` steers the
+next directed night; `--mode fixed|director` on `overnight.sh` overrides the
+alternation. See [The loop director](docs/loop-director.md).
+
 A command that spends refuses to start in DeepSeek's peak hours (09–12 and 14–18
 Beijing time, Monday to Friday), when every call costs double —
 `TRACKER_PEAK_GUARD=off` in front of it pays the peak rate on purpose, and
@@ -389,6 +402,7 @@ This file is the tour. The detail lives in [`docs/`](docs/README.md):
 | [Analysis](docs/analysis.md) | Who is buying the capacity, what could stop these projects, slippage |
 | [The terminal interface](docs/tui.md) | `tracker tui` — the six panes, why the run pane cannot fall behind the CLI, verifying it over ssh |
 | [The console, and exporting](docs/console-and-export.md) | The live console, accounts (sign-up, invites, approval), driving it without a browser, publishing it, the reader documentation it serves, the public API, the status page |
+| [The loop director](docs/loop-director.md) | The model that chooses every other night's steps: what it may and may not do, the referee's rules, how it fails safe, and the per-step record every night now keeps |
 | [Command workflows](docs/workflows/README.md) | The four commands that are pipelines, not operations — `enrich`, `sync`, `duplicates`, `logic` — each with a full-page diagram of its stages |
 | [Architecture](docs/architecture.md) | How the CLI, the database and the console fit together |
 | [Design decisions](docs/design-decisions.md) | Why it works the way it does, and where it diverges from the PRD |

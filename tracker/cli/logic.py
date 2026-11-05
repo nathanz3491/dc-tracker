@@ -424,6 +424,15 @@ def logic_resolve(
         typer.Option("--code", help="Work through one kind of finding only.", show_default=False),
     ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Findings to offer.")] = 30,
+    projects: Annotated[
+        list[int] | None,
+        typer.Option(
+            "--project",
+            help="Only findings on this row; repeat for several. How the loop director "
+            "puts the agent on particular rows.",
+            show_default=False,
+        ),
+    ] = None,
     suspects: Annotated[
         int,
         typer.Option(
@@ -561,6 +570,9 @@ def logic_resolve(
         else:
             report = logic_mod.review(session)
             findings = [f for f in report.findings if not code or f.code == code]
+        if projects:
+            wanted = set(projects)
+            findings = [f for f in findings if f.project_id in wanted]
 
         # Drop what has already been answered on this row. `audit resolve` has
         # skipped settled findings since it was written; `logic resolve` did not,

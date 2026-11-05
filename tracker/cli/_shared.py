@@ -160,6 +160,14 @@ app.add_typer(lock_app)
 loop_app = typer.Typer(name="loop", invoke_without_command=True)
 app.add_typer(loop_app)
 
+#: The loop director (`tracker.night`): `note` steers the next directed night; `steps`,
+#: `prices`, `plan` and `guard` read what nights did; `backfill` rebuilds the record
+#: for nights before it existed.
+director_app = typer.Typer(
+    name="director", help="The nightly loop's director and its record.", no_args_is_help=True
+)
+app.add_typer(director_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

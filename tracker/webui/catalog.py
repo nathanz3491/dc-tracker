@@ -125,6 +125,15 @@ BLOCKED: dict[str, str] = {
     # It reads the loop's log and ledger, which only the host has; the status page
     # shows the nights to anybody.
     "loop": "run it on the host, where the loop runs — the status page shows its nights",
+    # The director's files — its note, the step record, the plan files — live beside
+    # the loop's log on the host. The note steers a night that spends money: a
+    # decision for somebody at a terminal, like the loop itself.
+    "director note": "it steers the nightly loop — set it on the host, at a terminal",
+    "director steps": "it reads the loop's record on the host — run it there",
+    "director prices": "it reads the loop's record on the host — run it there",
+    "director plan": "it reads the director's files on the host — run it there",
+    "director guard": "it compares snapshots on the host — run it there",
+    "director backfill": "it rewrites the loop's record on the host — run it there",
     # The status page shows the same thing to anybody, and a note on it is public
     # text: written at a terminal, by whoever runs the tracker.
     "status": "it is the public status page",

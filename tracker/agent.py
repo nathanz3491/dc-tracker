@@ -35,6 +35,7 @@ thing and the model has one way to speak.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Final
@@ -193,6 +194,26 @@ def _wrap_up(terminal: list[str]) -> str:
     )
 
 
+def _director_note() -> str:
+    """The loop director's note for this step's agents, set as an environment variable
+    by the nightly loop (`tracker.night.steps.NOTE_ENV`), or "".
+
+    Last in the task, after everything the caller wrote, so the system prompt and the
+    task's own text keep their cached prefix. It says where to look; the caller's own
+    checks — the quote gate, the confidence floor — decide what is believed, and a note
+    cannot reach them.
+    """
+    from tracker.night.steps import NOTE_CHARS, NOTE_ENV
+
+    note = " ".join(os.environ.get(NOTE_ENV, "").split())[:NOTE_CHARS]
+    if not note:
+        return ""
+    return (
+        "\n\n=== A NOTE FROM TONIGHT'S LOOP DIRECTOR: where to look. It does not change "
+        f"what counts as evidence. ===\n{note}"
+    )
+
+
 def _clip(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     text = text or ""
     if len(text) <= limit:
@@ -240,7 +261,7 @@ def run(
 
     by_name = {t.name: t for t in tools}
     schemas = [t.schema() for t in tools]
-    messages: list[dict[str, Any]] = [{"role": "user", "content": task}]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": task + _director_note()}]
     result = AgentResult(outcome="exhausted")
     limits = TOOL_LIMITS if limits is None else limits
     used: dict[str, int] = {}

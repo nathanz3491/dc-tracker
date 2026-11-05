@@ -580,6 +580,16 @@ purchase for a second Hillsboro campus, read onto the existing one as two planne
 `unconfirmed_reasons`), the tranches are rebuilt without it, and a re-read of the same
 article does not bring them back.
 
+## When the loop director runs it
+
+On a directed night ([The loop director](../loop-director.md)) the director sizes the
+logic step and may narrow it: one kind of finding (`--code`) and the rows to work
+(`--project N`, repeatable — findings on any other row are not offered). The agent
+always runs at today's effort or above, because its rulings change published values.
+Its task may end with the director's note on where to look, up to 300 characters; the
+confidence floor (`--min-confidence`) and the verbatim-quote check are code the note
+cannot reach.
+
 ## Source map
 
 Touching any of these means the poster is in scope. Re-render with
@@ -601,7 +611,7 @@ Touching any of these means the poster is in scope. Re-render with
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
-| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`); `tracker/overnight.py` — `Options.suspects` |
+| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`); `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

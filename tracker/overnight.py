@@ -204,6 +204,20 @@ superseding a claim about a field. It will read the sources and decline them, on
 each. The real fix is a `blocks fold` command that does not exist. A stubborn
 residue of block findings is not this loop failing.
 
+WHO CHOOSES THE STEPS, since 2026-11-05. Each phase above is a step
+(`tracker.night.steps`), and every other night (`--mode auto`, by date) a model — the
+loop director — chooses which steps run, how big, in what order and when the night
+stops, re-planning after every three steps. On the nights between, the order above
+runs exactly as before and the director only predicts each step's cost and yield. The
+model chooses; code decides whether the choice is allowed (`tracker.night.referee`:
+ranges, drift, floors, the order rules, effort), runs it as the same commands, and
+measures it. The news, the twin pass and the free phase are placed by the night, never
+chosen. A director that fails, spends its ¥5, or presides over a round that loses two
+answers in the answer key (`tracker.night.guard`) hands the rest of the night to the
+fixed schedule. Every step of every night leaves a record of its cost and result
+(`tracker.night.record`, `data/runs/steps.jsonl`). `docs/loop-director.md` has the
+rules and why each exists.
+
 SAFETY, since nobody is watching:
 
 * a `VACUUM INTO` snapshot before the first merge and every `--backup-every` rounds
@@ -230,7 +244,8 @@ into `data/runs/overnight.log`.
 
 THE LOG IS A CONTRACT. The status page reads `data/runs/overnight.log`
 (`tracker.webui.statussite.parse_nights`), `tracker loop` reads it with the opening
-block's `ceilings`, `at start` and `spend` lines (`tracker.loopstatus`), and
+block's `ceilings`, `at start`, `spend` and `steps` lines and a directed night's
+`referee:` and `accuracy` lines and its hand-over and stop (`tracker.loopstatus`), and
 `overnight.sh --status` greps it, so the words and line shapes they look for are
 constants below, imported from here by both readers, and the formats — `[YYYY-MM-DD HH:MM:SS] msg`, `--- HH:MM:SS  msg`,
 `  round N: findings A -> B (+d) ...` — are byte-for-byte what the shell printed, so
@@ -240,6 +255,7 @@ every old log still parses.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime as dt
 import os
@@ -251,9 +267,14 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Final, NamedTuple, Protocol
+from typing import Any, BinaryIO, Final, NamedTuple, Protocol
 
 from tracker import spend
+from tracker.night import record as record_mod
+from tracker.night import referee
+from tracker.night import steps as steps_mod
+from tracker.night.director import CHECK_IN_EVERY
+from tracker.night.steps import EFFORTS, TWIN_DAYS, Step
 
 # --- the log contract ---------------------------------------------------------------
 # What `tracker.webui.statussite`, `tracker.loopstatus` and `overnight.sh --status` read. Change one of these
@@ -275,6 +296,16 @@ FIXED_POINT: Final = "fixed point"
 SETTLED: Final = "everything settled"
 #: Each round's progress line starts with this; `--status` greps for it.
 ROUND_LINE: Final = "  round "
+#: The director ended a directed night (`[stamp] the director stopped the night: why`).
+DIRECTOR_STOPPED: Final = "the director stopped the night"
+#: The director failed and the fixed schedule took over (`[stamp] the director failed (why) — …`).
+DIRECTOR_FAILED: Final = "the director failed"
+#: The opening block's line saying who chooses tonight's steps.
+STEPS_LINE: Final = "    steps     "
+#: A change the referee made to a director's plan.
+REFEREE_LINE: Final = "    referee: "
+#: The accuracy check after a directed round, and in the morning report.
+ACCURACY_LINE: Final = "    accuracy  "
 
 #: A `say` line: `[YYYY-MM-DD HH:MM:SS] message`.
 STAMPED: Final = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (.*)$")
@@ -297,23 +328,23 @@ def ledger_name(at: dt.datetime) -> str:
 
 # --- the night's fixed settings ---------------------------------------------------------
 
-#: The twin pass: rows created in the last TWIN_DAYS days, at most TWINS of them a
-#: night. A lookback rather than tonight alone, because a night whose pass was capped,
-#: crashed or blind (it ran before the rows had a county until 2026-10-20) was never
-#: revisited: the 10-19 night left about 16 twins standing. A pair already asked on
-#: the same evidence is held back (`declines`), so the lookback re-asks only what
-#: changed. The cap is what keeps a 100-row night from spending the budget here.
-TWINS: Final = 60
-TWIN_DAYS: Final = 3
+# The twin pass: rows created in the last TWIN_DAYS days, at most TWINS of them a
+# night. A lookback rather than tonight alone, because a night whose pass was capped,
+# crashed or blind (it ran before the rows had a county until 2026-10-20) was never
+# revisited: the 10-19 night left about 16 twins standing. A pair already asked on
+# the same evidence is held back (`declines`), so the lookback re-asks only what
+# changed. The cap is what keeps a 100-row night from spending the budget here.
+# SEARCHES_KEPT: what the fixed schedule's news watch leaves for the research after it.
+# All four live with the steps they shape (`tracker.night.steps`).
 
 #: The ceiling when `--cny` names none and no allowance can be read: the flat ceiling
 #: every night ran under before the allowance existed.
 FALLBACK_CNY: Final = "15"
 
-#: Searches the news watch leaves for the research that runs after it.
-SEARCHES_KEPT: Final = 500
-
-EFFORTS: Final = ("low", "high", "max")
+#: How a night is chosen: by the date (`auto`: directed on even days, fixed on odd),
+#: or always one way. Decided 2026-11-05: alternate nights, so a bad directed night is
+#: followed by a normal one.
+MODES: Final = ("auto", "fixed", "director")
 
 
 # --- options ---------------------------------------------------------------------------
@@ -374,6 +405,10 @@ class Options:
     agent_effort: str | None = None
     local_judgement: bool = False
     backup_every: int = 5
+    #: Who chooses the steps: `auto` alternates by date (`MODES`).
+    mode: str = "auto"
+    #: Run a recorded directed night's steps again, without a model.
+    replay: Path | None = None
     #: Set by the shell, not by a person: the checkout, and what `tracker.spend
     #: allowance` printed (possibly nothing).
     repo: Path = field(default_factory=Path.cwd)
@@ -589,6 +624,22 @@ def parser() -> argparse.ArgumentParser:
         type=int,
         default=d.backup_every,
         help="snapshot every N rounds (default 5). Always before round 1.",
+    )
+    a(
+        "--mode",
+        choices=MODES,
+        default=d.mode,
+        metavar="M",
+        help="who chooses the steps: director (a model, inside the same limits), fixed "
+        "(the schedule in this file), or auto (default): director on even days, fixed "
+        "on odd, with the director predicting in the background on fixed nights",
+    )
+    a(
+        "--replay",
+        type=Path,
+        default=None,
+        help="run the steps a directed night recorded (data/runs/director-*.jsonl) "
+        "again, without a model",
     )
     a("--repo", type=Path, default=None, help=argparse.SUPPRESS)
     a("--allowance", default=None, help=argparse.SUPPRESS)
@@ -842,6 +893,26 @@ class Night:
     pid: int
     #: Writes the night's check findings to the training log; returns how many.
     findings: Callable[[], int] = lambda: 0
+    #: The counts a step is measured by (`record.probe`), or None when unmeasured.
+    probe: Callable[[], record_mod.Metrics | None] | None = None
+    #: Where each step's record is appended (`data/runs/steps.jsonl`), or None.
+    record_path: Path | None = None
+    #: The director choosing tonight's steps, or None for the fixed schedule.
+    director: Any = None
+    #: On a fixed night, the director predicting in the background, or None.
+    shadow: Any = None
+    #: What the director may ask for (`referee.Rules`); defaults from the options.
+    rules: referee.Rules | None = None
+    #: The accuracy check against the first snapshot (`guard.check`), or None.
+    guard: Callable[[Path], Any] | None = None
+    #: The director's plan file (`director.PlanFile`), or None.
+    plan_file: Any = None
+    #: What the director has spent tonight, in yuan.
+    director_spent: Callable[[], float] = lambda: 0.0
+    #: Runs once the morning report is written (a directed night clears the operator's note).
+    on_finish: Callable[[], Any] = lambda: None
+    night_id: str = ""
+    version: str = ""
 
     capped_: bool = False
     first_snapshot: Path | None = None
@@ -851,15 +922,46 @@ class Night:
         if self.options.tokens is None:
             self.options = dataclasses.replace(self.options, tokens=token_ceiling(self.cny_cap))
         self.env = night_env(self.options, self.cny_cap, self.ledger)
+        if self.rules is None:
+            self.rules = referee.Rules(
+                self.options,
+                efforts={
+                    steps_mod.AGENT_EFFORT: self.options.agent_effort or "high",
+                    steps_mod.JUDGEMENT_EFFORT: self.options.judgement_effort,
+                    steps_mod.EXTRACTION_EFFORT: self.options.extraction_effort or "high",
+                },
+                allowance=referee.allowance(self.options, {}),
+            )
+        self.tonight = referee.Tonight()
+        self.records: list[record_mod.StepRecord] = []
+        self.metrics: record_mod.Metrics | None = None
+        self.fell_back = ""
+        self.stop_why = ""
+        self.guard_lines: list[str] = []
+        self.placed = False
+        #: Records already told to the director.
+        self.reported = 0
+        self.shadow_used = self.shadow is not None
+        self.shadow_stopped = ""
+
+    @property
+    def mode(self) -> str:
+        if self.director is None:
+            return "fixed"
+        return "director" if not self.fell_back else "director, fell back"
 
     # --- helpers ---------------------------------------------------------------------
 
-    def tracker(self, *args: object, head: int | None = None) -> None:
-        """One phase. Its exit status is ignored: see SAFETY in the module docstring."""
+    def tracker(
+        self, *args: object, head: int | None = None, env: Mapping[str, str] | None = None
+    ) -> int:
+        """One command; its exit status. A failure is that command's alone: see SAFETY."""
         try:
-            self.runner([str(a) for a in args], env=self.env, head=head)
+            code = self.runner([str(a) for a in args], env={**self.env, **(env or {})}, head=head)
+            return int(code or 0)
         except Exception as exc:  # could not even start it: that phase is lost
             self.log.line(f"    could not run `tracker {' '.join(map(str, args))}`: {exc}")
+            return -1
 
     def measure(self) -> Counts:
         try:
@@ -935,6 +1037,12 @@ class Night:
         if o.agent_effort:
             log.line(f"    agent     {o.agent_effort} effort")
         log.line(f"    spend     {self.ledger}")
+        if self.director is not None:
+            log.line(
+                f"{STEPS_LINE}chosen by the director ({self.director.mode}), inside the same ceilings"
+            )
+        elif self.shadow is not None:
+            log.line(f"{STEPS_LINE}the fixed schedule; the director predicts in the background")
 
         try:
             self.base = self.measure()
@@ -964,6 +1072,7 @@ class Night:
         if o.suspects > 0:
             log.say("suspicion score")
             self.tracker("suspect", "score")
+        self.metrics = self.take_metrics()
 
         try:
             for number in range(1, o.rounds + 1):
@@ -983,6 +1092,9 @@ class Night:
             self.settle("settle — re-derive and score, after the ceiling")
         self.restore_losses()
         self.morning_report()
+        # Tidying up after the night must not fail it.
+        with contextlib.suppress(Exception):
+            self.on_finish()
         return 0
 
     def restore_losses(self) -> None:
@@ -1000,7 +1112,10 @@ class Night:
         self.tracker("losses", "--against", self.first_snapshot, "--restore")
 
     def run_round(self, number: int) -> bool:
-        """One round, in the order the module docstring argues. True stops the night."""
+        """One round: the fixed schedule's steps or the director's, then the settle.
+
+        True stops the night.
+        """
         o = self.options
         log = self.log
         now = self.clock()
@@ -1014,209 +1129,10 @@ class Night:
         if number > 1 and (number - 1) % o.backup_every == 0:
             self.backup()
 
-        placed = False
-        # --- news: first, so nothing later can cost the day's news ----------------
-        # The one phase that adds rows. First round only: the queue does not change
-        # between rounds. Polling the feeds and walking the archives costs nothing;
-        # the news watch is a search a campus on a first look and a search for
-        # several of a company's campuses after (prepaid credit, under
-        # `--search-cap`); each article read is one extraction (about ¥0.03), and the
-        # read's identity check — one call, only when a record nearly matches a row —
-        # is what keeps a campus already held under another name from becoming its
-        # twin. Rounds after this one run `duplicates` over whatever it added.
-        if o.do_discover and number == 1:
-            log.phase(
-                f"news — feeds and archives, the campus news watch, {o.discover} "
-                "queued article(s) read"
-            )
-            self.tracker("discover", "--no-show")
-            searches = (
-                o.search_cap - SEARCHES_KEPT if o.search_cap > SEARCHES_KEPT else o.search_cap
-            )
-            self.tracker("news", "--baselines", o.baselines, "--max-queries", searches)
-            if self.capped("news"):
-                return True
-            self.tracker(
-                "ingest", "queue", "--new-first", "--limit", o.discover,
-                "--screen" if o.screen else "--no-screen",
-            )  # fmt: skip
-
-            # Where the new rows are, before asking what they duplicate. The twin pass
-            # pairs a row with an existing one through a shared town or county, or a
-            # distance — and a row fresh from an article usually has a town and
-            # nothing else: on 2026-10-19, 74 of 185 recent rows had no county and
-            # none had coordinates, because `ingest geo` ran in the free phase, after
-            # the pass. So a campus filed under its county met its own twin filed
-            # under the town and saw nothing in common. The Census lookup is free and
-            # takes seconds.
-            self.tracker("ingest", "geo")
-            placed = True
-
-            # One attempt to fold per row recently added, each against its likeliest
-            # twin wherever that twin is filed (`duplicates resolve --created-since`).
-            # The regular pass only sees pairs within one town or one company, and on
-            # 2026-10-05 a new 10 GW PORTS campus row sat unpaired beside its
-            # duplicate because one row named the town and a different company, the
-            # other the county.
-            if self.capped("duplicates"):
-                return True
-            log.phase(
-                f"duplicates — one attempt per row created in the last {TWIN_DAYS} "
-                f"day(s), {TWINS} at most"
-            )
-            if o.merge:
-                self.tracker(
-                    "duplicates", "resolve", "--merge", "--min-confidence", o.min_confidence,
-                    "--created-since", self.twin_since, "--limit", TWINS,
-                )  # fmt: skip
-            else:
-                self.tracker(
-                    "duplicates", "resolve", "--created-since", self.twin_since, "--limit", TWINS
-                )
-
-            # The night's yardstick, re-taken now. The news adds rows and findings by
-            # design, so measured against the counts from before it every later round
-            # looked like no progress: on 2026-10-19 round 2 lowered all three counts,
-            # was still above the pre-news minimums, and the night declared a fixed
-            # point with 7.4 hours and ¥5 unused. Progress is measured from here.
-            self.base = self.measure()
-            log.line(
-                f"    after news {self.base.findings} finding(s), {self.base.groups} "
-                f"duplicate group(s), {self.base.below} row(s) below T2"
-            )
-            self.lowest = self.base
-
-        # --- free: no model, no cost ---------------------------------------------------
-        log.phase("free — dates, geo, scope, derive, logic --auto")
-        # First round only, the date check also asks publishers: one plain request per
-        # page, no model. Without it only dates written in a URL's path are found, and
-        # 1,836 citations sat undated night after night — the date the morning email
-        # decides "is this news" by. Each page is asked once per 90 days (migration
-        # 0035), newest first, so the limit reaches new articles rather than re-asking
-        # a Census table that will never state one.
-        if number == 1 and o.dates > 0:
-            self.tracker("backfill", "dates", "--apply", "--refetch", "--yes", "--limit", o.dates)
-        else:
-            self.tracker("backfill", "dates", "--apply")
-        # Not twice in one round: the news phase placed every row a minute ago and
-        # nothing since has added one (the date check writes dates only).
-        if not placed:
-            self.tracker("ingest", "geo")
-        self.tracker("backfill", "scope", "--apply")
-        self.tracker("backfill", "derive")
-        self.tracker("logic", "resolve", "--auto", "--apply")
-
-        # --- duplicates: before anything reads a row it may fold -----------------------
-        # Ahead of audit, risks and logic, because each of those pays to read one row's
-        # sources: on 2026-10-19, 12 of the 14 first-round logic findings were on rows
-        # created that evening, and #1732 was worked twice and #1742 for 15 tool steps
-        # before the duplicate pass that ran after them merged both away.
-        if self.capped("duplicates"):
+        self.placed = False
+        directed = self.director is not None and not self.fell_back
+        if self.directed_round(number) if directed else self.fixed_round(number):
             return True
-        log.phase(f"duplicates — {o.pairs} pair(s)")
-        if o.merge:
-            self.tracker(
-                "duplicates", "resolve", "--merge", "--limit", o.pairs,
-                "--min-confidence", o.min_confidence,
-            )  # fmt: skip
-        else:
-            self.tracker("duplicates", "resolve", "--limit", o.pairs)
-
-        # --- audit: a T1 gate, and cheap -----------------------------------------------
-        if self.capped("audit"):
-            return True
-        log.phase(f"audit — implausible figures, {o.audit} at a time")
-        self.tracker("audit", "resolve", "--no-ask", "--limit", o.audit)
-
-        if self.capped("risks"):
-            return True
-        log.phase(f"risks — unquoted obstacles, {o.risks} at a time")
-        self.tracker("risks", "confirm", "--limit", o.risks)
-
-        # --- the agent phases ----------------------------------------------------------
-        if self.capped("logic"):
-            return True
-        log.phase(f"logic — a model reads the sources, {o.findings} at a time")
-        self.tracker("logic", "resolve", "--limit", o.findings)
-
-        # The same agent on the values the suspicion score ranked tonight, once a
-        # night: a value can be wrong with no rule able to see it, and these are the
-        # ones most likely to be.
-        if number == 1 and o.suspects > 0:
-            if self.capped("suspects"):
-                return True
-            log.phase(f"suspects — a model re-reads the {o.suspects} likeliest-wrong value(s)")
-            self.tracker("logic", "resolve", "--suspects", o.suspects, "--limit", o.suspects)
-
-        # After logic, which may rule a claim out and re-derive a row's tranches: the
-        # review then reads the tranches the night settled on.
-        if self.capped("tranches"):
-            return True
-        log.phase(
-            f"tranches — a model nests the tranches of {o.nest} campus(es) that do not add up"
-        )
-        self.tracker("tranches", "review", "--limit", o.nest)
-
-        # --- enrich: last, and the largest lever ---------------------------------------
-        # Every row sitting at T1 is held there by `fields_present` alone. Nothing above
-        # this line can move one, because they are not wrong — they are empty. First
-        # round(s) only, and after the first only on rows not asked about tonight
-        # (`--fresh`): a second pass over the same rows finds the same pages, and a page
-        # it has read is not read again, so it was paying to be told so. `--t2` picks
-        # the rows that tier fails, fewest missing first.
-        # The forward views first: campuses being built or permitted that lack the date
-        # or the capacity the supply chart and the delay flags read (`--pipeline`).
-        fresh = ("--fresh",) if number > 1 else ()
-        if number <= o.enrich_rounds and o.pipeline > 0:
-            if self.capped("pipeline"):
-                return True
-            log.phase(
-                f"enrich — {o.pipeline} campus(es) being built or permitted with no date "
-                f"or capacity, {o.pipeline_budget} article budget"
-            )
-            self.tracker(
-                "enrich", "--select", o.pipeline, "--pipeline", "--budget", o.pipeline_budget,
-                *fresh,
-            )  # fmt: skip
-        if o.do_enrich and number <= o.enrich_rounds:
-            if self.capped("enrich"):
-                return True
-            log.phase(f"enrich — {o.enrich} row(s) below T2, {o.enrich_budget} article budget")
-            self.tracker(
-                "enrich", "--select", o.enrich, "--t2", "--target", "0",
-                "--budget", o.enrich_budget, *fresh,
-            )  # fmt: skip
-
-        # Re-read, from the article cache, what an older prompt extracted. The gate has
-        # been tightened release after release and each tightening applied only to rows
-        # written afterwards: on 2026-10-10, 2,320 citations were last read by a
-        # superseded prompt and 374 rows failed `vintage_current` for it. Cached only,
-        # so nothing is fetched and a closed publisher's page we already hold is read
-        # again legitimately; existing projects only, so a re-read never adds a campus.
-        # Oldest vintage first. About ¥0.02 an article.
-        if number == 1 and o.reread > 0:
-            if self.capped("reread"):
-                return True
-            log.phase(f"reread — {o.reread} article(s) last read by a superseded prompt")
-            self.tracker(
-                "ingest", "reread", "--cached-only", "--existing-only", "--limit", o.reread
-            )
-
-        # Re-read what the gate refused before it last changed. v3.7.5 (2026-10-17)
-        # began accepting short exact quotes, quotes with one slip, hyphenated figures,
-        # pre-2020 years and coarse dates; 1,293 cached, readable articles held a
-        # refusal it may reverse. 60 a night, about ¥1.2, so the backlog clears in
-        # about 22 nights and then the step finds nothing and costs nothing.
-        if number == 1 and o.recheck > 0:
-            if self.capped("recheck"):
-                return True
-            log.phase(
-                f"recheck — {o.recheck} article(s) holding a refusal from before the "
-                "gate's last revision"
-            )
-            self.tracker(
-                "ingest", "recheck", "--cached-only", "--existing-only", "--limit", o.recheck
-            )
 
         # --- reconcile and measure -----------------------------------------------------
         self.settle()
@@ -1238,7 +1154,13 @@ class Night:
                 f"groups, {low.below} below T2): {self.stale} of {o.dry_rounds} stale rounds"
             )
         self.base = after
+        self.metrics = self.take_metrics()
 
+        if self.director is not None and not self.fell_back:
+            self.check_accuracy()
+        if self.stop_why:
+            log.say(f"{DIRECTOR_STOPPED}: {self.stop_why}")
+            return True
         if after == Counts(0, 0, 0):
             log.say(SETTLED)
             return True
@@ -1248,6 +1170,369 @@ class Night:
             )
             return True
         return False
+
+    # --- steps --------------------------------------------------------------------------
+
+    def run_step(self, step: Step, number: int) -> bool:
+        """One step: its ceiling check, its phase line, its commands, its record.
+
+        True stops the night. The commands, their order and the phase line are the
+        ones the fixed loop always ran (`tracker.night.steps`); what is new is that
+        every step leaves a record of what it cost and what it changed.
+        """
+        gate = steps_mod.gate(step)
+        if gate is not None and self.capped(gate):
+            return True
+        context = steps_mod.Context(self.options, number, self.twin_since, placed=self.placed)
+        self.log.phase(steps_mod.label(step, context))
+        started, mark, before = self.clock(), record_mod.ledger_size(self.ledger), self.metrics
+        extra = steps_mod.env(step)
+        exits: list[int] = []
+        stopped = ""
+        for command in steps_mod.commands(step, context):
+            if command.gate is not None and self.capped(command.gate):
+                stopped = command.gate
+                break
+            exits.append(self.tracker(*command.args, env=extra))
+        if step.kind == "news":
+            self.placed = True
+        self.tonight.add(step)
+        if not stopped:
+            self.metrics = self.take_metrics()
+        self.keep(step, number, context, started, mark, exits, before, stopped)
+        if stopped:
+            return True
+        if step.kind == "twins":
+            # The night's yardstick, re-taken now. The news adds rows and findings by
+            # design, so measured against the counts from before it every later round
+            # looked like no progress: on 2026-10-19 round 2 lowered all three counts,
+            # was still above the pre-news minimums, and the night declared a fixed
+            # point with 7.4 hours and ¥5 unused. Progress is measured from here.
+            self.base = self.measure()
+            self.log.line(
+                f"    after news {self.base.findings} finding(s), {self.base.groups} "
+                f"duplicate group(s), {self.base.below} row(s) below T2"
+            )
+            self.lowest = self.base
+        return False
+
+    def take_metrics(self) -> record_mod.Metrics | None:
+        """The counts a step is measured by. A count that fails costs the record, not the night."""
+        if self.probe is None:
+            return None
+        try:
+            return self.probe()
+        except Exception:
+            return None
+
+    def keep(
+        self,
+        step: Step,
+        number: int,
+        context: steps_mod.Context,
+        started: dt.datetime,
+        mark: int,
+        exits: list[int],
+        before: record_mod.Metrics | None,
+        stopped: str,
+    ) -> None:
+        cost = record_mod.cost_of(record_mod.ledger_slice(self.ledger, mark))
+        after = None if stopped else self.metrics
+        made = record_mod.StepRecord(
+            night=self.night_id or f"{self.started:%Y%m%d-%H%M%S}",
+            mode="fixed" if self.director is None else "director",
+            round=number,
+            index=len(self.records) + 1,
+            kind=step.kind,
+            origin=step.origin,
+            size=step.size,
+            started=started.isoformat(timespec="seconds"),
+            minutes=round((self.clock() - started).total_seconds() / 60, 2),
+            commands=[list(c.args) for c in steps_mod.commands(step, context)],
+            exits=exits,
+            budget=step.budget,
+            fresh=step.fresh,
+            rows=list(step.rows),
+            fields=list(step.fields),
+            effort=step.effort,
+            note=step.note,
+            cny=cost.cny,
+            tokens=cost.tokens,
+            searches=cost.searches,
+            fetches=cost.fetches,
+            before=before._asdict() if before else None,
+            after=after._asdict() if after else None,
+            result=record_mod.result(steps_mod.KINDS[step.kind].result, before, after),
+            expect=dict(step.expect),
+            why=step.why,
+            version=self.version,
+            stopped=stopped,
+        )
+        self.records.append(made)
+        if self.record_path is not None:
+            record_mod.append(self.record_path, made)
+        if self.plan_file is not None:
+            self.plan_file.write("step", round=number, step=step.as_json(), record=made.as_json())
+
+    # --- the fixed schedule ---------------------------------------------------------------
+
+    def fixed_round(self, number: int) -> bool:
+        plan = steps_mod.fixed_round(self.options, number)
+        if self.director is not None:
+            plan = [s for s in plan if self.fixed_allowed(s, fallback=True)]
+        return self.run_fixed(plan, number)
+
+    def run_fixed(self, plan: list[Step], number: int) -> bool:
+        """The fixed steps in order; on a fixed night the director predicts beside them."""
+        for i, step in enumerate(plan):
+            if self.shadow is not None and i % CHECK_IN_EVERY == 0:
+                self.shadow_check_in(number, plan[i:], at_start=i == 0)
+            if self.run_step(step, number):
+                return True
+        return False
+
+    def fixed_allowed(self, step: Step, *, fallback: bool = False) -> bool:
+        """After a director ran part of the night: no once-a-night step twice, no third
+        enrich pass, and a second one only on rows not yet asked today."""
+        kind = steps_mod.KINDS[step.kind]
+        if fallback:
+            step.origin = "fallback"
+        if kind.once and self.tonight.totals.get(step.kind, 0) > 0:
+            return False
+        if step.kind in steps_mod.SELECTING:
+            passes = self.tonight.passes.get(step.kind, 0)
+            if passes >= referee.SELECTING_PASSES:
+                return False
+            if passes:
+                step.fresh = True
+        return True
+
+    def finish_fixed(self, number: int) -> bool:
+        """The rest of a round the director left: the fixed round's steps not yet run."""
+        ran = {r.kind for r in self.records if r.round == number}
+        plan = [
+            s
+            for s in steps_mod.fixed_round(self.options, number)
+            if s.kind not in ran and self.fixed_allowed(s, fallback=True)
+        ]
+        return self.run_fixed(plan, number)
+
+    def fall_back(self, why: str) -> None:
+        self.fell_back = why
+        self.log.say(f"{DIRECTOR_FAILED} ({why}) — the rest of the night runs the fixed schedule")
+        if self.plan_file is not None:
+            self.plan_file.write("fallback", why=why)
+
+    # --- the director ----------------------------------------------------------------------
+
+    def directed_round(self, number: int) -> bool:
+        """The night's frame (news, twins, free), then the director's steps, re-planned
+        after every three. A director that fails hands the rest to the fixed schedule."""
+        from tracker.night.director import DirectorFailed, expect_of
+
+        o = self.options
+        try:
+            plan = self.director.check_in(
+                self.check_in_text(number, at_start=True), round_number=number, at_start=True
+            )
+        except DirectorFailed as exc:
+            self.fall_back(str(exc))
+            return self.fixed_round(number)
+        notes: list[str] = []
+        frame: list[Step] = []
+        if o.do_discover and number == 1:
+            fixed = steps_mod.fixed_round(o, 1)
+            news = referee.news_step(plan.news, o, fixed[0], notes)
+            news.expect = expect_of((plan.news or {}).get("expect"))
+            frame += [news, dataclasses.replace(fixed[1], origin="frame")]
+        frame.append(Step("free", origin="frame"))
+        if plan.stop:
+            self.stop_why = plan.why or "no reason given"
+        verdict = referee.review(
+            [] if plan.stop else plan.steps, self.rules, self.tonight, first_round=number == 1
+        )
+        self.answer_director(notes + verdict.notes, verdict.steps, frame=frame)
+        for step in frame:
+            if self.run_step(step, number):
+                return True
+        return self.run_directed(verdict.steps, number, plan.end_round)
+
+    def run_directed(self, pending: list[Step], number: int, end_round: bool) -> bool:
+        from tracker.night.director import DirectorFailed
+
+        ran = asked_at = 0
+        while True:
+            more = not pending and not end_round and not self.stop_why
+            due = pending and ran - asked_at >= CHECK_IN_EVERY and not self.stop_why
+            if more or due:
+                asked_at = ran
+                try:
+                    plan = self.director.check_in(
+                        self.check_in_text(number, at_start=False, upcoming=pending),
+                        round_number=number,
+                        at_start=False,
+                    )
+                except DirectorFailed as exc:
+                    self.fall_back(str(exc))
+                    return self.finish_fixed(number)
+                if plan.stop:
+                    self.stop_why = plan.why or "no reason given"
+                    pending = [s for s in pending if s.origin == "floor"]
+                    self.answer_director(["stopping after this round settles"], pending)
+                    end_round = True
+                else:
+                    verdict = referee.review(
+                        plan.steps, self.rules, self.tonight, first_round=number == 1
+                    )
+                    self.answer_director(verdict.notes, verdict.steps)
+                    pending, end_round = verdict.steps, plan.end_round or not verdict.steps
+            if not pending:
+                return False
+            step = pending.pop(0)
+            if self.run_step(step, number):
+                return True
+            ran += 1
+
+    def answer_director(
+        self, notes: list[str], steps: list[Step], *, frame: list[Step] = ()
+    ) -> None:
+        """The referee's verdict, to the director and the log."""
+        for note in notes:
+            self.log.line(f"{REFEREE_LINE}{note}")
+        planned = ", ".join(f"{s.kind} {s.size}" for s in [*frame, *steps]) or "nothing"
+        text = (
+            "will run: "
+            + planned
+            + (
+                "\nchanges to your plan:\n" + "\n".join(f"- {n}" for n in notes)
+                if notes
+                else "\nno changes"
+            )
+        )
+        self.director.answer(text)
+
+    def shadow_check_in(self, number: int, upcoming: list[Step], *, at_start: bool) -> None:
+        """On a fixed night: what the director would run instead, and its prediction for
+        each of the next fixed steps. Nothing it says runs; a failure only stops it."""
+        try:
+            plan = self.shadow.check_in(
+                self.check_in_text(number, at_start=at_start, upcoming=upcoming, shadow=True),
+                round_number=number,
+                at_start=at_start,
+            )
+        except Exception as exc:
+            self.log.line(f"    the director's background predictions stopped: {exc}")
+            if self.plan_file is not None:
+                self.plan_file.write("fallback", why=str(exc), shadow=True)
+            self.shadow = None
+            self.shadow_stopped = str(exc)
+            return
+        from tracker.night.director import expect_of
+
+        for prediction in plan.predictions:
+            try:
+                index = int(prediction.get("index", -1))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < min(len(upcoming), CHECK_IN_EVERY):
+                upcoming[index].expect = expect_of(prediction)
+        if self.plan_file is not None:
+            self.plan_file.write(
+                "shadow", round=number, steps=[s.as_json() for s in plan.steps], why=plan.why
+            )
+        self.shadow.answer("recorded; on a fixed night nothing you plan runs")
+
+    def check_in_text(
+        self, number: int, *, at_start: bool, upcoming: Sequence[Step] = (), shadow: bool = False
+    ) -> str:
+        """What the director is told at a check-in: what ran, what it cost, what is left."""
+        o = self.options
+        since = [r for r in self.records if r.index > self.reported]
+        self.reported = len(self.records)
+        where = "start of the round" if at_start else f"after {len(since)} more step(s)"
+        lines = []
+        if shadow:
+            lines.append("SHADOW NIGHT: the fixed schedule runs tonight and you do not control it.")
+        lines.append(f"CHECK-IN: round {number} of at most {o.rounds}, {where}.")
+        lines.append(self.limits_text())
+        if since:
+            lines.append("RAN SINCE YOUR LAST CHECK-IN:")
+            lines += [f"- {record_line(r)}" for r in since]
+        if self.metrics is not None:
+            m = self.metrics
+            lines.append(
+                f"COUNTS NOW: {m.below} rows below T2, {m.findings} findings, {m.groups} "
+                f"duplicate groups, {m.values} stored values, {m.rows} rows"
+            )
+        if self.guard_lines:
+            lines.append("ACCURACY (against tonight's first snapshot): " + self.guard_lines[-1])
+        lines.append(
+            "USED TONIGHT: "
+            + (", ".join(f"{k} {v}" for k, v in sorted(self.tonight.totals.items())) or "nothing")
+            + f"; enrich passes {dict(self.tonight.passes) or 0}; named-row steps "
+            f"{self.tonight.rows_steps} of {referee.ROWS_STEPS}"
+        )
+        if shadow:
+            lines.append("NEXT FIXED STEPS:")
+            lines += [
+                f"[{i}] {s.kind} size {s.size}" + (f", budget {s.budget}" if s.budget else "")
+                for i, s in enumerate(upcoming[:CHECK_IN_EVERY])
+            ]
+            lines.append(
+                "Call submit_plan with the steps you would run instead, and in `predictions` "
+                "your expectation (cny, searches, minutes, result) for each listed step by index."
+            )
+            return "\n".join(lines)
+        if at_start and number == 1 and o.do_discover:
+            fixed = steps_mod.fixed_round(o, 1)[0]
+            lines.append(
+                "THIS ROUND STARTS WITH the news (fixed: "
+                f"{fixed.searches} searches, {fixed.size} queued articles, {fixed.baselines} "
+                "first looks; set yours in `news`), the twin pass, then the free phase. "
+                "Then your steps."
+            )
+        elif at_start:
+            lines.append("THIS ROUND STARTS WITH the free phase. Then your steps.")
+        if upcoming:
+            lines.append(
+                "STILL PLANNED (your answer replaces these): "
+                + ", ".join(f"{s.kind} {s.size}" for s in upcoming)
+            )
+        lines.append("Plan the rest of this round with submit_plan, or stop_night.")
+        return "\n".join(lines)
+
+    def limits_text(self) -> str:
+        o = self.options
+        s = self.spent()
+        try:
+            searched = spend.searches(spend.read(self.ledger))
+        except Exception:
+            searched = 0
+        left = max(0, int((self.deadline - self.clock()).total_seconds()) // 60)
+        return (
+            f"LIMITS: ¥{s.cny:.2f} of ¥{self.cny_cap} spent; {searched} of {o.search_cap} "
+            f"searches; {left} minutes left; your own spend ¥{self.director_spent():.2f}; "
+            f"steps {self.tonight.steps} of {referee.MAX_STEPS}"
+        )
+
+    def history_text(self) -> str:
+        """The night so far as a table: for a folded conversation and `night_so_far`."""
+        rows = [f"r{r.round} {record_line(r)}" for r in self.records] or ["nothing has run yet"]
+        return "\n".join([*rows, self.limits_text()])
+
+    def check_accuracy(self) -> None:
+        """The accuracy check after a directed round; a net loss hands the night back."""
+        if self.guard is None or self.first_snapshot is None:
+            return
+        try:
+            found = self.guard(self.first_snapshot)
+        except Exception as exc:
+            self.log.line(f"{ACCURACY_LINE}could not be checked: {exc}")
+            return
+        self.guard_lines.append(found.summary())
+        self.log.line(f"{ACCURACY_LINE}{found.summary()}")
+        if found.worse:
+            self.fall_back(f"the answer key lost {found.net_loss} answer(s) net")
 
     def progressed(self, now: Counts) -> bool:
         """Whether any count fell below the lowest it has been tonight; lowers those
@@ -1317,6 +1602,60 @@ class Night:
         log.line("    Anything still listed needs either a person or a command that does not")
         log.line("    exist yet. The block findings are the second kind — see WHAT IT CANNOT DO")
         log.line("    in tracker/overnight.py.")
+        if self.records and (
+            self.director is not None or self.shadow_used or self.record_path is not None
+        ):
+            log.say("how the night was chosen")
+            for line in self.choice_report():
+                log.line(line)
+
+    def choice_report(self) -> list[str]:
+        """Who chose the steps, what each cost and did, against what was predicted."""
+        out = []
+        if self.director is None:
+            out.append(
+                "    the fixed schedule"
+                + ("; the director predicted in the background" if self.shadow_used else "")
+            )
+        else:
+            out.append(f"    chosen by the director ({self.director.mode})")
+            if self.fell_back:
+                out.append(f"    it failed and the fixed schedule took over: {self.fell_back}")
+            if self.stop_why:
+                out.append(f"    it stopped the night: {self.stop_why}")
+        if self.shadow_stopped:
+            out.append(f"    the background predictions stopped: {self.shadow_stopped}")
+        out.append(f"    the director's own spend: ¥{self.director_spent():.2f}")
+        out.append(
+            "    round  step        size  origin    ¥        searches  minutes  result (expected)"
+        )
+        for r in self.records:
+            expected = r.expect.get("result")
+            out.append(
+                f"    {r.round:>5}  {r.kind:<10} {r.size:>5}  {r.origin:<8} {r.cny:>7.2f}  "
+                f"{r.searches:>8}  {r.minutes:>7.1f}  "
+                f"{'?' if r.result is None else r.result}"
+                + (f" ({expected:g})" if expected is not None else "")
+                + (" FAILED" if r.failed else "")
+            )
+        scored = [r for r in self.records if r.result is not None and "result" in r.expect]
+        if scored:
+            miss = sum(abs(r.result - r.expect["result"]) for r in scored) / len(scored)
+            out.append(f"    predictions: {len(scored)} step(s), off by {miss:.1f} on average")
+        costed = [r for r in self.records if "cny" in r.expect]
+        if costed:
+            miss = sum(abs(r.cny - r.expect["cny"]) for r in costed) / len(costed)
+            out.append(
+                f"    cost predictions: {len(costed)} step(s), off by ¥{miss:.2f} on average"
+            )
+        if self.guard is not None and self.first_snapshot is not None:
+            try:
+                found = self.guard(self.first_snapshot)
+                out.append(f"{ACCURACY_LINE}{found.summary()}")
+                out += [f"      {line}" for line in found.detail[:12]]
+            except Exception as exc:
+                out.append(f"{ACCURACY_LINE}could not be checked: {exc}")
+        return out
 
     def spend_summary(self) -> str:
         """The closing line's money: the model bill the ceiling counts, then what the
@@ -1337,6 +1676,25 @@ class Night:
             return ["    (no report)"]
 
 
+def record_line(r: record_mod.StepRecord) -> str:
+    """One step as the director reads it: what it was, what it cost, what it did."""
+    kind = steps_mod.KINDS[r.kind]
+    expected = r.expect.get("result")
+    line = (
+        f"{r.kind} {r.size} {kind.unit} ({r.origin}): ¥{r.cny:.2f}, {r.searches} searches, "
+        f"{r.minutes:.1f} min, result {'?' if r.result is None else r.result} {kind.result}"
+    )
+    if expected is not None:
+        line += f" (you expected {expected:g})"
+    if r.failed:
+        line += (
+            f"; FAILED (exit {', '.join(map(str, r.exits))}) — a crash, not a finding of nothing"
+        )
+    if r.stopped:
+        line += f"; the {r.stopped} ceiling stopped the night inside it"
+    return line
+
+
 # --- entry point ------------------------------------------------------------------------
 
 
@@ -1344,16 +1702,40 @@ def _local_now() -> dt.datetime:
     return dt.datetime.now().astimezone()
 
 
+def choose_mode(o: Options, today: dt.date) -> str:
+    """`fixed` or `director` tonight. `auto` alternates by the date's day count, so the
+    two take turns across month ends too (the 31st and the 1st are both odd days)."""
+    if o.replay is not None:
+        return "director"
+    if o.mode != "auto":
+        return o.mode
+    return "director" if today.toordinal() % 2 == 0 else "fixed"
+
+
+def director_spend(ledger: Path) -> float:
+    """What the director's own calls have cost tonight (ledger command `director`)."""
+    from tracker.night.director import LEDGER_COMMAND
+
+    try:
+        return spend.total([c for c in spend.read(ledger) if c.command == LEDGER_COMMAND])
+    except Exception:
+        return 0.0
+
+
 def build(o: Options, stream: BinaryIO) -> Night:
     """The real night: phases as processes, counts and snapshots on the configured DB."""
+    from tracker import __version__
     from tracker.config import get_settings
+    from tracker.night import guard as guard_mod
 
-    db = get_settings().resolve_db()
+    settings = get_settings()
+    db = settings.resolve_db()
     log = Log(stream, _local_now)
     named = os.environ.get("TRACKER_SPEND_LEDGER")
     # The shell names tonight's ledger; one run by hand gets its own beside the log.
     ledger = Path(named) if named else o.repo / "data" / "runs" / ledger_name(_local_now())
-    return Night(
+    started = _local_now()
+    night = Night(
         options=o,
         log=log,
         runner=process_runner(log),
@@ -1364,7 +1746,155 @@ def build(o: Options, stream: BinaryIO) -> Night:
         ledger=ledger,
         pid=int(os.environ.get("OVERNIGHT_PID") or os.getpid()),
         findings=lambda: night_findings(db, _local_now()),
+        probe=lambda: record_mod.probe(db),
+        record_path=ledger.parent / record_mod.FILENAME,
+        guard=lambda first: guard_mod.check(
+            db, first, guard_mod.week_old(first.parent, _local_now())
+        ),
+        director_spent=lambda: director_spend(ledger),
+        night_id=f"{started:%Y%m%d-%H%M%S}",
+        version=__version__,
     )
+    try:
+        attach_director(night, settings, db, ledger.parent, started)
+    except Exception as exc:  # a director that cannot be set up costs nothing but itself
+        night.director = night.shadow = None
+        night.shadow_used = False
+        log.say(
+            f"the director could not be set up ({type(exc).__name__}: {exc}) — the fixed schedule runs"
+        )
+    return night
+
+
+def attach_director(
+    night: Night, settings: Any, db: Path, runs: Path, started: dt.datetime
+) -> None:
+    """Tonight's director: choosing on a directed night, predicting on a fixed one."""
+    from sqlalchemy import select
+
+    from tracker import attempts
+    from tracker.db import open_db, session_scope
+    from tracker.gapfill import FILLABLE_FIELDS
+    from tracker.models import Project, utcnow
+    from tracker.night import briefing
+    from tracker.night import director as director_mod
+
+    o = night.options
+    mode = choose_mode(o, started.date())
+    today = utcnow().date()
+    records = record_mod.read(night.record_path) if night.record_path else []
+
+    def existing(ids: Sequence[int]) -> set[int]:
+        engine = open_db(db)
+        try:
+            with session_scope(engine, commit=False) as session:
+                return set(session.scalars(select(Project.id).where(Project.id.in_(list(ids)))))
+        finally:
+            engine.dispose()
+
+    def asked_today(ids: Sequence[int]) -> set[int]:
+        engine = open_db(db)
+        try:
+            with session_scope(engine, commit=False) as session:
+                return {
+                    p.id
+                    for p in session.scalars(select(Project).where(Project.id.in_(list(ids))))
+                    if attempts.asked_since(p, today)
+                }
+        finally:
+            engine.dispose()
+
+    night.rules = referee.Rules(
+        o,
+        efforts={
+            steps_mod.AGENT_EFFORT: o.agent_effort or settings.deepseek_agent_effort,
+            steps_mod.JUDGEMENT_EFFORT: o.judgement_effort,
+            steps_mod.EXTRACTION_EFFORT: o.extraction_effort or settings.deepseek_extraction_effort,
+        },
+        allowance=referee.allowance(
+            o, record_mod.per_night(record_mod.recent(records), mode="fixed")
+        ),
+        existing=existing,
+        asked_today=asked_today,
+        fillable=FILLABLE_FIELDS,
+    )
+    night.plan_file = director_mod.PlanFile(
+        director_mod.plan_path(runs, night.night_id), _local_now
+    )
+    if o.replay is not None:
+        night.director = director_mod.ReplayDirector(o.replay)
+        return
+    if mode == "fixed" and o.mode == "fixed":
+        return  # asked for a plain fixed night: no background predictions either
+    if not settings.has_api_key():
+        return
+
+    from tracker.llm import build_extractor
+
+    state = briefing.read_state(db, today)
+    conditions = known_conditions(settings)
+    note = director_mod.read_note(runs)
+    limits = (
+        f"money ceiling ¥{night.cny_cap} tonight ({night.cny_from}); search cap {o.search_cap}; "
+        f"{o.hours} hours from the start; at most {o.rounds} rounds; your own budget "
+        f"¥{director_mod.BUDGET_CNY:g}; started {started:%Y-%m-%d %H:%M}"
+    )
+    text = briefing.briefing(
+        state=state,
+        prices=record_mod.prices(records),
+        limits=limits,
+        conditions=conditions,
+        note=note,
+        mode="a directed night: you choose the steps"
+        if mode == "director"
+        else "a fixed night: you predict in the background",
+        last_nights=briefing.last_nights(records),
+    )
+    lookups = briefing.Lookups(
+        db, records=lambda: [*records, *night.records], tonight=night.history_text, today=today
+    ).tools()
+    director = director_mod.ModelDirector(
+        extractor=build_extractor(settings, model=settings.deepseek_reasoning_model, effort="high"),
+        system=director_mod.system_prompt(o),
+        briefing=text,
+        lookups=lookups,
+        plan_file=night.plan_file,
+        spent=night.director_spent,
+        clock=_local_now,
+        history=night.history_text,
+        mode="director" if mode == "director" else "shadow",
+    )
+    if mode == "director":
+        night.director = director
+        night.on_finish = lambda: director_mod.clear_note(runs)
+    else:
+        night.shadow = director
+        night.shadow_used = True
+
+
+def known_conditions(settings: Any) -> list[str]:
+    """What the director should know about tonight's world, each a plain sentence."""
+    out = []
+    try:
+        from tracker.llm import deepseek_balance
+
+        found = deepseek_balance(settings)
+        if found is not None and found[1] <= 0:
+            out.append(
+                f"DeepSeek's balance is {found[1]:.2f}: pages our own clients cannot load and "
+                "that escalate to its fetch tool are refused tonight"
+            )
+    except Exception:
+        pass
+    try:
+        from tracker.ingest.desk import serper_credit
+
+        credit = serper_credit(settings)
+        if credit is not None:
+            out.append(f"Serper search credit left: {credit:,}")
+    except Exception:
+        pass
+    return out
 
 
 def night_findings(db: Path, now: dt.datetime) -> int:

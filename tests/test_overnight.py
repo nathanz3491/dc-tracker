@@ -1254,3 +1254,210 @@ def test_the_ledger_counts_agent_turns_too(keyed, monkeypatch):
         DeepSeekExtractor(keyed).converse(system="s", messages=[], tools=[])
     line = keyed.spend_ledger.read_text(encoding="utf-8").strip().split("\t")
     assert line[4:6] == ["50000", "900"]
+
+
+# --- directed nights --------------------------------------------------------------------
+#
+# Since 2026-11-05 a model may choose a night's steps (`tracker.night`). These pin how a
+# directed night is put together around a scripted director: the frame it cannot touch,
+# the referee between its plan and the commands, the check-ins, the floors, and every
+# way it can fail without costing the night.
+
+from tracker.night.director import DirectorFailed, Plan  # noqa: E402
+from tracker.night.guard import GuardResult  # noqa: E402
+from tracker.night.record import Metrics  # noqa: E402
+from tracker.night.steps import Step  # noqa: E402
+
+AUDIT_LINE = "2026-10-29T22:30:00Z\t1\taudit resolve\tdeepseek-v4-flash\t100\t5000\t0\t100\t-\n"
+
+
+class Scripted:
+    """A director that answers each check-in with the next scripted plan."""
+
+    mode = "director"
+
+    def __init__(self, *plans):
+        self.plans = list(plans)
+        self.messages: list[str] = []
+        self.answers: list[str] = []
+
+    def check_in(self, message, **_where):
+        self.messages.append(message)
+        item = self.plans.pop(0) if self.plans else Plan(steps=[], end_round=True, why="done")
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def answer(self, text):
+        self.answers.append(text)
+
+
+def directed(tmp_path, *plans, argv=("--rounds", "1"), **kw) -> Run:
+    run = make(tmp_path, argv, **kw)
+    run.night.director = Scripted(*plans)
+    run.night.record_path = tmp_path / "steps.jsonl"
+    run.night.probe = lambda: Metrics(10, 5, 100, 500, 50)
+    return run
+
+
+def _kinds(run: Run) -> list[str]:
+    return [r.kind for r in run.night.records]
+
+
+def test_a_directed_night_runs_the_frame_then_the_directors_steps_inside_the_rules(tmp_path):
+    first = Plan(
+        steps=[
+            Step("logic", size=10, effort="low", note="read the county minutes", origin="director"),
+            Step("enrich", size=30, origin="director"),
+            Step("rows", rows=(7, 9), fields=("expected_online",), origin="director"),
+        ],
+        news={"searches": 800, "queue": 900},
+        why="fill the pipeline's dates",
+    )
+    floors_only = Plan(steps=[], why="the floors are enough")
+    stop = Plan(stop=True, why="nothing left worth the money")
+    run = go(directed(tmp_path, first, floors_only, stop))
+    assert run.status == 0
+    # The news, the twins and the free phase first, as on every night; the duplicate
+    # floor moved ahead of what reads a row; the plan revised after three steps (the
+    # named rows dropped, the floors kept); then the stop, with the floors still run.
+    assert _kinds(run) == [
+        "news", "twins", "free", "duplicates", "logic", "enrich",
+        "audit", "risks", "tranches", "reread", "recheck",
+    ]  # fmt: skip
+    assert ("news", "--baselines", "300", "--max-queries", "800") in run.stub.calls
+    assert ("ingest", "queue", "--new-first", "--limit", "900", "--screen") in run.stub.calls
+    logic = run.stub.calls.index(("logic", "resolve", "--limit", "10"))
+    assert run.stub.envs[logic]["TRACKER_DEEPSEEK_AGENT_EFFORT"] == "high"
+    assert run.stub.envs[logic]["TRACKER_DIRECTOR_NOTE"] == "read the county minutes"
+    audit = run.stub.calls.index(("audit", "resolve", "--no-ask", "--limit", "30"))
+    assert "TRACKER_DIRECTOR_NOTE" not in run.stub.envs[audit]
+    assert (
+        "enrich",
+        "--select",
+        "30",
+        "--t2",
+        "--target",
+        "0",
+        "--budget",
+        "120",
+    ) in run.stub.calls
+
+    director = run.night.director
+    assert len(director.messages) == 3
+    assert "THIS ROUND STARTS WITH the news" in director.messages[0]
+    assert "RAN SINCE YOUR LAST CHECK-IN" in director.messages[2]
+    assert "effort low raised to high" in director.answers[0]
+    assert (
+        "    referee: logic: effort low raised to high — it rules on published values\n" in run.text
+    )
+    assert "the director stopped the night: nothing left worth the money" in run.text
+    assert "how the night was chosen" in run.text
+    lines = (tmp_path / "steps.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 11
+
+
+def test_both_readers_of_the_log_follow_a_directed_night(tmp_path):
+    """The status page and `tracker loop` read what the loop prints: who chose, the
+    referee's changes, the accuracy check, the hand-over and the director's stop."""
+    from tracker import loopstatus
+
+    run = directed(tmp_path, Plan(steps=[Step("audit", size=999)]), DirectorFailed("timeout"))
+    run.night.guard = lambda _first: GuardResult(became_right=1, answers=33)
+    go(run)
+    [night] = _nights(run)
+    assert night.chosen_by == "director, fell back" and night.outcome == "complete"
+    [seen] = loopstatus.parse(line for line in run.text.splitlines(True) if loopstatus.wanted(line))
+    assert seen.chosen_by == "director" and seen.fell_back == "timeout"
+    assert any("clamped to 120" in change for change in seen.referee)
+    assert [p.name for p in seen.rounds[0].phases][:3] == ["news", "duplicates", "free"]
+
+    (tmp_path / "b").mkdir()
+    stopped = go(directed(tmp_path / "b", Plan(stop=True, why="enough for tonight")))
+    [night] = _nights(stopped)
+    assert (night.chosen_by, night.stop) == ("director", "settled")
+    [seen] = loopstatus.parse(
+        line for line in stopped.text.splitlines(True) if loopstatus.wanted(line)
+    )
+    assert (seen.stop, seen.stop_why) == ("director stopped", "enough for tonight")
+
+
+def test_a_director_that_fails_before_round_one_leaves_an_ordinary_fixed_night(tmp_path):
+    run = go(
+        directed(
+            tmp_path,
+            DirectorFailed("the model failed: 503"),
+            argv=["--rounds", "2"],
+            counts=[(10, 5, 100), (12, 6, 101), (11, 5, 99), (10, 5, 99)],
+        )
+    )
+    assert run.stub.calls == ROUND_ONE + ROUND_TWO + _report(tmp_path / "before.db")
+    assert (
+        "the director failed (the model failed: 503) — the rest of the night runs the fixed schedule"
+        in run.text
+    )
+    assert {r.origin for r in run.night.records} == {"fallback"}
+
+
+def test_a_director_that_fails_mid_round_hands_the_rest_of_the_round_over(tmp_path):
+    run = go(directed(tmp_path, Plan(steps=[Step("audit", size=30)]), DirectorFailed("timeout")))
+    assert _kinds(run) == [
+        "news", "twins", "free", "duplicates", "audit", "risks",
+        "logic", "suspects", "tranches", "pipeline", "enrich", "reread", "recheck",
+    ]  # fmt: skip
+    assert [r.origin for r in run.night.records][6:] == ["fallback"] * 7
+
+
+def test_a_round_that_loses_answers_hands_the_night_back(tmp_path):
+    run = directed(tmp_path, Plan(steps=[]), argv=["--rounds", "2"])
+    run.night.guard = lambda _first: GuardResult(stopped_right=2, answers=33)
+    go(run)
+    assert "accuracy  answer key: 0 became right, 2 stopped being right (of 33)" in run.text
+    assert "the answer key lost 2 answer(s) net" in run.text
+    assert len(run.night.director.messages) == 2, "nothing asked of it after the loss"
+    assert {r.origin for r in run.night.records if r.round == 2} == {"fallback"}
+
+
+def test_on_a_fixed_night_the_director_only_predicts(tmp_path):
+    predict = Plan(
+        steps=[Step("audit", size=5)], predictions=[{"index": 0, "result": 3, "cny": 0.5}]
+    )
+    run = make(
+        tmp_path, ["--rounds", "2"], counts=[(10, 5, 100), (12, 6, 101), (11, 5, 99), (10, 5, 99)]
+    )
+    run.night.shadow = Scripted(*[predict] * 20)
+    run.night.shadow_used = True
+    run.night.record_path = tmp_path / "steps.jsonl"
+    go(run)
+    assert run.stub.calls == ROUND_ONE + ROUND_TWO + _report(tmp_path / "before.db")
+    assert run.night.records[0].expect == {"result": 3.0, "cny": 0.5}
+    assert sum(1 for r in run.night.records if r.expect) == 8, "every third fixed step"
+    assert "SHADOW NIGHT" in run.night.shadow.messages[0]
+    assert "the director predicted in the background" in run.text
+
+
+def test_background_predictions_that_fail_cost_nothing_but_themselves(tmp_path):
+    run = make(tmp_path, ["--rounds", "1"])
+    run.night.shadow = Scripted(DirectorFailed("no key"))
+    go(run)
+    assert run.stub.calls[: len(ROUND_ONE)] == ROUND_ONE
+    assert "the director's background predictions stopped: no key" in run.text
+
+
+def test_each_step_is_charged_what_the_ledger_gained_while_it_ran(tmp_path):
+    def hook(call):
+        if call[0] == "audit":
+            with open(
+                tmp_path / "overnight-20261029-180100.spend", "a", encoding="utf-8"
+            ) as handle:
+                handle.write(AUDIT_LINE)
+        return 1 if call[0] == "risks" else 0
+
+    run = make(tmp_path, ["--rounds", "1"], hook=hook)
+    run.night.record_path = tmp_path / "steps.jsonl"
+    go(run)
+    by_kind = {r.kind: r for r in run.night.records}
+    assert by_kind["audit"].cny > 0 and by_kind["logic"].cny == 0
+    assert by_kind["risks"].failed and not by_kind["audit"].failed
+    written = (tmp_path / "steps.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(written) == len(run.night.records)

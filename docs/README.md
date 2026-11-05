@@ -20,6 +20,7 @@ detail behind it.
 | | What it covers |
 | --- | --- |
 | [Command workflows](workflows/README.md) | The four commands that are pipelines rather than operations — `enrich`, `sync`, `duplicates`, `logic` — each with a full-page diagram of its stages, what each stage may write, and where a run stops |
+| [The loop director](loop-director.md) | The model that chooses every other night's steps, inside rules enforced by code; the per-step record every night keeps; the accuracy check |
 | [Architecture](architecture.md) | How the CLI, the database and the console fit together — and why the browser never computes a judgement of its own |
 | [Data quality](data-quality.md) | Numbers that cannot be true, one tranche wearing several names, values that contradict each other, what each stored value rests on, and why crawl order is not publication order |
 | [Known limitations](known-limitations.md) | What the database gets wrong or cannot yet say, each with the date it was measured and whether it is fixed. Read it before trusting a number, and before re-deriving a problem somebody already wrote down |
