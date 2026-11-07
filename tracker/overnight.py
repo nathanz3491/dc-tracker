@@ -306,6 +306,8 @@ STEPS_LINE: Final = "    steps     "
 REFEREE_LINE: Final = "    referee: "
 #: The accuracy check after a directed round, and in the morning report.
 ACCURACY_LINE: Final = "    accuracy  "
+#: Accuracy items shown with the step that moved each, in the log and to the director.
+ATTRIBUTED_SHOWN: Final = 8
 
 #: A `say` line: `[YYYY-MM-DD HH:MM:SS] message`.
 STAMPED: Final = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (.*)$")
@@ -938,6 +940,8 @@ class Night:
         self.fell_back = ""
         self.stop_why = ""
         self.guard_lines: list[str] = []
+        #: The latest check's items, each with the step that moved it.
+        self.guard_items: list[str] = []
         self.placed = False
         #: Records already told to the director.
         self.reported = 0
@@ -1466,6 +1470,7 @@ class Night:
             )
         if self.guard_lines:
             lines.append("ACCURACY (against tonight's first snapshot): " + self.guard_lines[-1])
+            lines += [f"- {line}" for line in self.guard_items[:ATTRIBUTED_SHOWN]]
         lines.append(
             "USED TONIGHT: "
             + (", ".join(f"{k} {v}" for k, v in sorted(self.tonight.totals.items())) or "nothing")
@@ -1531,8 +1536,47 @@ class Night:
             return
         self.guard_lines.append(found.summary())
         self.log.line(f"{ACCURACY_LINE}{found.summary()}")
+        self.guard_items = [self.attribute(item) for item in getattr(found, "items", ())]
+        for line in self.guard_items[:ATTRIBUTED_SHOWN]:
+            self.log.line(f"      {line}")
         if found.worse:
             self.fall_back(f"the answer key lost {found.net_loss} answer(s) net")
+
+    def attribute(self, item: Any) -> str:
+        """One accuracy item and the step that moved it, from when its citation was read.
+
+        On 2026-11-06 the director was told only that one answer had stopped being right,
+        blamed the rulings, and ran six logic findings all night; the news read had moved
+        it. A value whose citation was not read tonight was moved by a ruling, a merge or
+        a re-derive, not by a reading.
+        """
+        read = getattr(item, "read_at", None)
+        if read is None:
+            if item.kind == "unbacked":
+                return item.text
+            return (
+                f"{item.text} — no citation read tonight: a ruling, a merge or a re-derive moved it"
+            )
+        for r in reversed(self.records):
+            try:
+                start = dt.datetime.fromisoformat(r.started)
+            except ValueError:
+                continue
+            start = (start.astimezone(dt.UTC) if start.tzinfo else start).replace(tzinfo=None)
+            end = start + dt.timedelta(minutes=r.minutes + 1)
+            if start - dt.timedelta(minutes=1) <= read <= end:
+                kind = steps_mod.KINDS.get(r.kind)
+                if kind is not None and not kind.choosable:
+                    who = "placed by the night; no director chooses it"
+                else:
+                    who = {
+                        "director": "a step you chose",
+                        "floor": "a floor the referee added",
+                        "fallback": "the fixed schedule",
+                        "fixed": "the fixed schedule",
+                    }.get(r.origin, r.origin)
+                return f"{item.text} — read by the {r.kind} step, round {r.round} ({who})"
+        return f"{item.text} — read at {read:%H:%M} UTC, outside any step of tonight's"
 
     def progressed(self, now: Counts) -> bool:
         """Whether any count fell below the lowest it has been tonight; lowers those
@@ -1652,7 +1696,8 @@ class Night:
             try:
                 found = self.guard(self.first_snapshot)
                 out.append(f"{ACCURACY_LINE}{found.summary()}")
-                out += [f"      {line}" for line in found.detail[:12]]
+                lines = [self.attribute(i) for i in getattr(found, "items", ())] or found.detail
+                out += [f"      {line}" for line in lines[:12]]
             except Exception as exc:
                 out.append(f"{ACCURACY_LINE}could not be checked: {exc}")
         return out
@@ -1748,8 +1793,12 @@ def build(o: Options, stream: BinaryIO) -> Night:
         findings=lambda: night_findings(db, _local_now()),
         probe=lambda: record_mod.probe(db),
         record_path=ledger.parent / record_mod.FILENAME,
+        # A citation read after the first snapshot was written is tonight's.
         guard=lambda first: guard_mod.check(
-            db, first, guard_mod.week_old(first.parent, _local_now())
+            db,
+            first,
+            guard_mod.week_old(first.parent, _local_now()),
+            since=dt.datetime.fromtimestamp(first.stat().st_mtime, dt.UTC).replace(tzinfo=None),
         ),
         director_spent=lambda: director_spend(ledger),
         night_id=f"{started:%Y%m%d-%H%M%S}",

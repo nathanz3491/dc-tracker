@@ -583,7 +583,9 @@ article does not bring them back.
 ## When the loop director runs it
 
 On a directed night ([The loop director](../loop-director.md)) the director sizes the
-logic step and may narrow it: one kind of finding (`--code`) and the rows to work
+logic step, never below 60 findings a night, with the suspect re-read at 25 (floors
+since 2026-11-07: the first directed night ran six findings and no suspects), and may
+narrow it: one kind of finding (`--code`) and the rows to work
 (`--project N`, repeatable — findings on any other row are not offered). The agent
 always runs at today's effort or above, because its rulings change published values.
 Its task may end with the director's note on where to look, up to 300 characters; the

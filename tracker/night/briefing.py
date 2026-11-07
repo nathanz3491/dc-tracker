@@ -470,6 +470,12 @@ def lessons() -> str:
             "a row runs after it in a round.",
             "Counts can be bought with wrong values. The answer key is checked every round on a "
             "directed night; a net loss of two answers hands the night back to the fixed schedule.",
+            "On 11-06 a director ran six logic findings all night, blaming the rulings for a lost "
+            "answer; the news read had moved it, when 'the newer reading wins' undid a right date. "
+            "Open findings rose by 17. Read which step the accuracy line names before cutting one.",
+            "On 11-06 fills beat their predictions by 2-4x (enrich 20 values for 75 rows, the "
+            "second pipeline pass 31 for 37, named rows 32 for 32) and the ruling steps fell short "
+            "of theirs (audit 0 for 60). Costs were within about 20%.",
         )
     )
 

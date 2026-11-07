@@ -25,7 +25,9 @@ The rules, and why each exists (the brainstorm of 2026-11-05 has the edge cases)
 * **Order** within a round: duplicates before every step that pays to read a row it
   may fold; logic and the suspects before the tranche review.
 * **Floors**, added to round 1 when the plan leaves a kind short: the duplicates,
-  audit, risks and tranche passes, and the reread and recheck backlogs.
+  audit, risks, logic and tranche passes, the suspects, and the reread and recheck
+  backlogs. Logic and the suspects since 2026-11-07: the first directed night ran six
+  findings and no suspects, and open findings rose by 17.
 """
 
 from __future__ import annotations
@@ -129,6 +131,10 @@ class Rules:
         if kind in ("audit", "risks") and not getattr(o, kind):
             return 0
         if kind == "tranches" and not o.nest:
+            return 0
+        if kind == "logic" and not o.findings:
+            return 0
+        if kind == "suspects" and not o.suspects:
             return 0
         return floor
 

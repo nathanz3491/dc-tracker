@@ -170,6 +170,10 @@ KINDS: Final[dict[str, Kind]] = {
             lo=0,
             hi=120,
             default=60,
+            # One fixed round's worth. On 2026-11-06, the first directed night, the
+            # director ran six findings all night, blaming the rulings for an answer the
+            # news read had moved, and open findings rose by 17 against 6 the night before.
+            floor=60,
             result="findings",
         ),
         Kind(
@@ -184,6 +188,10 @@ KINDS: Final[dict[str, Kind]] = {
             lo=0,
             hi=50,
             default=25,
+            # Skipped altogether on 2026-11-06. Its verdicts are also what the suspicion
+            # score is retrained from each morning, so a night without them teaches it
+            # nothing.
+            floor=25,
             result="values",
         ),
         Kind(

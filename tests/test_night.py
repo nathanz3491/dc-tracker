@@ -139,10 +139,11 @@ def test_the_drift_baseline_is_the_records_fixed_nights_once_there_are_three():
     assert referee.allowance(o, {"logic": [10, 20]})["logic"] == 180, (
         "two nights: still the defaults"
     )
-    assert referee.allowance(o, {"logic": [10, 20, 30]})["logic"] == 30
+    assert referee.allowance(o, {"enrich": [10, 20, 30]})["enrich"] == 30
     assert referee.allowance(o, {"duplicates": [4, 4, 4]})["duplicates"] == 20, (
         "never below the floor"
     )
+    assert referee.allowance(o, {"logic": [10, 20, 30]})["logic"] == 60, "nor logic's"
 
 
 def test_a_once_a_night_step_runs_once():
@@ -226,19 +227,36 @@ def test_round_one_adds_whatever_the_plan_leaves_short_of_a_floor():
     assert {(s.kind, s.size) for s in floors} == {
         ("audit", 20),
         ("risks", 20),
+        ("logic", 60),
+        ("suspects", 25),
         ("tranches", 10),
         ("reread", 180),
         ("recheck", 180),
     }
-    assert [s.kind for s in got.steps].index("tranches") > [s.kind for s in got.steps].index(
-        "audit"
-    )
+    order = [s.kind for s in got.steps]
+    assert order.index("tranches") > max(order.index("logic"), order.index("suspects"))
+
+
+def test_a_night_that_ran_six_logic_findings_gets_the_rest_of_its_floor():
+    """11-06: six findings all night, no suspects, and open findings rose by 17."""
+    got = _review([Step("logic", size=6)], first_round=True)
+    logic = [s.size for s in got.steps if s.kind == "logic"]
+    assert logic == [6, 54]
+    assert ("suspects", 25) in {(s.kind, s.size) for s in got.steps}
 
 
 def test_a_floor_the_options_turned_off_is_not_added():
     rules = _rules(_options("--reread", "0", "--recheck", "0"))
     got = _review([], rules, first_round=True)
-    assert {s.kind for s in got.steps} == {"duplicates", "audit", "risks", "tranches"}
+    assert {s.kind for s in got.steps} == {
+        "duplicates", "audit", "risks", "logic", "suspects", "tranches"
+    }  # fmt: skip
+    rules = _rules(
+        _options("--findings", "0", "--suspects", "0", "--reread", "0", "--recheck", "0")
+    )
+    assert {s.kind for s in _review([], rules, first_round=True).steps} == {
+        "duplicates", "audit", "risks", "tranches"
+    }  # fmt: skip
 
 
 def test_the_news_keeps_its_floor_of_searches_and_never_passes_the_cap():
@@ -596,6 +614,42 @@ def test_the_week_old_snapshot_is_the_one_nearest_seven_days(tmp_path):
 
     assert guard.week_old(tmp_path, now).name == "tracker.backup-overnight-20261029-180105.db"
     assert guard.week_old(tmp_path, dt.datetime(2026, 10, 30)) is None
+
+
+def test_each_moved_answer_carries_when_its_citation_was_read(tmp_path, migrated_copy):
+    """So the night can name the step that moved it: on 11-06 the director blamed the
+    rulings for an answer the news read had moved."""
+    import json as _json
+
+    from tracker.db import make_engine, session_scope, take_snapshot
+    from tracker.models import AnswerKey, Project, Source
+    from tracker.night import guard
+
+    db = migrated_copy(tmp_path / "tracker.db")
+    engine = make_engine(db)
+    with session_scope(engine) as s:
+        s.add(Project(id=1, name="A", company="Co", city="X", state="TX", dedup_key="co|a|TX",
+                      phase="announced", mw_planned=300.0))  # fmt: skip
+        s.flush()
+        s.add(
+            AnswerKey(project_id=1, field="mw_planned", value="300", status="verified", method="t")
+        )
+    engine.dispose()
+    first = tmp_path / "first.db"
+    assert take_snapshot(db, first) == []
+    read = dt.datetime(2026, 11, 6, 10, 28)
+    engine = make_engine(db)
+    with session_scope(engine) as s:
+        s.get(Project, 1).mw_planned = 900.0
+        s.add(Source(project_id=1, url="https://news.example/a", source_type="general_media",
+                     fetched_at=read, claims=_json.dumps({"mw_planned": 900}),
+                     quotes=_json.dumps({"mw_planned": "a 900 MW campus"})))  # fmt: skip
+    engine.dispose()
+    tonight = guard.check(db, first, since=dt.datetime(2026, 11, 6, 10, 0))
+    (lost,) = [i for i in tonight.items if i.kind == "lost"]
+    assert (lost.project_id, lost.field, lost.read_at) == (1, "mw_planned", read)
+    earlier = guard.check(db, first, since=dt.datetime(2026, 11, 6, 11, 0))
+    assert [i.read_at for i in earlier.items if i.kind == "lost"] == [None], "read before tonight"
 
 
 def test_the_check_counts_answers_lost_flips_back_and_values_with_nothing_behind(

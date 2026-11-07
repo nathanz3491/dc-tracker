@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The loop director is told which step moved each answer, and can no longer starve
+  the logic pass.** On 2026-11-06, the first directed night, it was told only that one
+  answer had stopped being right, blamed the rulings, and ran six logic findings all
+  night and no suspect re-reads; open findings rose by 17 against 6 the night before.
+  The news read had moved the answer, when "the newer reading wins" undid a right date.
+  The accuracy check now records when the citation behind each moved value was read,
+  and the night names the step running then (or says no reading moved it: a ruling, a
+  merge or a re-derive), at every check-in and in every morning report. Logic now has a
+  floor of 60 findings a night and the suspect re-read one of 25
+  (`tracker/night/guard.py`, `steps.py`, `tracker/overnight.py`).
+
 - **The nightly searches cost 15% less: the cap falls from 2,000 to 1,700 a night,
   and campuses with nothing new are searched weekly instead of daily.** Every night
   spent all 2,000 searches, about 60,000 credits a month, and the credit was running

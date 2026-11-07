@@ -92,9 +92,12 @@ whether its estimates can be trusted is visible within a week.
   asks of it: the median over the record's fixed nights once there are three, the
   fixed schedule's sizes until then. One night's odd result cannot swing the plan.
 - **Floors**, added to round 1 when the plan leaves a kind short: duplicates 20
-  pairs, audit 30, risks 20, tranches 10, reread and recheck 180 each (their backlogs
-  at the fixed pace until empty). A floor the night's options turned off is not
-  added. A revised plan that drops a floor step gets it back.
+  pairs, audit 30, risks 20, logic 60 findings, the suspects 25, tranches 10, reread
+  and recheck 180 each (their backlogs at the fixed pace until empty). A floor the
+  night's options turned off is not added. A revised plan that drops a floor step gets
+  it back. Logic and the suspects have floors since 2026-11-07: the first directed night
+  ran six findings and no suspects, and open findings rose by 17 against 6 the fixed
+  night before.
 - **Enrich passes.** A second selecting pass of `pipeline` or `enrich` the same night
   is `--fresh`; there is no third. On 2026-09-24 to 09-29 a second pass over the same
   rows was 86% of the bill for one new fact.
@@ -208,3 +211,12 @@ who chose each night.
 Counts can be bought with wrong values: a figure with a real quote from the wrong
 campus fills a field as well as the right one. This is what a director's success is
 weighed against, not the counts alone.
+
+**Every item names the step that moved it.** The check records when the citation
+behind each moved value was read; the night matches that time to the step running
+then, and says so — "read by the news step, round 1 (placed by the night; no director
+chooses it)" — or that no citation was read tonight, so a ruling, a merge or a re-derive
+moved it. The director reads these lines at each check-in and the morning report prints
+them on every night. On 2026-11-06, the first directed night, the director was told only
+"1 stopped being right", blamed the rulings, and ran six logic findings all night; the
+news read had moved the answer.

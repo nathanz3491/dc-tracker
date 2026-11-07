@@ -1320,11 +1320,13 @@ def test_a_directed_night_runs_the_frame_then_the_directors_steps_inside_the_rul
     assert run.status == 0
     # The news, the twins and the free phase first, as on every night; the duplicate
     # floor moved ahead of what reads a row; the plan revised after three steps (the
-    # named rows dropped, the floors kept); then the stop, with the floors still run.
+    # named rows dropped, the floors kept, the logic floor topped up to 60); then the
+    # stop, with the floors still run.
     assert _kinds(run) == [
         "news", "twins", "free", "duplicates", "logic", "enrich",
-        "audit", "risks", "tranches", "reread", "recheck",
+        "audit", "risks", "logic", "suspects", "tranches", "reread", "recheck",
     ]  # fmt: skip
+    assert ("logic", "resolve", "--limit", "50") in run.stub.calls
     assert ("news", "--baselines", "300", "--max-queries", "800") in run.stub.calls
     assert ("ingest", "queue", "--new-first", "--limit", "900", "--screen") in run.stub.calls
     logic = run.stub.calls.index(("logic", "resolve", "--limit", "10"))
@@ -1354,7 +1356,7 @@ def test_a_directed_night_runs_the_frame_then_the_directors_steps_inside_the_rul
     assert "the director stopped the night: nothing left worth the money" in run.text
     assert "how the night was chosen" in run.text
     lines = (tmp_path / "steps.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 11
+    assert len(lines) == 13
 
 
 def test_both_readers_of_the_log_follow_a_directed_night(tmp_path):
@@ -1414,8 +1416,33 @@ def test_a_round_that_loses_answers_hands_the_night_back(tmp_path):
     go(run)
     assert "accuracy  answer key: 0 became right, 2 stopped being right (of 33)" in run.text
     assert "the answer key lost 2 answer(s) net" in run.text
-    assert len(run.night.director.messages) == 2, "nothing asked of it after the loss"
+    assert len(run.night.director.messages) == 3, "nothing asked of it after the loss"
     assert {r.origin for r in run.night.records if r.round == 2} == {"fallback"}
+
+
+def test_the_director_is_told_which_step_moved_each_answer(tmp_path):
+    """11-06: told only "1 stopped being right", it blamed the rulings and ran six
+    logic findings all night. The news read had moved the answer."""
+    from tracker.night.guard import Item
+
+    def guard(_first):
+        news = next(r for r in run.night.records if r.kind == "news")
+        read = dt.datetime.fromisoformat(news.started).astimezone(dt.UTC).replace(tzinfo=None)
+        found = GuardResult(stopped_right=1, answers=33)
+        found.add(Item(142, "expected_online", "lost", "#142 expected_online: was right", read))
+        found.add(Item(7, "mw_planned", "lost", "#7 mw_planned: was right"))
+        return found
+
+    run = directed(tmp_path, Plan(steps=[]), argv=["--rounds", "2"])
+    run.night.guard = guard
+    go(run)
+    told = run.night.director.messages[-1]
+    assert (
+        "#142 expected_online: was right — read by the news step, round 1 "
+        "(placed by the night; no director chooses it)"
+    ) in told
+    assert "#7 mw_planned: was right — no citation read tonight: a ruling, a merge" in told
+    assert "      #142 expected_online: was right — read by the news step" in run.text
 
 
 def test_on_a_fixed_night_the_director_only_predicts(tmp_path):
