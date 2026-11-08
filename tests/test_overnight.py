@@ -1445,6 +1445,33 @@ def test_the_director_is_told_which_step_moved_each_answer(tmp_path):
     assert "      #142 expected_online: was right — read by the news step" in run.text
 
 
+def test_the_director_is_told_the_hand_back_count_not_left_to_add_it_up(tmp_path):
+    """11-08: it read two values set back to a week ago as answers lost and stopped the
+    night with 361 searches left. The answer key had lost none."""
+    run = directed(tmp_path, Plan(steps=[]), argv=["--rounds", "2"])
+    run.night.guard = lambda _first: GuardResult(
+        stopped_right=1, became_right=0, answers=229, flipped_back=2, week="snap"
+    )
+    go(run)
+    told = run.night.director.messages[-1]
+    assert "HAND-BACK: 1 answer(s) lost net of the 2 that hand the rest of the night" in told
+    assert "values set back to a week ago and values with nothing behind them are for you" in told
+
+
+def test_a_stop_with_much_of_the_night_left_is_put_to_the_director_once_more(tmp_path):
+    run = directed(tmp_path)
+    night = run.night
+    night.guard_net = 0
+    night.deadline = night.clock() + dt.timedelta(hours=7)
+    question = night.stop_check()
+    assert question is not None
+    assert f"{night.options.search_cap} of {night.options.search_cap} searches" in question
+    assert "nothing runs after a stop, not the fixed schedule either" in question
+    assert "HAND-BACK: 0 answer(s) lost net" in question
+    night.deadline = night.clock() + dt.timedelta(minutes=30)
+    assert night.stop_check() is None, "with half an hour left a stop gives up little"
+
+
 def test_on_a_fixed_night_the_director_only_predicts(tmp_path):
     predict = Plan(
         steps=[Step("audit", size=5)], predictions=[{"index": 0, "result": 3, "cny": 0.5}]

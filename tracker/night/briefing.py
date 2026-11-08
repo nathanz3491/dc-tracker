@@ -476,6 +476,10 @@ def lessons() -> str:
             "On 11-06 fills beat their predictions by 2-4x (enrich 20 values for 75 rows, the "
             "second pipeline pass 31 for 37, named rows 32 for 32) and the ruling steps fell short "
             "of theirs (audit 0 for 60). Costs were within about 20%.",
+            "On 11-08 a director stopped at 21:21 with 361 searches and 401 minutes left, "
+            "counting two values set back to a week ago as answers lost; the answer key had "
+            "lost none, and one of the two was a figure found again. Its last named-row step "
+            "had given 11 values for 143 searches. Read the HAND-BACK line; it does the sum.",
         )
     )
 

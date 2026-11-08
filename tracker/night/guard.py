@@ -8,12 +8,14 @@ well as the right one does. So a night is also judged on three things counts can
   how many it turned from right to something else (`tracker.answer_key.compare`
   against the snapshot taken before round 1);
 * **flip-backs** — values the night set back to what they were a week ago, undoing a
-  change some night in between made. One of the two changes was wrong;
+  change some night in between made. One of the two changes was wrong, and nothing here
+  says which: a field filled again is as often a correction as a damage;
 * **nothing behind it** — values the night set that no citation, obstacle or tranche
   states (`tracker.changes`, the morning report's "NOTHING" lines).
 
 A directed night that loses two or more answers net is handed back to the fixed
-schedule (`tracker.overnight`); every night's report prints the check.
+schedule (`tracker.overnight`); every night's report prints the check. Only the answer
+key counts toward that: the other two are for a reader to look into.
 
 **Each item says when the value now held was read** (`Item.read_at`): the read time of
 the citation behind it, when that citation was read tonight. The night matches it to
@@ -148,6 +150,20 @@ def _read_at(
     return read
 
 
+def _flip_text(project_id: int, name: str, now: Any, middle: Any) -> str:
+    """A flip-back, said by which way it went.
+
+    "back to 1000000000 after None" read as damage to the director on 2026-11-08: it
+    counted two of these as answers lost and stopped the night with 361 searches left.
+    That one was a figure found again. Neither direction is a loss by itself.
+    """
+    if middle is None:
+        return f"#{project_id} {name}: filled again with {now!r}, its value a week ago"
+    if now is None:
+        return f"#{project_id} {name}: emptied again, as a week ago ({middle!r} in between)"
+    return f"#{project_id} {name}: back to {now!r} after {middle!r}"
+
+
 def check(
     db: Path, before: Path, week: Path | None = None, *, since: dt.datetime | None = None
 ) -> GuardResult:
@@ -207,7 +223,7 @@ def check(
                         now = changes._norm(getattr(project, name))
                         if middle != now and now == was and was != middle:
                             out.flipped_back += 1
-                            text = f"#{project.id} {name}: back to {now!r} after {middle!r}"
+                            text = _flip_text(project.id, name, now, middle)
                             read = _read_at(session, project.id, name, since)
                             out.add(Item(project.id, name, "flip", text, read))
     finally:

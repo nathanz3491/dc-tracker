@@ -64,7 +64,14 @@ whether its estimates can be trusted is visible within a week.
 4. Each round ends with the settle and the counts, as on a fixed night; two rounds that
    lower nothing still end the night. After each directed round the **accuracy check**
    runs; a net loss of two answers hands the rest of the night to the fixed schedule.
-5. The morning report gains a section, **how the night was chosen**: who chose, each
+   The check-in after it carries a `HAND-BACK:` line with that count, done by code.
+5. **A stop** ends the night: nothing runs after it, not the fixed schedule either.
+   While more than 15% of the search cap and an hour are left, the director's first
+   `stop_night` in a check-in is answered with what a stop gives up and the hand-back
+   count; a second one stands, a plan replaces it. On 2026-11-08 it stopped at 21:21
+   with 361 searches and 401 minutes left, having read two values set back to a week
+   ago as answers lost. None had been.
+6. The morning report gains a section, **how the night was chosen**: who chose, each
    step's cost and result against what was predicted, the director's own spend, and
    the accuracy check.
 
@@ -123,7 +130,12 @@ Any of these ends the director's part of the night, and the fixed schedule runs 
 rest — the fixed round's steps not yet run this round, then fixed rounds (no
 once-a-night step twice, no third enrich pass):
 
-- the model or the provider fails, or a check-in takes more than 15 minutes;
+- the model or the provider fails, or a check-in takes more than 15 minutes. A
+  provider error is asked again after 30 seconds, then 1, 2 and 4 minutes, as long as
+  the wait ends inside the check-in's 15 minutes; a missing key or an empty balance is
+  not waited on. On 2026-11-07 OpenCode Go answered "at capacity; retry shortly" 224
+  times, and the client's own retries, which give up within seconds, ended the
+  background predictions at the first check-in;
 - two invalid plans, or two prose answers, in one check-in;
 - no plan after eight turns;
 - its own ¥5 for the night is spent (ledger command `director`, inside the night's
@@ -204,13 +216,28 @@ who chose each night.
 - **the answer key**: verified answers the night turned right, and those it turned from
   right to anything else;
 - **flip-backs**: values set back to what a snapshot about a week old held, undoing a
-  change some night in between made — one of the two changes was wrong;
+  change some night in between made — one of the two changes was wrong, and nothing
+  here says which. Each says which way it went: "filled again with …", "emptied again
+  …", or "back to … after …";
 - **values with nothing behind them**: set tonight, stated by no citation, obstacle or
   tranche.
 
 Counts can be bought with wrong values: a figure with a real quote from the wrong
 campus fills a field as well as the right one. This is what a director's success is
 weighed against, not the counts alone.
+
+**Only the answer key counts toward a hand-back.** Flip-backs and values with nothing
+behind them are for a reader to look into, not losses: a field filled again with what
+it held a week ago is as often a correction as a damage.
+
+**Why a figure a ruling threw out can come back, and why that is left alone.** A ruling
+marks one citation's claim; a new article stating the same figure is a new claim, and
+the merge takes it. That is how #1581's 1.4 GW returned on 2026-11-07, from an article
+listing it in passing, after a ruling had cleared it. On production on 2026-11-08, 250
+fields held a figure a ruling had thrown out on another citation of the same row. Of
+the 43 with a verified answer the figure was right in 23 and wrong in 20; clearing
+them would have made 10 right and lost the 23. A rule keeping a ruled-out figure out
+would lose more answers than it gains, so a returned figure is left to the next ruling.
 
 **Every item names the step that moved it.** The check records when the citation
 behind each moved value was read; the night matches that time to the step running

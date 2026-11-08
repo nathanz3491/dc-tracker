@@ -12,6 +12,23 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A directed night no longer ends early on a misreading, and a busy provider no
+  longer ends the director's part of a night.** On 2026-11-08 the director stopped at
+  21:21 with 361 of 1,700 searches and nearly seven hours left. It had counted two
+  values "set back to a week ago" as answers lost and believed one more would hand the
+  night back; the answer key had lost none, and one of the two was a figure found again.
+  Each check-in now carries the hand-back count done by code, and set-backs say which
+  way they went ("filled again with …", "emptied again …"). The instructions and the
+  stop tool say that only the answer key counts toward a hand-back, and that nothing
+  runs after a stop. A stop called while more than 15% of the searches and an hour
+  are left is answered once with what it gives up; a second stop stands. On
+  2026-11-07 the provider answered "at capacity; retry shortly" 224 times, and one of
+  those ended the background predictions at the first check-in, after the client's
+  retries gave up within seconds. The director now waits 30 s, 1, 2 and 4 minutes
+  before giving up, inside its 15 minutes a check-in. A missing key or an empty
+  balance is not waited on (`tracker/night/director.py`, `guard.py`, `director.txt`,
+  `tracker/overnight.py`).
+
 - **The loop director is told which step moved each answer, and can no longer starve
   the logic pass.** On 2026-11-06, the first directed night, it was told only that one
   answer had stopped being right, blamed the rulings, and ran six logic findings all

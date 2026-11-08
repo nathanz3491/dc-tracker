@@ -385,7 +385,9 @@ def _plan_reply(*steps_, call_id="p1", **extra):
     )
 
 
-def _director(model, tmp_path, *, spent=lambda: 0.0, lookups=()):
+def _director(
+    model, tmp_path, *, spent=lambda: 0.0, lookups=(), clock=None, sleep=None, confirm_stop=None
+):
     return ModelDirector(
         extractor=model,
         system="sys",
@@ -393,8 +395,10 @@ def _director(model, tmp_path, *, spent=lambda: 0.0, lookups=()):
         lookups=list(lookups),
         plan_file=PlanFile(tmp_path / "plan.jsonl", lambda: dt.datetime(2026, 11, 5, 18, 1)),
         spent=spent,
-        clock=lambda: dt.datetime(2026, 11, 5, 18, 1),
+        clock=clock or (lambda: dt.datetime(2026, 11, 5, 18, 1)),
         history=lambda: "HISTORY",
+        sleep=sleep or (lambda _s: None),
+        confirm_stop=confirm_stop,
     )
 
 
@@ -449,11 +453,64 @@ def test_prose_twice_instead_of_a_plan_is_a_failure(tmp_path):
         _director(_Model(LLMReply(text="hmm"), LLMReply(text="well")), tmp_path).check_in("go")
 
 
-def test_a_provider_failure_or_a_spent_budget_is_a_failure(tmp_path):
+def test_a_provider_failure_past_its_patience_or_a_spent_budget_is_a_failure(tmp_path):
+    waited: list[float] = []
+    errors = [LLMError("429") for _ in range(5)]
     with pytest.raises(DirectorFailed, match="the model failed"):
-        _director(_Model(LLMError("503")), tmp_path).check_in("go")
+        _director(_Model(*errors), tmp_path, sleep=waited.append).check_in("go")
+    assert waited == [30, 60, 120, 240]
     with pytest.raises(DirectorFailed, match="for the night is spent"):
         _director(_Model(_plan_reply()), tmp_path, spent=lambda: 5.0).check_in("go")
+
+
+def test_a_provider_that_fails_is_asked_again_after_a_wait(tmp_path):
+    """11-07: "the cell is at capacity; retry shortly" ended the background predictions
+    at the first check-in, after the client's retries gave up within seconds."""
+    waited: list[float] = []
+    model = _Model(LLMError("OpenCode Go returned HTTP 429: at capacity"), _plan_reply())
+    plan = _director(model, tmp_path, sleep=waited.append).check_in("go")
+    assert plan.steps == [] and waited == [30]
+    assert [e["kind"] for e in PlanFile.read(tmp_path / "plan.jsonl")][-2:] == ["retry", "reply"]
+
+
+def test_no_wait_runs_past_the_check_ins_minutes_and_a_missing_key_is_not_waited_on(tmp_path):
+    from tracker.llm import LLMUnavailable
+
+    times = iter([dt.datetime(2026, 11, 5, 18, 1)] + [dt.datetime(2026, 11, 5, 18, 15, 45)] * 9)
+    waited: list[float] = []
+    director = _director(
+        _Model(LLMError("429"), _plan_reply()), tmp_path, clock=lambda: next(times),
+        sleep=waited.append,
+    )  # fmt: skip
+    with pytest.raises(DirectorFailed, match="the model failed"):
+        director.check_in("go")
+    assert waited == [], "30 seconds more would pass the check-in's 15 minutes"
+    with pytest.raises(DirectorFailed, match="the model failed"):
+        _director(_Model(LLMUnavailable("no key"), _plan_reply()), tmp_path,
+                  sleep=waited.append).check_in("go")  # fmt: skip
+    assert waited == []
+
+
+def _stop(call_id="s1"):
+    return LLMReply(text="", tool_calls=(_call("stop_night", call_id, why="nothing left"),))
+
+
+def test_a_stop_with_much_of_the_night_left_is_put_back_once(tmp_path):
+    """11-08: it stopped at 21:21 with 361 searches left on a misreading. The facts are
+    put to it once more; a second stop stands, a plan replaces it."""
+    question = "Before the night stops: 361 of 1700 searches are left."
+    model = _Model(_stop("s1"), _stop("s2"))
+    plan = _director(model, tmp_path, confirm_stop=lambda: question).check_in("go")
+    assert plan.stop
+    assert model.seen[1][-1] == {"role": "tool", "tool_call_id": "s1", "content": question}
+    assert "stop_check" in [e["kind"] for e in PlanFile.read(tmp_path / "plan.jsonl")]
+
+    model = _Model(_stop("s1"), _plan_reply({"step": "rows", "rows": [7]}))
+    plan = _director(model, tmp_path, confirm_stop=lambda: question).check_in("go")
+    assert not plan.stop and [s.kind for s in plan.steps] == ["rows"]
+
+    plan = _director(_Model(_stop()), tmp_path, confirm_stop=lambda: None).check_in("go")
+    assert plan.stop, "little left: the stop stands at once"
 
 
 def test_lookups_past_the_limit_are_told_to_decide(tmp_path):
@@ -701,3 +758,19 @@ def test_the_check_counts_answers_lost_flips_back_and_values_with_nothing_behind
     worse = guard.check(db, week)
     assert worse.stopped_right == 1 and not worse.worse
     assert "1 stopped being right" in worse.summary()
+
+
+def test_a_flip_back_says_which_way_it_went():
+    """11-08: "back to 1000000000 after None" was read as damage. It was a figure found
+    again; neither direction is a loss by itself."""
+    from tracker.night.guard import _flip_text
+
+    assert _flip_text(2309, "investment_usd", 1e9, None) == (
+        "#2309 investment_usd: filled again with 1000000000.0, its value a week ago"
+    )
+    assert _flip_text(1839, "mw_planned", None, 143.0) == (
+        "#1839 mw_planned: emptied again, as a week ago (143.0 in between)"
+    )
+    assert _flip_text(7, "phase", "announced", "construction") == (
+        "#7 phase: back to 'announced' after 'construction'"
+    )

@@ -274,6 +274,7 @@ from tracker.night import record as record_mod
 from tracker.night import referee
 from tracker.night import steps as steps_mod
 from tracker.night.director import CHECK_IN_EVERY
+from tracker.night.guard import NET_LOSS_STOPS
 from tracker.night.steps import EFFORTS, TWIN_DAYS, Step
 
 # --- the log contract ---------------------------------------------------------------
@@ -308,6 +309,12 @@ REFEREE_LINE: Final = "    referee: "
 ACCURACY_LINE: Final = "    accuracy  "
 #: Accuracy items shown with the step that moved each, in the log and to the director.
 ATTRIBUTED_SHOWN: Final = 8
+#: A director's stop is put back to it once while at least this share of the search cap
+#: and this many minutes are left. On 2026-11-08 it stopped at 21:21 with 361 of 1,700
+#: searches and 401 minutes left, having read two values set back to a week ago as
+#: answers lost; none had been.
+STOP_CHECK_SHARE: Final = 0.15
+STOP_CHECK_MINUTES: Final = 60
 
 #: A `say` line: `[YYYY-MM-DD HH:MM:SS] message`.
 STAMPED: Final = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] (.*)$")
@@ -942,6 +949,8 @@ class Night:
         self.guard_lines: list[str] = []
         #: The latest check's items, each with the step that moved it.
         self.guard_items: list[str] = []
+        #: The latest check's answers lost net, the one number a hand-back is decided on.
+        self.guard_net: int | None = None
         self.placed = False
         #: Records already told to the director.
         self.reported = 0
@@ -1470,6 +1479,8 @@ class Night:
             )
         if self.guard_lines:
             lines.append("ACCURACY (against tonight's first snapshot): " + self.guard_lines[-1])
+            if self.guard_net is not None:
+                lines.append(self.hand_back_text())
             lines += [f"- {line}" for line in self.guard_items[:ATTRIBUTED_SHOWN]]
         lines.append(
             "USED TONIGHT: "
@@ -1506,19 +1517,53 @@ class Night:
         lines.append("Plan the rest of this round with submit_plan, or stop_night.")
         return "\n".join(lines)
 
+    def searched(self) -> int:
+        try:
+            return spend.searches(spend.read(self.ledger))
+        except Exception:
+            return 0
+
+    def minutes_left(self) -> int:
+        return max(0, int((self.deadline - self.clock()).total_seconds()) // 60)
+
     def limits_text(self) -> str:
         o = self.options
         s = self.spent()
-        try:
-            searched = spend.searches(spend.read(self.ledger))
-        except Exception:
-            searched = 0
-        left = max(0, int((self.deadline - self.clock()).total_seconds()) // 60)
         return (
-            f"LIMITS: ¥{s.cny:.2f} of ¥{self.cny_cap} spent; {searched} of {o.search_cap} "
-            f"searches; {left} minutes left; your own spend ¥{self.director_spent():.2f}; "
-            f"steps {self.tonight.steps} of {referee.MAX_STEPS}"
+            f"LIMITS: ¥{s.cny:.2f} of ¥{self.cny_cap} spent; {self.searched()} of {o.search_cap} "
+            f"searches; {self.minutes_left()} minutes left; your own spend "
+            f"¥{self.director_spent():.2f}; steps {self.tonight.steps} of {referee.MAX_STEPS}"
         )
+
+    def hand_back_text(self) -> str:
+        """The hand-back, counted by code: the director once did this sum itself, wrongly."""
+        net = max(0, self.guard_net or 0)
+        return (
+            f"HAND-BACK: {net} answer(s) lost net of the {NET_LOSS_STOPS} that hand the "
+            "rest of the night to the fixed schedule. Only the answer key counts; values set "
+            "back to a week ago and values with nothing behind them are for you to judge."
+        )
+
+    def stop_check(self) -> str | None:
+        """Asked once when the director stops with much of the night left; None lets it stop.
+
+        A stop gives up what is left, and nothing runs after it. A director that stops
+        on a misreading should meet the facts once more before the night ends on it."""
+        o = self.options
+        searches_left = max(0, o.search_cap - self.searched())
+        minutes = self.minutes_left()
+        if searches_left < o.search_cap * STOP_CHECK_SHARE or minutes < STOP_CHECK_MINUTES:
+            return None
+        lines = [
+            f"Before the night stops: {searches_left} of {o.search_cap} searches and {minutes} "
+            "minutes are left, and nothing runs after a stop, not the fixed schedule either."
+        ]
+        if self.guard_net is not None:
+            lines.append(self.hand_back_text())
+        lines.append(
+            "If no step left is worth its price, call stop_night again; otherwise submit_plan."
+        )
+        return " ".join(lines)
 
     def history_text(self) -> str:
         """The night so far as a table: for a folded conversation and `night_so_far`."""
@@ -1535,6 +1580,7 @@ class Night:
             self.log.line(f"{ACCURACY_LINE}could not be checked: {exc}")
             return
         self.guard_lines.append(found.summary())
+        self.guard_net = found.net_loss
         self.log.line(f"{ACCURACY_LINE}{found.summary()}")
         self.guard_items = [self.attribute(item) for item in getattr(found, "items", ())]
         for line in self.guard_items[:ATTRIBUTED_SHOWN]:
@@ -1912,6 +1958,7 @@ def attach_director(
         clock=_local_now,
         history=night.history_text,
         mode="director" if mode == "director" else "shadow",
+        confirm_stop=night.stop_check if mode == "director" else None,
     )
     if mode == "director":
         night.director = director

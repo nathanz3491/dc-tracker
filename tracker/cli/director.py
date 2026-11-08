@@ -215,3 +215,7 @@ def plan_cmd(
                     f"{at}   {kind}: {entry.get('why') or entry.get('errors') or entry.get('prompt_tokens')}"
                 )
             )
+        elif kind == "retry":
+            console.print(escape(f"{at}   provider failed, asked again in {entry.get('wait')}s"))
+        elif kind == "stop_check":
+            console.print(escape(f"{at}   before stopping: {entry.get('text', '')}"))

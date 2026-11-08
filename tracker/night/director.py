@@ -14,7 +14,12 @@ its next turn. One conversation, so it remembers what it planned and why:
 * **bounded**: its own spend (ledger command `director`) against :data:`BUDGET_CNY`,
   :data:`MAX_TURNS` turns and :data:`LOOKUPS` lookups per check-in, and a check-in
   that runs past :data:`CHECK_IN_MINUTES`. Any of them, or two invalid plans in a row,
-  raises :class:`DirectorFailed`, and the night runs the fixed schedule from there.
+  raises :class:`DirectorFailed`, and the night runs the fixed schedule from there. A
+  provider that fails is asked again after :data:`PATIENCE` waits, inside those minutes;
+* **a stop is asked once**: when `confirm_stop` says much of the night is left, the
+  first `stop_night` of a check-in is answered with what a stop gives up, and only a
+  second one stops. On 2026-11-08 the director stopped at 21:21 with 361 searches left,
+  having read two values set back to a week ago as answers lost.
 
 Everything said and decided goes to the night's plan file
 (`data/runs/director-<night>.jsonl`): the briefing, every check-in, the raw replies,
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +48,11 @@ CHECK_IN_EVERY: Final = 3
 MAX_TURNS: Final = 8
 LOOKUPS: Final = 6
 CHECK_IN_MINUTES: Final = 15
+#: Seconds to wait before asking again when the provider fails, inside the check-in's
+#: minutes. The client's own retries give up within seconds; on 2026-11-07 OpenCode Go
+#: answered "the cell is at capacity; retry shortly" 224 times in one night, and one of
+#: them ended the background predictions at the first check-in.
+PATIENCE: Final = (30, 60, 120, 240)
 #: Prompt tokens past which the conversation is folded into a table.
 FOLD_AT: Final = 100_000
 MAX_TOKENS: Final = 20_000
@@ -307,7 +318,9 @@ def _tools(lookups: Sequence[Any]) -> list[Any]:
         ),
         Tool(
             "stop_night",
-            "End the night after this round settles. Say why, in plain words.",
+            "End the night after this round settles. Nothing runs after it — the fixed "
+            "schedule does not take over — and the searches and hours left go unused. Say "
+            "why, in plain words.",
             {"type": "object", "properties": {"why": {"type": "string"}}, "required": ["why"]},
             terminal=True,
         ),
@@ -330,8 +343,12 @@ class ModelDirector:
         history: Callable[[], str],
         mode: str = "director",
         budget: float = BUDGET_CNY,
+        confirm_stop: Callable[[], str | None] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ):
         self.extractor = extractor
+        self.confirm_stop = confirm_stop
+        self.sleep = sleep or time.sleep
         self.system = system
         self.briefing = briefing
         self.tools = _tools(lookups)
@@ -374,21 +391,33 @@ class ModelDirector:
             + "\n\n"
         )
 
-    def _call(self) -> Any:
+    def _call(self, started: dt.datetime) -> Any:
+        """One model turn. A provider error is asked again after each of PATIENCE's waits
+        that still ends inside the check-in's minutes; a missing key or an empty balance
+        (`LLMUnavailable`) is not, since waiting does not fix it."""
         from tracker.llm import LLMError, LLMUnavailable, spend_command, spend_stage
 
-        if self.spent() >= self.budget:
-            raise DirectorFailed(f"its ¥{self.budget:g} for the night is spent")
-        try:
-            with spend_command(LEDGER_COMMAND), spend_stage(self.mode):
-                return self.extractor.converse(
-                    system=self.system,
-                    messages=self.messages,
-                    tools=self.schemas,
-                    max_tokens=MAX_TOKENS,
-                )
-        except (LLMError, LLMUnavailable) as exc:
-            raise DirectorFailed(f"the model failed: {exc}") from exc
+        limit = dt.timedelta(minutes=CHECK_IN_MINUTES)
+        waits = list(PATIENCE)
+        while True:
+            if self.spent() >= self.budget:
+                raise DirectorFailed(f"its ¥{self.budget:g} for the night is spent")
+            try:
+                with spend_command(LEDGER_COMMAND), spend_stage(self.mode):
+                    return self.extractor.converse(
+                        system=self.system,
+                        messages=self.messages,
+                        tools=self.schemas,
+                        max_tokens=MAX_TOKENS,
+                    )
+            except LLMUnavailable as exc:
+                raise DirectorFailed(f"the model failed: {exc}") from exc
+            except LLMError as exc:
+                wait = waits.pop(0) if waits else None
+                if wait is None or self.clock() - started + dt.timedelta(seconds=wait) > limit:
+                    raise DirectorFailed(f"the model failed: {exc}") from exc
+                self.plan_file.write("retry", wait=wait, why=str(exc)[:300])
+                self.sleep(wait)
 
     def check_in(self, message: str, **_where: Any) -> Plan:
         """One check-in: the night's news in, a plan (or a stop) out."""
@@ -400,11 +429,11 @@ class ModelDirector:
         self.plan_file.write("checkin", number=self.check_ins, message=message)
         started = self.clock()
         lookups = invalid = 0
-        nudged = False
+        nudged = stop_asked = False
         for _turn in range(MAX_TURNS):
             if self.clock() - started > dt.timedelta(minutes=CHECK_IN_MINUTES):
                 raise DirectorFailed(f"a check-in ran past {CHECK_IN_MINUTES} minutes")
-            reply = self._call()
+            reply = self._call(started)
             self.prompt_tokens = reply.prompt_tokens or self.prompt_tokens
             if not reply.tool_calls:
                 self.messages.append({"role": "assistant", "content": reply.text or ""})
@@ -462,6 +491,15 @@ class ModelDirector:
                 arguments=terminal.arguments,
                 reasoning=(getattr(reply, "reasoning", "") or "")[:4000],
             )
+            if terminal.name == "stop_night" and not stop_asked and self.confirm_stop:
+                stop_asked = True
+                question = self.confirm_stop()
+                if question:
+                    self.messages.append(
+                        {"role": "tool", "tool_call_id": terminal.id, "content": question}
+                    )
+                    self.plan_file.write("stop_check", text=question)
+                    continue
             if terminal.parse_failed:
                 plan, errors = None, ["the arguments were not a JSON object"]
             elif terminal.name == "stop_night":
