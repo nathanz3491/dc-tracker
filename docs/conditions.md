@@ -83,6 +83,12 @@ this campus" still holds.
   grid-region rule. Known exceptions inside listed states: Texas outside ERCOT (El Paso,
   the Panhandle, the north-east corner) and California outside CAISO (LADWP, SMUD, IID).
 
+- **No project records its utility.** A single utility's tariff or rate class covers
+  that utility's customers, not the state: AEP Ohio's tariff for 25 MW+ customers, read
+  as statewide on 2026-11-10, flagged 80 Ohio projects. Such a rule is now filed as
+  market context, or under its city when the utility is a city's own (Seattle City
+  Light).
+
 ### Why whole-industry rules flag nothing
 
 A tariff on transformers, chip export rules, or a war's effect on supply touches every

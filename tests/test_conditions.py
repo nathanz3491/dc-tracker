@@ -216,6 +216,24 @@ def test_two_rules_of_one_kind_in_one_town_stay_two(session):
     assert airport.effect == "eases" and buffer.effect == "restricts"
 
 
+def test_two_titles_of_one_moratorium_in_one_town_are_one_rule(session):
+    """West Richland, WA, 2026-11-09: "interim moratorium" and "six-month moratorium on
+    data center development" were filed as two rules; the town's name is not evidence
+    either way, and is left out of the comparison."""
+    town = {"kind": "moratorium", "scope": "place", "state": "WA", "place": "West Richland",
+            "status": "proposed"}  # fmt: skip
+    first, _ = conditions.attach(
+        session, _one(title="West Richland, WA interim moratorium on data centers", **town),
+        {"rule": "a"}, _page(url="https://news.example/w1"), now=NOW,
+    )  # fmt: skip
+    second, new = conditions.attach(
+        session,
+        _one(title="West Richland, WA six-month moratorium on data center development", **town),
+        {"rule": "b"}, _page(url="https://news.example/w2"), now=NOW,
+    )  # fmt: skip
+    assert not new and second.id == first.id
+
+
 def test_the_newest_article_sets_the_status(session):
     pledge, _ = conditions.attach(session, _one(), {"rule": "a"}, _page(days=5), now=NOW)
     order, _ = conditions.attach(

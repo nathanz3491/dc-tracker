@@ -89,7 +89,7 @@ log = logging.getLogger(__name__)
 
 #: Stamped on every page read. Change it when the prompt or the gate changes, and
 #: every page is read again under the new one (`--again` does it for one run).
-STAMP: Final = "conditions-1"
+STAMP: Final = "conditions-2"
 
 #: What a rule is. `other` is kept rather than refused: the need it hits and the
 #: place matter more than the label.
@@ -289,7 +289,10 @@ For each rule return:
     + ", ".join(RISK_CATEGORIES)
     + """
 - scope: state, county, place (a city, town, village or township), grid_region,
-  national, or input (one input to every campus, e.g. large power transformers)
+  national, or input (one input to every campus, e.g. large power transformers).
+  A single utility's tariff, rate class or connection rule covers that utility's
+  customers, not the whole state: use scope input with input "<utility> customers",
+  or place when the utility belongs to one city (e.g. Seattle City Light)
 - state: two-letter code, for a state, county or place rule
 - county: the county's name, for a county rule
 - place: the town's name as the article writes it, for a place rule
@@ -684,13 +687,26 @@ _FILLER: Final = frozenset(
 )
 
 
-def similar(a: str, b: str, *, share: float = 0.34) -> bool:
-    """Whether two titles name the same rule: enough of their telling words shared."""
-    left = set(_fold(a).split()) - _FILLER
-    right = set(_fold(b).split()) - _FILLER
+def similar(a: str, b: str, *, share: float = 0.2, place: Iterable[str] = ()) -> bool:
+    """Whether two titles name the same rule: enough of their telling words shared.
+
+    The place's own words are left out: every title of a rule in West Richland, WA
+    says "West Richland, WA", which is three shared words saying nothing about which
+    rule it is. What is left is short — "interim moratorium" against "six-month
+    moratorium … development" shares one word in five — hence the low bar.
+    """
+    ignored = _FILLER | {w for p in place for w in _fold(p).split()}
+    left = set(_fold(a).split()) - ignored
+    right = set(_fold(b).split()) - ignored
     if not left or not right:
         return False
     return len(left & right) / len(left | right) >= share
+
+
+def _place_names(rule: Rule) -> list[str]:
+    """Every spelling of where a rule applies: the state's code and name, the town."""
+    state = state_name(rule.state) if rule.state else None
+    return [n for n in (rule.state, state, rule.county, rule.place, rule.region) if n]
 
 
 def _same_place(condition: Condition, rule: Rule) -> bool:
@@ -735,7 +751,7 @@ def attach(
                     .where(Condition.match_key == key, Condition.kind == rule.kind)
                     .order_by(Condition.id)
                 )
-                if similar(c.title, rule.title)
+                if similar(c.title, rule.title, place=_place_names(rule))
             ),
             None,
         )
