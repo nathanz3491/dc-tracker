@@ -579,6 +579,19 @@ fires when nothing has been fetched for 48 hours, because a dead crawler makes
 every email a quiet one for a reason nobody reading it would guess. `send` exits 2
 when anybody failed, 1 when nobody was sent anything, and 0 otherwise.
 
+**Taken is not delivered.** Resend accepting a message only means it was handed
+on; the recipient's server can still refuse it. From 2026-11-06 to 11-09 Outlook
+refused every email to one reader — "Message lacks SPF/DKIM/DMARC Auth Records" —
+and the record said "sent" four mornings running, so nobody was told and the
+updates in them counted as delivered. Each run now first asks Resend what became of
+the past week's messages. A refused one is marked failed with the server's words,
+its updates are owed again, and the administrators' alert names it.
+
+**The sending domain needs a DMARC record**, as well as the SPF and DKIM records
+Resend asks for when the domain is verified. Since 2026-11-05 Outlook, Hotmail and
+Live refuse mail from a domain without one, however little it sends. `v=DMARC1;
+p=none` at `_dmarc.<domain>` is enough to be accepted.
+
 `notify status` is the answer to "did they get Tuesday's email?" — from the
 mailer's own record rather than a log line.
 

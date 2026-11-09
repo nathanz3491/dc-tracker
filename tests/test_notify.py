@@ -569,6 +569,82 @@ def test_a_dry_run_records_nothing(session):
     assert session.scalars(select(NotifyRun)).all() == []
 
 
+OUTLOOK = (
+    "550 5.7.1 Message rejected: Message lacks SPF/DKIM/DMARC Auth Records (AS9031519) "
+    "[TY2PEPF0000AB89.apcprd03.prod.outlook.com]"
+)
+
+
+class Bounces(Recorder):
+    """Takes every message, as Resend does; the recipient's server refused the ones
+    named, which only a later lookup shows."""
+
+    def __init__(self, refused: dict[str, str]) -> None:
+        super().__init__()
+        self.refused = refused
+        self.asked: list[str] = []
+
+    def bounce(self, message_id: str) -> str | None:
+        self.asked.append(message_id)
+        return self.refused.get(message_id)
+
+
+def test_a_message_refused_after_resend_took_it_is_owed_again(session):
+    """11-06 to 11-09: Outlook refused four mornings' email to one reader and the
+    record said "sent" each time, so those updates were never sent again."""
+    _reader(session, "first@example.com")
+    _reader(session, "second@example.com")
+    _milestone(session, _project(session))
+    send(session, Recorder())
+    refused = session.scalars(
+        select(NotifyDelivery).where(NotifyDelivery.email == "first@example.com")
+    ).one()
+    kept = session.scalars(
+        select(NotifyDelivery).where(NotifyDelivery.email == "second@example.com")
+    ).one()
+
+    post = Bounces({refused.message_id: OUTLOOK})
+    outcomes = send(session, post, now=utcnow() + dt.timedelta(days=1))
+
+    assert refused.status == "failed" and "DMARC" in refused.error
+    assert kept.status == "sent"
+    assert not session.scalars(select(NotifySent).where(NotifySent.delivery_id == refused.id)).all()
+    first_run = session.get(NotifyRun, refused.run_id)
+    assert (first_run.sent, first_run.failed) == (1, 1)
+    by_email = {o.email: o for o in outcomes}
+    assert by_email["first@example.com"].kind == "updates"
+    assert by_email["second@example.com"].kind == "quiet"
+    to_first = next(m for m in post.sent if m["to"] == "first@example.com")
+    assert "Monarch energized" in to_first["text"]
+
+
+def test_the_administrator_is_told_what_the_server_said(session):
+    admin = accounts.create(session, "admin@example.com", "correct horse")
+    admin.is_admin = True
+    _reader(session, "client@example.com")
+    _milestone(session, _project(session))
+    send(session, Recorder())
+    [refused] = session.scalars(select(NotifyDelivery)).all()
+
+    post = Bounces({refused.message_id: OUTLOOK})
+    send(session, post, now=utcnow() + dt.timedelta(days=1))
+
+    [alert] = [m for m in post.sent if m["to"] == "admin@example.com"]
+    assert "client@example.com" in alert["text"] and "DMARC" in alert["text"]
+
+
+def test_a_dry_run_and_an_old_message_are_not_looked_up(session):
+    _reader(session)
+    _milestone(session, _project(session))
+    send(session, Recorder())
+
+    post = Bounces({})
+    send(session, post, record=False, now=utcnow() + dt.timedelta(days=1))
+    assert post.asked == []
+    send(session, post, now=utcnow() + notify.BOUNCE_LOOKBACK + dt.timedelta(days=1))
+    assert post.asked == []
+
+
 # --- the template ----------------------------------------------------------------
 
 
@@ -713,6 +789,34 @@ def test_a_rate_limit_is_transient_and_a_bad_request_is_not(monkeypatch):
     with pytest.raises(notify.EmailError) as caught:
         calls.pop().send(to="b@example.com", subject="s", html_body="h", text_body="t")
     assert not isinstance(caught.value, notify.TransientEmailError)
+
+
+def test_resend_says_why_a_message_bounced_and_nothing_else_is_a_bounce(monkeypatch):
+    calls = _resend(monkeypatch, httpx.Response(200, json={"id": "abc"}))
+    transport = calls.pop()
+    answers = {
+        "bounced": httpx.Response(
+            200,
+            json={
+                "last_event": "bounced",
+                "bounce": {"type": "Transient", "diagnosticCode": [f"smtp; {OUTLOOK}"]},
+            },
+        ),
+        "delivered": httpx.Response(200, json={"last_event": "delivered"}),
+        "unknown": httpx.Response(404, json={"message": "not found"}),
+    }
+
+    def get(url, *, headers, timeout):
+        message_id = url.rsplit("/", 1)[1]
+        if message_id == "offline":
+            raise httpx.ConnectError("no route")
+        return answers[message_id]
+
+    monkeypatch.setattr(notify.httpx, "get", get)
+    assert transport.bounce("bounced") == OUTLOOK
+    assert transport.bounce("delivered") is None
+    assert transport.bounce("unknown") is None
+    assert transport.bounce("offline") is None
 
 
 def test_sending_without_a_key_fails_before_anything_is_built():

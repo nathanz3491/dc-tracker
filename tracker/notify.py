@@ -45,6 +45,10 @@ those updates tomorrow; everybody after them is still sent. When anything fails 
 or the crawler has gone quiet, which makes every email a quiet one for a reason
 nobody would guess — the administrators are emailed about it.
 
+**Accepted is not delivered.** Resend hands a message on, and the recipient's
+server can still refuse it. Each run first asks what became of the last week's
+messages (`check_bounces`); a refused one is a failure like any other.
+
 **Rendering is separate from sending, and pure.** The `render*` functions take
 data and return strings; they open no socket and read no settings. That is what
 lets the whole template be tested offline, and it is why `notify preview` shows
@@ -76,7 +80,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -109,6 +113,10 @@ BACKOFF_SECONDS: Final[tuple[float, ...]] = (2.0, 8.0, 30.0)
 
 #: The longest `Retry-After` honoured. Past it, the message is owed tomorrow.
 MAX_RETRY_AFTER: Final[float] = 60.0
+
+#: How far back each run asks whether a message the provider took was refused
+#: downstream. A week covers mornings the run did not happen.
+BOUNCE_LOOKBACK: Final = dt.timedelta(days=7)
 
 #: Pause between two people's messages. Resend allows 10 requests a second per
 #: team, across every key; this stays well under it with room for retries.
@@ -330,6 +338,30 @@ class ResendTransport:
             return str(response.json().get("id") or "")
         except ValueError:
             return ""
+
+    def bounce(self, message_id: str) -> str | None:
+        """Why the recipient's server refused a message Resend took, or None.
+
+        None also when Resend cannot say — a network error, an unknown id — so a
+        lookup that fails leaves the message as sent; the next run asks again.
+        """
+        try:
+            response = httpx.get(
+                f"{RESEND_ENDPOINT}/{message_id}",
+                headers={"Authorization": f"Bearer {self._key}"},
+                timeout=httpx.Timeout(30.0, connect=10.0),
+            )
+            body = response.json() if response.status_code == 200 else {}
+        except (httpx.RequestError, ValueError):
+            return None
+        if not isinstance(body, dict) or body.get("last_event") != "bounced":
+            return None
+        bounce = body.get("bounce") or {}
+        codes = bounce.get("diagnosticCode") or []
+        if isinstance(codes, str):
+            codes = [codes]
+        words = "; ".join(str(code).removeprefix("smtp; ") for code in codes)
+        return words or str(bounce.get("message") or "bounced")
 
 
 KEY_HELP = """TRACKER_RESEND_API_KEY is not set.
@@ -1070,6 +1102,61 @@ def _record(
             )
 
 
+def check_bounces(
+    session: Session,
+    transport: Transport,
+    *,
+    now: dt.datetime,
+    only_email: str | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[NotifyDelivery]:
+    """Mark failed the recent messages a recipient's server refused after Resend took them.
+
+    From 2026-11-06 to 11-09 Outlook refused every email to one reader — "Message
+    lacks SPF/DKIM/DMARC Auth Records": the sending domain had SPF and DKIM but no
+    DMARC record, which Outlook began requiring of every sender on 11-05 — and this
+    record said "sent" all four mornings. Nobody was told, and the updates in them
+    counted as delivered, so they were never sent again.
+
+    So each run first asks about the last :data:`BOUNCE_LOOKBACK` of messages. A
+    refused one becomes a failure like any other: the server's words are its error,
+    the updates it carried are owed again, and the run's alert names it. A transport
+    that cannot be asked (a dry run's recorder) is passed over.
+    """
+    lookup = getattr(transport, "bounce", None)
+    if lookup is None:
+        return []
+    query = select(NotifyDelivery).where(
+        NotifyDelivery.status == "sent",
+        NotifyDelivery.message_id.is_not(None),
+        NotifyDelivery.message_id != "",
+        NotifyDelivery.prepared_at >= now - BOUNCE_LOOKBACK,
+    )
+    if only_email:
+        from tracker import accounts
+
+        query = query.where(NotifyDelivery.email.ilike(accounts.normalize_email(only_email)))
+    bounced = []
+    for n, delivery in enumerate(session.scalars(query.order_by(NotifyDelivery.id)).all()):
+        if n:
+            sleep(SEND_INTERVAL)
+        reason = lookup(delivery.message_id)
+        if not reason:
+            continue
+        delivery.status = "failed"
+        delivery.error = f"refused by the recipient's server: {reason}"[:2000]
+        session.execute(delete(NotifySent).where(NotifySent.delivery_id == delivery.id))
+        run = session.get(NotifyRun, delivery.run_id) if delivery.run_id else None
+        if run is not None and delivery.kind != "alert":
+            # A run's counts are of readers' emails; its alerts are not in them.
+            run.sent = max(0, run.sent - 1)
+            run.failed += 1
+        bounced.append(delivery)
+    if bounced:
+        _commit(session, sleep=sleep)
+    return bounced
+
+
 # --- one message per person ----------------------------------------------------
 
 
@@ -1108,7 +1195,10 @@ def send_all(
 
     now = now or utcnow()
     run = None
+    bounced: list[NotifyDelivery] = []
     if record:
+        # Before composing, so a refused message's updates go in this one.
+        bounced = check_bounces(session, transport, now=now, only_email=only_email, sleep=sleep)
         run = NotifyRun(started_at=now)
         session.add(run)
         _commit(session, sleep=sleep)
@@ -1179,16 +1269,23 @@ def send_all(
         run.skipped = sum(1 for o in out if o.skipped)
         _commit(session, sleep=sleep)
         if alert:
-            alert_admins(session, transport, out, run=run, sleep=sleep)
+            alert_admins(session, transport, out, run=run, bounced=bounced, sleep=sleep)
     return out
 
 
 # --- telling somebody when it goes wrong ---------------------------------------
 
 
-def problems(session: Session, outcomes: list[Outcome]) -> list[str]:
+def problems(
+    session: Session, outcomes: list[Outcome], bounced: Iterable[NotifyDelivery] = ()
+) -> list[str]:
     """What an administrator needs to hear about this run, in plain words."""
     lines = [
+        f"The {local_time(d.prepared_at):%b %d} email to {d.email} was "
+        f"{d.error}. Its updates go out again with the next one."
+        for d in bounced
+    ]
+    lines += [
         f"Could not deliver to {o.email} after {o.attempts} attempt(s): {o.error}"
         for o in outcomes
         if o.failed
@@ -1210,12 +1307,13 @@ def alert_admins(
     outcomes: list[Outcome],
     *,
     run: NotifyRun | None = None,
+    bounced: Iterable[NotifyDelivery] = (),
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[Outcome]:
     """Email every enabled administrator when this run has something to report."""
     from tracker import accounts
 
-    found = problems(session, outcomes)
+    found = problems(session, outcomes, bounced)
     if not found:
         return []
     now = utcnow()
@@ -1283,6 +1381,7 @@ def alert_admins(
 
 __all__ = [
     "BACKOFF_SECONDS",
+    "BOUNCE_LOOKBACK",
     "CATCH_UP_DAYS",
     "FIRST_WINDOW",
     "FONT_DISPLAY",
@@ -1299,6 +1398,7 @@ __all__ = [
     "TransientEmailError",
     "Transport",
     "alert_admins",
+    "check_bounces",
     "choose",
     "compose",
     "deliver",

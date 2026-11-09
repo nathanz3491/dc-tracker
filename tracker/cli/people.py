@@ -1483,8 +1483,10 @@ def notify_send(
     **One person's failure is theirs alone.** Every message is retried through
     rate limits and provider errors, and a person still not delivered to is
     recorded as failed and owed those updates tomorrow; everybody else is still
-    sent, and the administrators are emailed about it. Exit 2 when anybody
-    failed, 1 when nobody was sent anything, 0 otherwise.
+    sent, and the administrators are emailed about it. A message the recipient's
+    server refused after Resend took it counts the same: each run first asks
+    about the past week's. Exit 2 when anybody failed, 1 when nobody was sent
+    anything, 0 otherwise.
 
     `notify preview` shows one person's message first, for free; `notify status`
     shows what went out.

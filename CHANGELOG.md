@@ -126,6 +126,16 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An email the recipient's server refused is no longer recorded as sent.** From
+  2026-11-06 to 11-09 Outlook refused every morning email to one reader — "Message
+  lacks SPF/DKIM/DMARC Auth Records": since 11-05 Outlook refuses mail from a domain
+  with no DMARC record, and the sending domain had none. Resend had taken each
+  message, so the mailer said "sent" four times, told nobody, and counted the updates
+  in them as delivered. Each run now first asks Resend what became of the past week's
+  messages; a refused one is marked failed with the server's words, its updates are
+  owed again, and the administrators' alert names it (`tracker/notify.py`,
+  `check_bounces`). The DMARC record itself is a DNS change, noted in `.env.example`
+  and `docs/analysis.md`.
 - **The morning report of what a night changed crashed, and 11-04's was lost.** A
   campus capacity added up from several tranches is shown with each tranche's
   megawatts; a tranche whose figure is stated only under another name for it has
