@@ -168,6 +168,12 @@ director_app = typer.Typer(
 )
 app.add_typer(director_app)
 
+#: Rules that apply to a place, not one campus (`tracker.conditions`): bare
+#: `tracker conditions` lists them; `read` finds them in saved pages, `match` rebuilds
+#: which projects each reaches, `show` and `drop` work on one.
+conditions_app = typer.Typer(name="conditions", invoke_without_command=True)
+app.add_typer(conditions_app)
+
 #: The discovery queue: bare `tracker queue` lists it; `check`, `stats` and `prune`
 #: work on it. Last, so the group order in `--help` is unchanged from before the
 #: package split, when this was defined beside its commands.

@@ -30,7 +30,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from tracker.vocab import (
     BLOCK_STATUSES,
+    CONDITION_APPLIES,
+    CONDITION_SCOPES,
+    CONDITION_STATUSES,
     EVENT_TYPES,
+    EXPOSURE_FITS,
     NEST_RELATIONS,
     PARTY_ROLES,
     PHASES,
@@ -1573,3 +1577,128 @@ class NotifySent(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<NotifySent {self.signal_key} to account {self.account_id}>"
+
+
+class Condition(Base):
+    """A rule that applies to a place or an input rather than one campus (0051).
+
+    Its status and summary are derived from its `ConditionSource` rows, newest
+    article first (`tracker.conditions.settle`); which projects it reaches is
+    `Exposure`, rebuilt by code. See `tracker.conditions`.
+    """
+
+    __tablename__ = "condition"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    #: moratorium, ban, permit_pause, zoning, law, executive_order, ballot_measure,
+    #: tax, tariff, grid_rule, pledge, other (`conditions.KINDS`).
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    #: The need it hits, one of `vocab.RISK_CATEGORIES`.
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str | None] = mapped_column(Text)
+    county: Mapped[str | None] = mapped_column(Text)
+    place: Mapped[str | None] = mapped_column(Text)
+    region: Mapped[str | None] = mapped_column(Text)
+    input: Mapped[str | None] = mapped_column(Text)
+    applies_to: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'unbuilt'"), default="unbuilt"
+    )
+    min_mw: Mapped[float | None] = mapped_column(REAL)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_on: Mapped[dt.date | None] = mapped_column(Date)
+    ends_on: Mapped[dt.date | None] = mapped_column(Date)
+    first_reported: Mapped[dt.date | None] = mapped_column(Date)
+    last_reported: Mapped[dt.date | None] = mapped_column(Date)
+    #: Scope, place and need folded together: what two readings of one rule share
+    #: (`tracker.conditions.match_key`).
+    match_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+
+    sources: Mapped[list[ConditionSource]] = relationship(
+        back_populates="condition", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(sql_in("scope", CONDITION_SCOPES), name="ck_condition_scope"),
+        CheckConstraint(sql_in("status", CONDITION_STATUSES), name="ck_condition_status"),
+        CheckConstraint(sql_in("applies_to", CONDITION_APPLIES), name="ck_condition_applies"),
+        CheckConstraint(
+            "state IS NULL OR (length(state) = 2 AND state = upper(state))",
+            name="ck_condition_state",
+        ),
+        Index("ix_condition_state", "state"),
+        Index("ix_condition_match_key", "match_key"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<Condition {self.id} {self.scope} {self.status} {self.title!r}>"
+
+
+class ConditionSource(Base):
+    """One article's statement of a condition, with its verified sentences."""
+
+    __tablename__ = "condition_source"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    condition_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("condition.id", ondelete="CASCADE"), nullable=False
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    published_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+    read_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    #: The status this article states.
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    #: JSON object, what each sentence is cited for (`rule`, `place`, `status`,
+    #: `threshold`) -> the article's own sentence.
+    quotes: Mapped[str] = mapped_column(Text, nullable=False)
+
+    condition: Mapped[Condition] = relationship(back_populates="sources")
+
+    __table_args__ = (
+        UniqueConstraint("condition_id", "url", name="uq_condition_source"),
+        Index("ix_condition_source_condition", "condition_id"),
+    )
+
+
+class Exposure(Base):
+    """A project a condition reaches, and why. A cache rebuilt by code, never edited."""
+
+    __tablename__ = "exposure"
+
+    condition_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("condition.id", ondelete="CASCADE"), primary_key=True
+    )
+    project_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="CASCADE"), primary_key=True
+    )
+    fit: Mapped[str] = mapped_column(Text, nullable=False)
+    #: "TX · announced · no permit on record", in the reader's words.
+    why: Mapped[str] = mapped_column(Text, nullable=False)
+    #: When this project first fell under it; kept across rebuilds.
+    first_seen: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(sql_in("fit", EXPOSURE_FITS), name="ck_exposure_fit"),
+        Index("ix_exposure_project", "project_id"),
+    )
+
+
+class ConditionRead(Base):
+    """A page the condition reader has read, under which prompt."""
+
+    __tablename__ = "condition_read"
+
+    url: Mapped[str] = mapped_column(Text, primary_key=True)
+    stamp: Mapped[str] = mapped_column(Text, nullable=False)
+    read_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    found: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"), default=0)
+    refused: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    error: Mapped[str | None] = mapped_column(Text)

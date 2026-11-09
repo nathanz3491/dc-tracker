@@ -1,0 +1,97 @@
+# Conditions: rules that apply to a place
+
+Since 2026-11-10 the tracker keeps a second kind of fact beside the campus: a
+**condition**, a rule that applies to a place or an input rather than to one campus —
+a state's permit pause, a town's ban, a grid operator's large-load rule, a tariff. The
+code is `tracker/conditions.py`; the commands are `tracker conditions`.
+
+## Why
+
+Every fact in the database belongs to a campus an article named, and the reader drops
+an article that names none. A rule that applies to a whole state or town names none.
+In the week after the 2026-11-03 elections 72 articles about the vote were filed "no
+project", and the Texas governor-elect's permit moratorium reached 21 of 205 Texas
+projects — only the ones a stock story happened to name. A rule that applies to a place
+should reach every project in that place and stage, the day it is reported.
+
+## How a rule gets in
+
+1. **Pages.** Every page the news step reads is saved to the article cache, including
+   the ones it found no campus in. `conditions read` walks the pages read since a date
+   (two days by default) and keeps those a free word test passes: three or more words a
+   rule is stated in (moratorium, ban, pause, ordinance, ballot, governor…), a word for
+   a jurisdiction, and data centers. About 150 of ~700 pages a day pass.
+2. **One model call per page per prompt** (`STAMP`, `condition_read`). The model is
+   shown the rules already held for the states the article names, and offers rules
+   with one sentence for each thing it says: the rule, where, its status, its size
+   threshold.
+3. **The gate.** A rule is kept only when each sentence is the article's own (the
+   extraction path's matcher — the stored text is the article's, never the model's),
+   the place it is filed under is named in those sentences or the headline, its
+   status is worded in them ("voters approved", "she vowed", "a judge blocked"), and
+   any threshold's number is in them. A rule that fails is counted and dropped, never
+   stored half-true.
+4. **One rule, however many articles.** The model's `same_as` (checked: it must be the
+   same place) or, failing that, the same place, need and kind. Status, summary and
+   dates come from the newest article, so a pledge that becomes an order, and an order
+   a court blocks, read as one history (`condition_source` holds each article's
+   statement and sentences).
+
+The article reader's own prompt is not touched. It is versioned and measured against
+the answer key; a second job inside it would move both.
+
+## Which projects a rule reaches
+
+Code, never the model (`conditions.reach`), rebuilt wholesale by `conditions match`:
+
+| scope | matched on | fit |
+| --- | --- | --- |
+| state | the project's state | exact |
+| county | state and county | exact |
+| place (town) | state and the town the project is filed under | likely |
+| grid region | the project's state, where the state is mostly one operator | likely |
+| national, input | nothing | market context only |
+
+Then the stage (`new`: announced or permitting with no approved permit on record;
+`unbuilt`: not yet running; `all`: not cancelled) and the size threshold (a project of
+unknown size is `likely`; a smaller one is out). Every exposure stores why, e.g.
+"TX · announced · no permit on record". A rule lifted or voted down reaches nothing.
+
+**Exposures are kept apart from obstacles.** They are not counted in the blocker,
+confidence, completeness or the answer key, so "every value traces to an article about
+this campus" still holds.
+
+### Two limits of the data
+
+- **No project has a site coordinate.** All 1,150 stored coordinates are town centres
+  derived from the city name (`tracker/ingest/geo.py`), so whether a campus is inside a
+  town's limits cannot be checked. A town's rule matches a project filed under that
+  town as `likely`, and the reason says the limits were not checked. A campus filed
+  under a mailing city but sitting in the township next door will be matched wrongly
+  until a real site location is known.
+- **Grid regions are inferred from the state** (`STATE_REGIONS`). Only states wholly or
+  mostly in one operator's region are listed; a split state (Illinois, Indiana,
+  Michigan, Kentucky, Missouri, Mississippi, the Dakotas, North Carolina) matches no
+  grid-region rule. Known exceptions inside listed states: Texas outside ERCOT (El Paso,
+  the Panhandle, the north-east corner) and California outside CAISO (LADWP, SMUD, IID).
+
+### Why whole-industry rules flag nothing
+
+A tariff on transformers, chip export rules, or a war's effect on supply touches every
+project. Flagging every row says nothing a reader can act on, so these are listed as
+market context, and a campus hears of them when an article about that campus does
+("transformer delivery slipped to 2028").
+
+## Commands
+
+```bash
+tracker conditions                       # the rules held, and how many projects each reaches
+tracker conditions show 12               # one rule: articles, sentences, projects
+tracker conditions read --since 2026-11-03 --dry-run   # read at full cost, write nothing
+tracker conditions read                  # the last two days' saved pages
+tracker conditions match                 # rebuild which projects each rule reaches; free
+tracker conditions drop 12               # a rule read wrongly
+```
+
+`read`, `match` and `drop` write, so they run on the host, outside the nightly loop's
+hours.

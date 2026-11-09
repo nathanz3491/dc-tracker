@@ -243,6 +243,39 @@ RiskStatus = Literal["open", "resolved", "superseded"]
 #: The one status that means "this is obstructing the project today".
 OPEN_RISK_STATUS: Final[str] = "open"
 
+# --- condition: a rule that applies to a place, not one campus ---------------
+#: Where a condition applies. `national` and `input` (a whole-industry input such as
+#: large transformers) reach no project: they are market context (`tracker.conditions`).
+CONDITION_SCOPES: Final[tuple[str, ...]] = (
+    "state",
+    "county",
+    "place",
+    "grid_region",
+    "national",
+    "input",
+)
+
+#: Where a rule stands, as the newest article stating it says. The last two end its
+#: reach: a rule lifted, or voted down, obstructs nothing.
+CONDITION_STATUSES: Final[tuple[str, ...]] = (
+    "proposed",
+    "pledged",
+    "passed",
+    "in_force",
+    "blocked",
+    "lifted",
+    "rejected",
+)
+
+#: Which projects in its place a rule reaches: not yet permitted, not yet running, or
+#: every one that is not cancelled.
+CONDITION_APPLIES: Final[tuple[str, ...]] = ("new", "unbuilt", "all")
+
+#: How sure the match of a condition to a project is. `likely` when the place or the
+#: grid region is inferred (a city name, a state that is mostly one grid operator) or
+#: the size threshold cannot be checked.
+EXPOSURE_FITS: Final[tuple[str, ...]] = ("exact", "likely")
+
 # --- source.source_type ----------------------------------------------------
 SOURCE_TYPES: Final[tuple[str, ...]] = (
     "iso_queue",

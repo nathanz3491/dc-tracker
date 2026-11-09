@@ -55,6 +55,7 @@ from tracker.cli import serve as _serve  # noqa: F401
 from tracker.cli import people as _people  # noqa: F401
 from tracker.cli import tranches as _tranches  # noqa: F401
 from tracker.cli import companies as _companies  # noqa: F401
+from tracker.cli import conditions as _conditions  # noqa: F401
 # isort: on
 
 

@@ -318,6 +318,10 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "notify preview",
             # What the mailer sent, failed to send, and when. A read of its ledger.
             "notify status",
+            # Rules that apply to a place rather than a campus, and one with the
+            # articles behind it and the projects it reaches.
+            "conditions",
+            "conditions show",
         ),
     ),
     (
@@ -365,6 +369,11 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "queue aside",
             "queue screen",
             "queue unreadable",
+            # The model reads saved pages for rules that apply to a place; matching
+            # them to projects is code; a rule read wrongly is dropped by hand.
+            "conditions read",
+            "conditions match",
+            "conditions drop",
             # Under Repair rather than Inspect: it is the only command in the
             # palette that writes a file the pipeline then obeys.
             "sources policy",

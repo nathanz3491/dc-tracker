@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Added
+
+- **Rules that apply to a place, not one campus.** A state's permit pause, a town's
+  ban, a grid operator's rule: the reader dropped every article that named no campus,
+  so in the week after the 2026-11-03 elections 72 articles about the vote went
+  unrecorded and the Texas governor-elect's moratorium reached 21 of 205 Texas
+  projects. `tracker conditions read` puts saved pages that may state such a rule to a
+  model, keeps a rule only when its sentences are the article's own and name its
+  place, status and threshold, and files every reading of one rule under one
+  condition, its status set by the newest article. `tracker conditions match` works
+  out by code which projects each reaches — by state, county, town or grid region,
+  stage and size — and says why; town and grid-region matches are marked `likely`,
+  because no project has a site coordinate and grid regions are inferred from the
+  state. Whole-industry rules flag no project. Kept apart from obstacles, so no count
+  or answer moves (`tracker/conditions.py`, migration 0051, `docs/conditions.md`).
+
 ### Changed
 
 - **The administrators' alert says what went wrong and what to do, once.** The first
