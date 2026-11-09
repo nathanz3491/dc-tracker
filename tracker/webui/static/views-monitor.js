@@ -13,12 +13,19 @@
  *     are counted, so the page says they exist without presenting them as current;
  *   - "would clear it" is the next milestone on the blocked track, from
  *     `tracks.NEXT_SIGNAL`, so the page never reasons about tracks itself;
- *   - unconfirmed obstacles are kept apart, labelled, and left out of the email.
+ *   - unconfirmed obstacles are kept apart, labelled, and left out of the email;
+ *   - rules for a place — a state's permit pause, a town's ban — that reach the
+ *     followed projects are a section of their own, each rule once with the
+ *     projects it reaches and what would clear it. A rule makes no project
+ *     "blocked" and is counted on no obstacle tile: it reaches a campus because of
+ *     where it is, not because anything was reported about the campus.
  *
  * Kept out of app.js so a reader of one view need not scroll past another. `api`, `onOpen` and the
  * list editor are passed in, because this file cannot import from app.js (app.js
- * imports it).
+ * imports it). The rule chips are `views-rules.js`'s, shared with the Rules view.
  */
+
+import { RuleFit, RuleStatus, eases } from "/static/views-rules.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useCallback } = React;
@@ -114,7 +121,7 @@ function Blocker({ blocker, muted }) {
     </li>`;
 }
 
-function ProjectCard({ project, level, onOpen, onOpenCompany }) {
+function ProjectCard({ project, level, onOpen, onOpenCompany, onRules }) {
   const [showHeld, setShowHeld] = useState(false);
   const blockers = project.blockers.filter((b) => RANK[b.severity] >= RANK[level === "all" ? "watch" : level]);
   const hidden = project.blockers.length - blockers.length;
@@ -159,6 +166,24 @@ function ProjectCard({ project, level, onOpen, onOpenCompany }) {
             </div>`)}
         </div>`}
 
+      ${/* A pointer, not a list: each rule is drawn once, under "Rules for their
+            places", with every project it reaches. Restricting and easing rules are
+            named apart, so help never reads as one more thing in the way. */ ""}
+      ${!!(project.rules || []).length && html`
+        <div class="dc-wf-meta">
+          ${(() => {
+            const named = (rows) => rows.map((r) => `${r.title} (${r.status_label})`).join("; ");
+            const hard = project.rules.filter((r) => !eases(r));
+            const help = project.rules.filter(eases);
+            return [
+              hard.length && `Also in a place where ${hard.length === 1 ? "a rule restricts" : `${hard.length} rules restrict`} building: ${named(hard)}.`,
+              help.length && `Helped by ${help.length === 1 ? "a rule" : `${help.length} rules`} for its place: ${named(help)}.`,
+            ].filter(Boolean).join(" ");
+          })()}
+          ${onRules && html`${" "}<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                                          onClick=${onRules}>See the rules ↓</button>`}
+        </div>`}
+
       ${!!project.unconfirmed.length && html`
         <div>
           <button type="button" class="dc-linkish" style=${{ fontSize: 13 }}
@@ -171,6 +196,51 @@ function ProjectCard({ project, level, onOpen, onOpenCompany }) {
               ${project.unconfirmed.map((b) => html`<${Blocker} key=${b.risk_id} blocker=${b} muted=${true} />`)}
             </ul>`}
         </div>`}
+    </article>`;
+}
+
+/* One rule for a place, once, with the followed projects it reaches.
+ *
+ * What would clear a restriction is the same for every one of them — the rule
+ * lifted or voted down, or for a rule on projects with no permit yet, a project's
+ * permit approved first — so it is said once, in the signpost box the obstacle
+ * cards use for the milestone that would clear a track. A rule that eases building
+ * has no such box: there is nothing to clear. */
+function RuleCard({ rule, matches, onOpen, onGoto }) {
+  const projects = rule.projects.filter(matches);
+  return html`
+    <article class="dc-wf-card">
+      <header style=${{ display: "flex", gap: 12, alignItems: "flex-start", justifyContent: "space-between",
+                        flexWrap: "wrap" }}>
+        <div style=${{ display: "grid", gap: 2, minWidth: 0 }}>
+          <span class="dc-wf-meta" style=${{ fontWeight: 600 }}>
+            ${rule.where} · ${rule.need_label} · covers ${rule.covers}</span>
+          <span class="dc-cond-title">${rule.title}</span>
+        </div>
+        <${RuleStatus} rule=${rule} />
+      </header>
+      <ul class="dc-cond-reach">
+        ${projects.map((p) => html`
+          <li key=${p.project_id}>
+            <div style=${{ display: "grid", gap: 1, minWidth: 0 }}>
+              <button type="button" class="dc-linkish dc-cond-reach-name" onClick=${() => onOpen(p.project_id)}>
+                ${p.project}</button>
+              <span class="dc-wf-meta">${[p.company, p.location].filter(Boolean).join(" · ")}</span>
+            </div>
+            <${RuleFit} fit=${p.fit} />
+            <span class="dc-cond-reach-why">${p.why}</span>
+          </li>`)}
+      </ul>
+      ${!eases(rule) && rule.clears && html`
+        <div class="dc-wf-signposts"><div><b>Would clear it:</b> ${rule.clears}.</div></div>`}
+      <div class="dc-wf-meta" style=${{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        ${rule.reported && html`<span class="dc-num">last reported ${rule.reported}</span>`}
+        ${rule.source_url && html`
+          <a href=${rule.source_url} target="_blank" rel="noopener noreferrer"
+             style=${{ color: "var(--primary)" }}>${rule.publisher || "source"} →</a>`}
+        ${onGoto && html`<button type="button" class="dc-linkish" style=${{ fontSize: 12 }}
+                                 onClick=${() => onGoto("rules")}>every rule →</button>`}
+      </div>
     </article>`;
 }
 
@@ -210,6 +280,16 @@ export function MonitorView({ api, onOpen, onGoto, onOpenCompany, ListEditor, pr
   );
   const counts = payload?.counts;
   const sev = counts?.severity || {};
+  /* The text filter narrows the rules to the projects it keeps; the severity filter
+     does not apply to them, because a rule has no severity of its own. */
+  const rules = useMemo(
+    () => (payload?.rules || []).filter((r) => r.projects.some(matches)),
+    [payload, q],
+  );
+  const restricting = rules.filter((r) => !eases(r));
+  const easing = rules.filter(eases);
+  const toRules = () =>
+    document.getElementById("monitor-rules")?.scrollIntoView({ behavior: "smooth", block: "start" });
   const tile = (label, value, hint, color) => html`
     <div class="dc-tile">
       <span class="dc-tile-label">${label}</span>
@@ -259,6 +339,16 @@ export function MonitorView({ api, onOpen, onGoto, onOpenCompany, ListEditor, pr
                  `${sev.blocking || 0} blocking · ${sev.material || 0} material · ${sev.watch || 0} to watch`,
                  sev.blocking ? "var(--danger)" : sev.material ? "var(--warning)" : undefined)}
           ${tile("Unconfirmed", counts.unconfirmed, "reported, but nobody could quote them")}
+          ${!!(counts.rules || counts.easing) && html`
+            <button type="button" class="dc-tile" onClick=${toRules} style=${{ textAlign: "left" }}>
+              <span class="dc-tile-label">Rules for their places</span>
+              <span class="dc-tile-value dc-num">${counts.rules}</span>
+              <span class="dc-tile-hint">${[
+                `make building harder for ${counts.exposed} of your ${counts.projects}`,
+                counts.easing && `${counts.easing} more ${counts.easing === 1 ? "eases" : "ease"} it for ${counts.helped}`,
+                "not obstacles, so not counted as blocked",
+              ].filter(Boolean).join(" · ")}</span>
+            </button>`}
         </div>
 
         ${counts.older > 0 && html`
@@ -287,20 +377,47 @@ export function MonitorView({ api, onOpen, onGoto, onOpenCompany, ListEditor, pr
                          description=${q ? "Nothing matches that filter." : "None of your projects has an obstacle this severe."} />`}
 
         <div style=${{ display: "grid", gap: 14 }}>
-          ${blocked.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} onOpenCompany=${onOpenCompany} />`)}
+          ${blocked.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} onOpenCompany=${onOpenCompany} onRules=${toRules} />`)}
         </div>
 
         ${!!clear.length && html`
           <div class="dc-band" style=${{ paddingBottom: 0 }}>
             <button type="button" class="dc-linkish" onClick=${() => setShowClear(!showClear)}>
-              ${showClear ? "Hide" : "Show"} ${clear.length} project${clear.length === 1 ? "" : "s"}
-              with nothing open${level !== "all" ? " at this level" : ""}
+              ${showClear ? "Hide" : "Show"} ${clear.length} project${clear.length === 1 ? "" : "s"} with nothing open${level !== "all" ? " at this level" : ""}
             </button>
             ${showClear && html`
               <div style=${{ display: "grid", gap: 14 }}>
-                ${clear.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} onOpenCompany=${onOpenCompany} />`)}
+                ${clear.map((p) => html`<${ProjectCard} key=${p.project_id} project=${p} level=${level} onOpen=${onOpen} onOpenCompany=${onOpenCompany} onRules=${toRules} />`)}
               </div>`}
           </div>`}
+
+        ${!!(payload.rules || []).length && html`
+          <section id="monitor-rules" class="dc-band" style=${{ display: "grid", gap: 12, scrollMarginTop: 80 }}
+                   aria-label="Rules for their places">
+            <h2 class="dc-wf-h2">Rules for their places</h2>
+            <p class="dc-wf-meta" style=${{ margin: 0, fontSize: 13, maxWidth: "78ch" }}>
+              Rules that apply to a place rather than to one campus — a state's permit pause, a
+              town's ban, a grid operator's rule — and which of your projects each reaches. None is
+              an obstacle reported about these campuses, so none makes a project blocked above.
+              <b> exact</b> means the state or county matches; <b>likely</b> means part of the match
+              is inferred — the town's limits, the grid region or the size.
+            </p>
+            ${!rules.length && html`<div class="dc-wf-meta">Nothing matches that filter.</div>`}
+            <div style=${{ display: "grid", gap: 14 }}>
+              ${restricting.map((r) => html`<${RuleCard} key=${r.condition_id} rule=${r} matches=${matches}
+                                                         onOpen=${onOpen} onGoto=${onGoto} />`)}
+            </div>
+            ${!!easing.length && html`
+              <h3 class="dc-cond-subhead">Helped by</h3>
+              <p class="dc-wf-meta" style=${{ margin: 0, fontSize: 13, maxWidth: "78ch" }}>
+                Rules that make building easier where these projects are — a tax exemption,
+                building allowed by right. Nothing to clear.
+              </p>
+              <div style=${{ display: "grid", gap: 14 }}>
+                ${easing.map((r) => html`<${RuleCard} key=${r.condition_id} rule=${r} matches=${matches}
+                                                      onOpen=${onOpen} onGoto=${onGoto} />`)}
+              </div>`}
+          </section>`}
       `}
     </div>`;
 }

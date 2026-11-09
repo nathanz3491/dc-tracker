@@ -5455,7 +5455,10 @@ def test_the_project_page_reads_in_an_investors_order():
     built, "very long", with twelve narrow fields taking a screen and a half. It now
     opens with the summary, then capacity, parties and delay risk, then the evidence,
     and the history, comparisons and citations start closed. The twelve fields are
-    two columns of one-line facts rather than three-column rows."""
+    two columns of one-line facts rather than three-column rows.
+
+    "Exposed to" — rules for the campus's place — follows the obstacles, as its own
+    section rather than inside theirs (`views-rules.js`)."""
     app = (assets.STATIC_ROOT / "app.js").read_text(encoding="utf-8")
     css = (assets.STATIC_ROOT / "app.css").read_text(encoding="utf-8")
     block = re.search(r"const PAGE_SECTIONS = \[(.*?)\n\];", app, re.S)
@@ -5466,6 +5469,7 @@ def test_the_project_page_reads_in_an_investors_order():
         "tranches",
         "parties",
         "risk",
+        "rules",
         "fields",
         "progress",
         "context",

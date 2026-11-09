@@ -1612,6 +1612,73 @@ button.dc-tile:disabled { cursor: default; }
   .dc-wf-tracks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+/* ---- Rules that apply to a place (`views-rules.js`) ---------------------------
+ *
+ * A project page's "Exposed to" lines are drawn in the obstacles' shape — one line,
+ * opened for the evidence — so the two read as the same kind of list, but with a
+ * dashed edge on the left: nothing in them was reported about the campus itself.
+ * The Rules view and Monitor's section reuse the Monitor card. */
+.dc-cond-chip { height: 20px !important; font-size: 11px !important; padding: 0 7px !important; }
+.dc-cond-list {
+  list-style: none; margin: 0; padding: 0; border: 1px dashed var(--input);
+  border-radius: 14px; background: var(--surface); overflow: hidden;
+}
+.dc-cond-list > li + li { border-top: 1px solid var(--border); }
+.dc-cond > summary {
+  display: grid; grid-template-columns: auto 132px minmax(0, 1fr) auto auto; gap: 12px;
+  align-items: baseline; padding: 8px 14px; cursor: pointer; list-style: none;
+}
+.dc-cond > summary::-webkit-details-marker { display: none; }
+.dc-cond > summary:hover { background: color-mix(in oklab, var(--muted) 45%, transparent); }
+.dc-cond > summary:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.dc-cond-need { font-size: 13px; font-weight: 600; }
+.dc-cond-text { font-size: 13.5px; line-height: 20px; min-width: 0; }
+.dc-cond-where { color: var(--muted-foreground); }
+.dc-cond-when { font-size: 12px; color: var(--muted-foreground); white-space: nowrap; }
+.dc-cond-body { display: grid; gap: 10px; padding: 0 14px 14px 14px; }
+.dc-cond-title { margin: 0; font-family: var(--font-display); font-size: 19px; font-weight: 500; line-height: 1.25; }
+/* "Helped by", under the restricting rules: smaller than a section, so the two read
+   as one section's halves rather than as two sections. */
+.dc-cond-subhead {
+  margin: 4px 0 0; font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted-foreground);
+}
+.dc-cond-summary { margin: 0; font-size: 14px; line-height: 21px; max-width: 86ch; }
+.dc-cond-facts { margin: 0; display: grid; gap: 3px; font-size: 13px; line-height: 19px; }
+.dc-cond-facts > div { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 12px; }
+.dc-cond-facts dt { color: var(--muted-foreground); }
+.dc-cond-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.dc-cond-src-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.dc-cond-src { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.dc-cond-src-head {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  font-size: 12px; color: var(--muted-foreground);
+}
+.dc-cond-src-title { font-size: 13px; font-weight: 500; color: var(--primary); text-decoration: none; }
+a.dc-cond-src-title:hover { text-decoration: underline; text-underline-offset: 2px; }
+.dc-cond-quote {
+  margin: 0; display: grid; gap: 3px; font-size: 13.5px; line-height: 20px; padding: 8px 12px;
+  background: var(--muted); border-left: 2px solid var(--primary); border-radius: 0 10px 10px 0; max-width: 96ch;
+}
+.dc-cond-for { font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground); }
+.dc-cond-reach { list-style: none; margin: 0; padding: 0; display: grid; border-top: 1px solid var(--border); }
+.dc-cond-reach > li {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.2fr); gap: 4px 14px;
+  align-items: baseline; padding: 8px 2px; border-bottom: 1px solid var(--border);
+}
+.dc-cond-reach-name { font: inherit; font-size: 14px; font-weight: 500; text-align: left; }
+.dc-cond-reach-why { font-size: 12.5px; line-height: 18px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+@media (max-width: 900px) {
+  /* Status, need, fit and date on the first line; the rule's name under them. */
+  .dc-cond > summary { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .dc-cond-text { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (max-width: 640px) {
+  .dc-cond-facts > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .dc-cond-reach > li { grid-template-columns: minmax(0, 1fr) auto; }
+  .dc-cond-reach-why { grid-column: 1 / -1; }
+}
+
 /* ---- Company page ---------------------------------------------------------
  *
  * A profile, not a report: the mark and name lead, four numbers sit in a strip

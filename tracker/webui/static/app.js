@@ -16,6 +16,7 @@
 import { AccountView, AdminView } from "/static/views-account.js";
 import { MonitorView } from "/static/views-monitor.js";
 import { MapView } from "/static/views-map.js";
+import { ExposureList, RulesView, eases } from "/static/views-rules.js";
 
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -1467,12 +1468,23 @@ function ProjectsView({ data, onOpen, watch, onGoto }) {
 //: `when` decides whether a section exists at all: an empty "Tranches" heading on
 //: the 88% of the database with no blocks would read as "this campus has one
 //: tranche", which is the opposite of what a missing backfill means.
+//:
+//: "Exposed to" — rules for the campus's place (`views-rules.js`) — sits right
+//: after the obstacles and apart from them. Its rows come beside the project in the
+//: route's answer, not inside it, so `when` is handed them as a second argument. A
+//: campus only rules that ease building reach has the section as "Helped by": help
+//: must not be filed under a heading that reads as a threat.
+const rulesTitle = (exposures) =>
+  ((exposures || []).some((e) => !eases(e)) ? "Exposed to" : "Helped by");
+
 const PAGE_SECTIONS = [
   { id: "summary", label: "Summary", when: () => true, fixed: true },
   { id: "tranches", label: "Capacity by tranche",
     when: (p) => (p.blocks || []).length || (p.serving || []).length },
   { id: "parties", label: "Who is involved", when: (p) => (p.parties || []).length > 0 },
   { id: "risk", label: "Delay risk", when: () => true },
+  { id: "rules", label: (p, exposures) => rulesTitle(exposures),
+    when: (p, exposures) => (exposures || []).length > 0 },
   { id: "fields", label: "Fields and evidence", when: () => true },
   { id: "progress", label: "Progress and timeline", when: () => true, closed: true },
   { id: "context", label: "In context", when: (p) => p.mw_planned != null, closed: true },
@@ -1570,21 +1582,28 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
    * what a project page is for. And the list is a snapshot from whenever the
    * console loaded, while an ingest run on the host moves values underneath it;
    * this page is where somebody goes to *check* a figure. */
-  const [state, setState] = useState({ loading: true, project: null, error: null });
+  const [state, setState] = useState({ loading: true, project: null, exposures: [], error: null });
   const [quote, showQuote] = useQuote();
   const sectionsState = useSections(id);
 
+  /* `exposures` — the rules for the campus's place — arrive beside the project,
+   * not inside it: nothing the page counts about the campus may read them. */
+  const loaded = (payload) => ({
+    loading: false, project: payload.project, exposures: payload.exposures || [], error: null,
+  });
+
   useEffect(() => {
     let cancelled = false;
-    setState({ loading: true, project: null, error: null });
+    setState({ loading: true, project: null, exposures: [], error: null });
     window.scrollTo({ top: 0 });
     api(`/api/project?id=${id}`)
       .then((payload) => {
-        if (!cancelled) setState({ loading: false, project: payload.project, error: null });
+        if (!cancelled) setState(loaded(payload));
       })
       .catch((err) => {
         if (!cancelled) {
-          setState({ loading: false, project: null, error: String((err && err.message) || err) });
+          setState({ loading: false, project: null, exposures: [],
+                     error: String((err && err.message) || err) });
         }
       });
     return () => { cancelled = true; };
@@ -1593,7 +1612,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
   /* After an admin rules on a tranche: the page re-reads its project in place —
    * no skeleton, no scroll — so the arithmetic under the ruling is the server's. */
   const reload = () => api(`/api/project?id=${id}`)
-    .then((payload) => setState({ loading: false, project: payload.project, error: null }))
+    .then((payload) => setState(loaded(payload)))
     .catch(() => {});
 
   const back = html`
@@ -1627,9 +1646,13 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
   }
 
   const p = state.project;
+  const exposures = state.exposures;
+  // Restricting rules are "Exposed to"; the ones that ease building are "Helped by".
+  const restricting = exposures.filter((e) => !eases(e));
+  const easing = exposures.filter(eases);
   const open = (p.risks || []).filter((r) => r.status === "open");
   const populated = TRACKED.filter((k) => p[k] != null).length;
-  const sections = PAGE_SECTIONS.filter((s) => s.when(p));
+  const sections = PAGE_SECTIONS.filter((s) => s.when(p, exposures));
   const { isOpen, toggle, visit } = sectionsState;
   // Everything one section needs to be drawn: whether it exists, whether it is open,
   // and the button that opens or closes it.
@@ -1693,6 +1716,15 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
                     onClick=${() => visit("risk")}
                     title="jump to the obstacles">
               ${open.length} open obstacle${open.length === 1 ? "" : "s"}</button>`}
+          ${/* Outlined, never in an obstacle's colours: a rule for the place is not
+                something reported about this campus. */ ""}
+          ${exposures.length > 0 && html`
+            <button type="button" style=${{ ...chip("--foreground", true), cursor: "pointer" }}
+                    onClick=${() => visit("rules")}
+                    title="Rules that apply to this campus's place. Not obstacles of the campus: they change no count, the biggest obstacle or the confidence.">
+              ${restricting.length
+                ? `exposed to ${restricting.length} rule${restricting.length === 1 ? "" : "s"}`
+                : `helped by ${easing.length} rule${easing.length === 1 ? "" : "s"}`}</button>`}
         </div>
       </header>
 
@@ -1701,7 +1733,8 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
       <nav class="dc-jump" aria-label="Sections of this project">
         ${sections.map((s) => html`
           <button key=${s.id} type="button" class=${`dc-jump-btn${isOpen(s) ? "" : " is-closed"}`}
-                  onClick=${() => visit(s.id)}>${s.label}</button>`)}
+                  onClick=${() => visit(s.id)}>
+            ${typeof s.label === "function" ? s.label(p, exposures) : s.label}</button>`)}
       </nav>
 
       <${Section} id="summary" title="Summary" ...${at("summary")}>
@@ -1738,6 +1771,18 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
               costs a call per click and nothing it says is evidence. */ ""}
         <${InferPanel} project=${p} allowAi=${data.allow_ai} aiOff=${data.ai_off} />
       <//>
+
+      ${at("rules") && html`
+        <${Section} id="rules" title=${rulesTitle(exposures)}
+          count=${restricting.length || easing.length}
+          hint="Rules that apply to this campus's place — a state's permit pause, a town's ban, a tax exemption — rather than to the campus."
+          blurb="Rules for a place, matched to this campus by where it is filed, its stage and its size. They are not obstacles reported about it, and nothing above counts them. Exact: the state or county matches. Likely: part of the match is inferred — the town's limits, the grid region or the size. Open a line for why it reaches the campus, what would clear a restriction, and the articles."
+          ...${at("rules")}>
+          ${restricting.length > 0 && html`<${ExposureList} exposures=${restricting} />`}
+          ${restricting.length > 0 && easing.length > 0 && html`
+            <h3 class="dc-cond-subhead">Helped by<span class="dc-sec-count dc-num">${easing.length}</span></h3>`}
+          ${easing.length > 0 && html`<${ExposureList} exposures=${easing} />`}
+        <//>`}
 
       <${Section} id="fields" title="Fields and evidence" count=${`${populated} of 12`}
         hint="The twelve tracked fields, each with its tier and the sentence behind it."
@@ -6602,7 +6647,7 @@ function UpdatesView({ data, onOpen, onGoto }) {
  * rather than 404s; a test asserts the two agree. */
 const VIEWS = [
   ["updates", "Updates"], ["monitor", "Monitor"], ["projects", "Projects"],
-  ["sources", "Sources"], ["map", "Map"], ["capex", "Capex"],
+  ["rules", "Rules"], ["sources", "Sources"], ["map", "Map"], ["capex", "Capex"],
 ];
 
 /* Pages about the reader's account rather than the data, reached from the header
@@ -7229,6 +7274,7 @@ function App() {
                    onBack=${() => goto("projects")} />`
           : view === "projects" && html`<${ProjectsView} data=${data} onOpen=${openProject}
                                                          watch=${watch} onGoto=${goto} />`}
+        ${view === "rules" && html`<${RulesView} api=${api} onOpen=${openProject} />`}
         ${view === "sources" && html`<${SourcesView} data=${data} />`}
         ${view === "map" && html`<${MapView} data=${data} api=${api} onOpen=${openProject}
                                             Eyebrow=${Eyebrow} />`}

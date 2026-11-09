@@ -144,8 +144,11 @@ AUTH_CACHE_S = 5.0
 #: tracks and confidence — what a reader needs in order not to misread the data —
 #: and was only filed under the machinery because that is where the tab happened to
 #: sit.
+#:
+#: `rules` is the rules that apply to a place rather than one campus — a state's
+#: permit pause, a town's ban (`tracker.conditions`, `webui/rules.py`).
 READ_VIEWS: frozenset[str] = frozenset(
-    {"updates", "monitor", "projects", "sources", "map", "capex"}
+    {"updates", "monitor", "projects", "rules", "sources", "map", "capex"}
 )
 
 #: Pages about the reader's own account rather than the dataset, so not tabs in the
@@ -1620,6 +1623,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._monitor()
         if route == "/api/watch":
             return self._watch_state()
+        if route == "/api/rules":
+            return self._rules(query)
+        if route == "/api/rule":
+            return self._rule(query)
         if route == "/api/map":
             return self._json(self._map_summary())
         if route == "/api/health":
@@ -2742,7 +2749,24 @@ class Handler(BaseHTTPRequestHandler):
             "reads": "one project with its sources, events, risks, blocks and parties",
             "note": "?id=<id>. Includes claims_by_field, which /api/dataset omits: "
             "a page about one project is not bound by what keeps a 300-row table small. "
-            "Read fresh, because the page is where somebody goes to check a figure.",
+            "Read fresh, because the page is where somebody goes to check a figure. "
+            "`exposures`, beside `project` and never inside it, are the rules for its "
+            "place that reach it, each with its fit, why, articles and what would "
+            "clear it; no count, blocker or confidence reads them.",
+        },
+        "GET /api/rules": {
+            "answers": "rules that apply to a place, how many projects each reaches, and "
+            "the nationwide and whole-industry ones apart as market context",
+            "reads": "conditions.listing, reach_counts and market",
+            "note": "?state=TX (that state's rules and its grid region's), ?cleared=1 "
+            "(adds lifted and voted-down rules). The same for every reader; cached "
+            "until the database changes.",
+        },
+        "GET /api/rule": {
+            "answers": "one rule, its articles with their verified sentences, and every "
+            "project it reaches with the fit and why",
+            "reads": "one condition, its sources and its exposures",
+            "note": "?id=<id>. Exact matches first. Cached until the database changes.",
         },
         "GET /api/publishers": {
             "answers": "which publishers actually decide a stored value",
@@ -2776,11 +2800,14 @@ class Handler(BaseHTTPRequestHandler):
         "GET /api/monitor": {
             "answers": "every followed project's open obstacles reported in the last "
             "60 days and the milestone that would clear each, most obstructed first, "
-            "plus the watchlist itself",
-            "reads": "watchfor.report — the followed projects with their events and risks",
+            "plus the watchlist itself, and apart from the obstacles the rules for "
+            "their places that reach them and what would clear each",
+            "reads": "watchfor.report — the followed projects with their events, risks "
+            "and exposures",
             "note": "The page the daily email links to. Older open obstacles are "
-            "counted, not listed; unconfirmed ones apart and labelled. "
-            "/api/watch-for is the old name.",
+            "counted, not listed; unconfirmed ones apart and labelled. `rules` lists "
+            "each rule once with the followed projects it reaches; a rule makes no "
+            "project 'blocked'. /api/watch-for is the old name.",
         },
         "GET /api/company": {
             "answers": "one company's campuses, as builder or tenant, and their updates "
@@ -3128,6 +3155,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "id must be an integer project id")
 
         from tracker.models import Project
+        from tracker.webui import rules
         from tracker.webui.dataset import project_payload
 
         with self.console.read_session() as session:
@@ -3137,7 +3165,11 @@ class Handler(BaseHTTPRequestHandler):
             # Inside the session: the payload walks `sources`, `risks`, `blocks`
             # and `parties`, and a detached instance raises on the first of them.
             payload = project_payload(project, claims=True)
-        self._json({"project": payload})
+            # Beside the project, never inside it: a rule for its place is not a
+            # fact about this campus, and the project's own payload is what every
+            # count, the blocker and the confidence are read from.
+            exposures = rules.exposures(session, project_id)
+        self._json({"project": payload, "exposures": exposures})
 
     def _company(self, query: dict[str, list[str]]) -> None:
         """One company's campuses and recent updates, for `/companies/<slug>`.
@@ -3514,6 +3546,51 @@ class Handler(BaseHTTPRequestHandler):
                 "watch_all": bool(feed.watches_all(session, account_id)),
                 "allow_watch": self.console.allow_watch,
             }
+        self._json(payload)
+
+    def _rules(self, query: dict[str, list[str]]) -> None:
+        """The Rules view: rules for a place, how many projects each reaches, the market.
+
+        The same for every reader, so cached until the database changes. `?state=`
+        is a two-letter code and takes in the rules of the grid region that state is
+        mostly in (`webui/rules.listing`); `?cleared=1` adds lifted and voted-down
+        rules. An unknown state is a 400 rather than an empty page, because "no
+        rules" and "your filter was not understood" look the same.
+        """
+        from tracker.webui import rules
+
+        state = (query.get("state") or [""])[0].strip().upper() or None
+        if state is not None and not re.fullmatch(r"[A-Z]{2}", state):
+            return self._error(400, f"state must be a two-letter code, not {state!r}")
+        cleared = (query.get("cleared") or [""])[0] in {"1", "true", "yes"}
+
+        def fresh() -> dict[str, Any]:
+            with self.console.read_session() as session:
+                return rules.listing(session, state=state, cleared=cleared)
+
+        self._json(self.console.cached(("rules", state, cleared), fresh))
+
+    def _rule(self, query: dict[str, list[str]]) -> None:
+        """One rule, its articles, and every project it reaches with the fit and why.
+
+        Asked for when a rule is opened on the Rules view, so the list does not
+        carry two hundred projects per statewide rule. Cached like `/api/rules`.
+        """
+        from tracker.webui import rules
+
+        raw = (query.get("id") or [""])[0]
+        try:
+            condition_id = int(raw)
+        except ValueError:
+            return self._error(400, "id must be an integer rule id")
+
+        def fresh() -> dict[str, Any] | None:
+            with self.console.read_session() as session:
+                return rules.one(session, condition_id)
+
+        payload = self.console.cached(("rule", condition_id), fresh)
+        if payload is None:
+            return self._error(404, f"no rule {condition_id}")
         self._json(payload)
 
     def _set_watch_all(self, account_id: int, value: bool) -> None:
