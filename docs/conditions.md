@@ -102,4 +102,7 @@ tracker conditions drop 12               # a rule read wrongly
 ```
 
 `read`, `match` and `drop` write, so they run on the host, outside the nightly loop's
-hours.
+hours. The nightly loop runs `read` in round 1 right after the news step
+(`--conditions`, 150 pages by default, `0` to skip), and `match` in every round's free
+phase and once more after the last round, so a project merged or moved to another stage
+during the night is under the right rules by morning.
