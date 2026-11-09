@@ -12,6 +12,15 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The administrators' alert says what went wrong and what to do, once.** The first
+  alert of the Outlook refusals was four paragraphs, each the same SMTP reply with its
+  server trace, and the cause — a missing DMARC record — was in none of them. Now
+  each problem is one card: what happened, the mornings it hit as dates, what it
+  means in plain words, what to do, and the server's reply last with the trace
+  dropped. Refusals are grouped by address and cause, not by wording, because
+  Outlook worded the same refusal two ways. Three causes are recognised (no DMARC
+  record, an address that does not exist, a full mailbox); any other reply is shown
+  as it came (`tracker/notify.py`, `Problem`).
 - **A directed night no longer ends early on a misreading, and a busy provider no
   longer ends the director's part of a night.** On 2026-11-08 the director stopped at
   21:21 with 361 of 1,700 searches and nearly seven hours left. It had counted two

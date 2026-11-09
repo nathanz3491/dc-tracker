@@ -548,9 +548,10 @@ def test_the_administrator_is_told_when_somebody_was_not_delivered_to(session):
     post = Refuses("client@example.com")
     send(session, post)
 
-    alerts = [m for m in post.sent if m["to"] == "admin@example.com" and "problem" in m["subject"]]
+    alerts = [m for m in post.sent if m["to"] == "admin@example.com"]
     assert len(alerts) == 1
-    assert "client@example.com" in alerts[0]["text"]
+    assert alerts[0]["subject"] == "dc-tracker: Could not send to client@example.com"
+    assert "422" in alerts[0]["text"]
 
 
 def test_every_run_is_recorded(session):
@@ -630,7 +631,40 @@ def test_the_administrator_is_told_what_the_server_said(session):
     send(session, post, now=utcnow() + dt.timedelta(days=1))
 
     [alert] = [m for m in post.sent if m["to"] == "admin@example.com"]
-    assert "client@example.com" in alert["text"] and "DMARC" in alert["text"]
+    assert alert["subject"] == "dc-tracker: 1 email to client@example.com was refused"
+    assert "What to do:" in alert["text"] and "_dmarc" in alert["text"]
+
+
+def test_four_mornings_refused_for_one_reason_are_one_problem(session):
+    """The first alert of the Outlook refusals repeated the same SMTP reply and
+    server trace four times, and named the cause in none of them."""
+    refused = [
+        NotifyDelivery(
+            email="reader@example.com",
+            error=f"refused by the recipient's server: {OUTLOOK}",
+            prepared_at=dt.datetime(2026, 11, day, 0, 0),
+        )
+        for day in (6, 7, 8, 9)
+    ]
+
+    [problem] = notify.problems(session, [], refused)
+
+    assert problem.title == "4 emails to reader@example.com were refused"
+    assert problem.dates == ("Nov 6", "Nov 7", "Nov 8", "Nov 9")
+    assert "DMARC record" in problem.why and "v=DMARC1; p=none" in problem.fix
+    assert problem.said.endswith("(AS9031519)"), "the server trace is dropped"
+    html = notify._problem_block(problem)
+    assert html.count("Message lacks SPF/DKIM/DMARC") == 1
+
+
+def test_an_unknown_refusal_still_says_what_happened(session):
+    refused = NotifyDelivery(
+        email="reader@example.com",
+        error="refused by the recipient's server: 554 something new",
+        prepared_at=dt.datetime(2026, 11, 9, 0, 0),
+    )
+    [problem] = notify.problems(session, [], [refused])
+    assert problem.fix is None and problem.said == "554 something new"
 
 
 def test_a_dry_run_and_an_old_message_are_not_looked_up(session):

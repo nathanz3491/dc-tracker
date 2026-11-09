@@ -74,6 +74,7 @@ import datetime as dt
 import hashlib
 import html
 import logging
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -1276,17 +1277,112 @@ def send_all(
 # --- telling somebody when it goes wrong ---------------------------------------
 
 
+@dataclass(frozen=True)
+class Problem:
+    """One thing an administrator should hear about a run.
+
+    What happened, what it means and what to do, in that order, with the
+    provider's own words last: the first alert of the 2026-11 Outlook refusals led
+    with four copies of an SMTP reply and its server trace, and the cause — a
+    missing DNS record — was in none of them.
+    """
+
+    title: str
+    why: str
+    fix: str | None = None
+    #: The server's or provider's own words, for searching.
+    said: str | None = None
+    #: Which mornings it hit, as "Nov 6".
+    dates: tuple[str, ...] = ()
+
+
+#: What a refusing server's reply means and what to do about it, tried in order
+#: against the reply (lowercased). These are SMTP replies, so each provider words
+#: them its own way; the status codes are the stable part.
+_REFUSALS: Final[tuple[tuple[tuple[str, ...], str, str], ...]] = (
+    (
+        ("spf/dkim/dmarc", "dmarc", "5.7.515", "5.7.23", "5.7.26"),
+        "Their mail server could not confirm the email came from our domain, so it "
+        "refused it. Since 2026-11-05 Outlook, Hotmail and Live refuse mail from any "
+        "domain without a DMARC record, however little it sends.",
+        "Check the sending domain's DNS has a DMARC record — TXT at `_dmarc`, "
+        "`v=DMARC1; p=none` — and that Resend still shows SPF and DKIM verified.",
+    ),
+    (
+        ("5.1.1", "does not exist", "user unknown", "no such user", "address rejected"),
+        "The address does not exist at their provider.",
+        "Correct the account's email on the admin page, or remove the account.",
+    ),
+    (
+        ("5.2.2", "mailbox full", "over quota", "quota exceeded"),
+        "Their mailbox is full.",
+        "Nothing here; it goes again with the next email. Tell them if it lasts.",
+    ),
+)
+
+#: The server trace a reply ends with — "[host 2026-11-09T00:00:16Z 08DF…]".
+_TRACE = re.compile(r"\s*\[[^\]]*\]\s*$")
+
+#: `text` in a fix is something to type, and is set in the mono face.
+_TYPED = re.compile(r"`([^`]+)`")
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _refusal(reply: str) -> tuple[str, str | None]:
+    """(why, what to do) for a server's reply; the reply itself when it is not known."""
+    lowered = reply.lower()
+    for needles, why, fix in _REFUSALS:
+        if any(n in lowered for n in needles):
+            return why, fix
+    return reply, None
+
+
+def _bounce_problems(bounced: Iterable[NotifyDelivery]) -> list[Problem]:
+    """One problem per address and cause, however many mornings it hit.
+
+    By cause, not by reply: Outlook worded the same refusal two ways across the
+    four mornings of 2026-11, and grouping by the words made two cards of one fault.
+    The latest reply is the one shown.
+    """
+    groups: dict[tuple[str, str], list[tuple[dt.datetime, str]]] = {}
+    for delivery in bounced:
+        reply = (delivery.error or "").removeprefix("refused by the recipient's server: ")
+        reply = _TRACE.sub("", reply) or reply
+        groups.setdefault((delivery.email, _refusal(reply)[0]), []).append(
+            (delivery.prepared_at, reply)
+        )
+    out = []
+    for (email, _cause), hits in groups.items():
+        hits.sort()
+        why, fix = _refusal(hits[-1][1])
+        known = fix is not None
+        verb = "was" if len(hits) == 1 else "were"
+        out.append(
+            Problem(
+                title=f"{_plural(len(hits), 'email')} to {email} {verb} refused",
+                why=why if known else "Their mail server refused it after Resend took it.",
+                fix=fix,
+                said=hits[-1][1],
+                dates=tuple(f"{d:%b} {d.day}" for d in (local_time(at).date() for at, _ in hits)),
+            )
+        )
+    return out
+
+
 def problems(
     session: Session, outcomes: list[Outcome], bounced: Iterable[NotifyDelivery] = ()
-) -> list[str]:
+) -> list[Problem]:
     """What an administrator needs to hear about this run, in plain words."""
-    lines = [
-        f"The {local_time(d.prepared_at):%b %d} email to {d.email} was "
-        f"{d.error}. Its updates go out again with the next one."
-        for d in bounced
-    ]
-    lines += [
-        f"Could not deliver to {o.email} after {o.attempts} attempt(s): {o.error}"
+    found = _bounce_problems(bounced)
+    found += [
+        Problem(
+            title=f"Could not send to {o.email}",
+            why=f"Resend would not take the message, after {_plural(o.attempts, 'attempt')}.",
+            said=o.error,
+        )
         for o in outcomes
         if o.failed
     ]
@@ -1294,11 +1390,78 @@ def problems(
     if last is not None:
         age = utcnow() - last
         if age > dt.timedelta(hours=STALE_CRAWL_HOURS):
-            lines.append(
-                f"Nothing has been fetched for {age.days} day(s) {age.seconds // 3600} "
-                "hour(s). Every email is a quiet one until the crawler runs again."
+            found.append(
+                Problem(
+                    title=f"Nothing fetched for {_plural(age.days, 'day')}",
+                    why="Every email is a quiet one until the crawler runs again, and a "
+                    "reader cannot tell that from a quiet day.",
+                    fix="Check the overnight loop on the host: `tracker loop`.",
+                )
             )
-    return lines
+    return found
+
+
+def _problem_block(problem: Problem) -> str:
+    """One problem as a card: title, mornings, meaning, what to do, the server's words."""
+    rows = [
+        f'<tr><td style="font-family:{FONT_DISPLAY};font-size:19px;line-height:1.3;'
+        f'color:{TOKENS["foreground"]};padding-bottom:6px;">{esc(problem.title)}</td></tr>'
+    ]
+    if problem.dates:
+        chips = " ".join(
+            _chip(d, bg=TOKENS["danger_soft"], fg=TOKENS["danger"]) for d in problem.dates
+        )
+        rows.append(f'<tr><td style="padding-bottom:8px;">{chips}</td></tr>')
+    rows.append(
+        f'<tr><td style="font-family:{FONT_SANS};font-size:14px;line-height:1.55;'
+        f'color:{TOKENS["foreground"]};">{esc(problem.why)}</td></tr>'
+    )
+    if problem.fix:
+        fix = _TYPED.sub(
+            lambda m: (
+                f'<span style="font-family:{FONT_MONO};font-size:13px;background:'
+                f"{TOKENS['accent_soft']};padding:1px 5px;border-radius:4px;"
+                f'white-space:nowrap;">{m.group(1)}</span>'
+            ),
+            esc(problem.fix),
+        )
+        rows.append(
+            f'<tr><td style="padding-top:8px;font-family:{FONT_SANS};font-size:14px;'
+            f'line-height:1.55;color:{TOKENS["accent_foreground"]};">'
+            f"<strong>What to do:</strong> {fix}</td></tr>"
+        )
+    if problem.said:
+        rows.append(
+            f'<tr><td style="padding-top:10px;">'
+            f'<div style="background:{TOKENS["muted"]};border-radius:8px;padding:8px 10px;'
+            f"font-family:{FONT_MONO};font-size:11px;line-height:1.5;"
+            f'color:{TOKENS["muted_foreground"]};word-break:break-word;">'
+            f"{esc(problem.said)}</div></td></tr>"
+        )
+    return f"""
+    <tr><td style="padding:0 0 12px 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:{TOKENS["surface"]};border:1px solid {TOKENS["border"]};
+                    border-radius:14px;border-left:4px solid {TOKENS["danger"]};">
+        <tr><td style="padding:16px 18px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            {"".join(rows)}
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>"""
+
+
+def _problem_text(problem: Problem) -> list[str]:
+    head = f"* {problem.title}"
+    if problem.dates:
+        head += f" ({', '.join(problem.dates)})"
+    lines = [head, f"  {problem.why}"]
+    if problem.fix:
+        lines.append(f"  What to do: {problem.fix}")
+    if problem.said:
+        lines.append(f"  Their words: {problem.said}")
+    return [*lines, ""]
 
 
 def alert_admins(
@@ -1318,26 +1481,21 @@ def alert_admins(
         return []
     now = utcnow()
     sent = sum(1 for o in outcomes if o.sent)
-    subject = f"dc-tracker: {len(found)} problem(s) with this morning's emails"
-    text = "\n".join(
-        [
-            f"This morning's run sent {sent} email(s) and found:",
-            "",
-            *[f"* {f}" for f in found],
-            "",
-            "Anyone not delivered to is owed those updates and gets them on the next run.",
-        ]
+    if len(found) == 1:
+        subject = f"dc-tracker: {found[0].title}"
+    else:
+        subject = f"dc-tracker: {len(found)} problems with today's emails"
+    intro = (
+        f"The {local_time(now):%H:%M} run sent {_plural(sent, 'email')} and found "
+        f"{_plural(len(found), 'problem')}."
     )
-    body = "".join(
-        f'<tr><td style="padding:0 0 10px 0;font-family:{FONT_SANS};font-size:14px;'
-        f'line-height:1.5;color:{TOKENS["foreground"]};">{esc(f)}</td></tr>'
-        for f in found
-    )
+    footer = "Anyone not delivered to is owed those updates and gets them with their next email."
+    text = "\n".join([intro, "", *[line for f in found for line in _problem_text(f)], footer])
     html_body = _page(
         preheader=subject,
-        intro=f"This morning's run sent {sent} email(s) and found {len(found)} problem(s).",
-        body=body,
-        footer="Anyone not delivered to is owed those updates and gets them on the next run.",
+        intro=esc(intro),
+        body="".join(_problem_block(f) for f in found),
+        footer=footer,
     )
     out = []
     for admin in accounts.listing(session):
@@ -1394,6 +1552,7 @@ __all__ = [
     "EmailError",
     "Message",
     "Outcome",
+    "Problem",
     "ResendTransport",
     "TransientEmailError",
     "Transport",

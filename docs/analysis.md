@@ -587,6 +587,10 @@ updates in them counted as delivered. Each run now first asks Resend what became
 the past week's messages. A refused one is marked failed with the server's words,
 its updates are owed again, and the administrators' alert names it.
 
+The alert gives each problem once: what happened, the mornings it hit, what it means
+and what to do, with the server's own reply last. Refusals are grouped by address and
+cause, so four mornings of the same refusal are one card with four dates.
+
 **The sending domain needs a DMARC record**, as well as the SPF and DKIM records
 Resend asks for when the domain is verified. Since 2026-11-05 Outlook, Hotmail and
 Live refuse mail from a domain without one, however little it sends. `v=DMARC1;
