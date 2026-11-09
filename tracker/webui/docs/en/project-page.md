@@ -4,7 +4,7 @@ Every campus has its own page at `/projects/<number>`, opened from any row of [P
 
 The page reads in an investor's order: what the campus is and when it delivers first, then how its capacity splits, who is involved and what could make it late, then the evidence behind every value, and last the history, the comparisons and the citations.
 
-**← every project** goes back to the table. A sticky bar of links jumps between the sections: Summary, Capacity by tranche, Who is involved, Delay risk, Fields and evidence, Progress and timeline, In context, Citations. Sections with nothing in them are left out.
+**← every project** goes back to the table. A sticky bar of links jumps between the sections: Summary, Capacity by tranche, Who is involved, Delay risk, Exposed to, Fields and evidence, Progress and timeline, In context, Citations. Sections with nothing in them are left out.
 
 **Progress and timeline**, **In context** and **Citations** start closed. Click a section's heading to open or close it; the page remembers that choice in your browser, for every campus. Jumping to a closed section from the bar opens it for that visit only.
 
@@ -14,6 +14,7 @@ The page reads in an investor's order: what the campus is and when it delivers f
 - The operator, linked to its [company page](companies), and **for** the buyer when that is a different company. Each is shown under the company's one name, the same on every page; when the campus's sources spell it differently, their spelling follows in small type — *filed as “Amazon Web Services”* — so the header can be matched against the citations. When the buyer's role has ended — a lease rejected, a site sold — the header says *formerly for* the company and until when instead.
 - Where it is, and the regional grid operator area where known.
 - Its phase, its **confidence** (0–3; see [Confidence](confidence)) and how many obstacles are open — click that to jump to them.
+- **exposed to N rules**, outlined, when [rules](rules) for the campus's place reach it — or **helped by N rules** when the only ones are rules that ease building. Click it to jump to them. It is not an obstacle count.
 - **suspected delay · N days past its date**, in amber, when the campus's own online date has passed and nothing reported since says it is running. Hover it for the reason in one sentence; the summary below gives the date, and [Numbers and dates](numbers-and-dates) the full rule.
 
 ## Summary
@@ -74,6 +75,21 @@ The delay risk first — the level and every reason for it, each something you c
 Then the obstacles, one line each: how serious, what kind, what it is, and when it was first seen (and resolved). *uncited* marks a summary nobody could quote. Click a line to open the sentence it rests on, its status, the progress track it holds up and what would show it clearing. Open obstacles come first, the most serious first, twelve at a time; resolved ones are behind **N resolved or set aside**.
 
 **◈ Inferred analysis** asks a model what could obstruct the campus and what news would show it is still moving. It runs only when you press **Run analysis**. Each answer has a five-step meter of the model's confidence.
+
+## Exposed to
+
+[Rules](rules) that apply to the campus's place rather than to the campus — a state's pause on new permits, a town's ban, a grid operator's rule for large loads — when any reaches it. The section exists only then.
+
+They are listed apart from the obstacles above and are not obstacles of the campus: nothing was reported about this campus itself, it reaches the rule because of where it is filed, its stage and its size. None of them is counted among the open obstacles, chosen as the biggest obstacle, or read by the confidence or the delay risk.
+
+One line per rule, newest report first: its status (*proposed*, *pledged*, *passed*, *in force*, *blocked*), the need it touches, its name and where it applies, the fit and when it was last reported.
+
+- **exact** — the campus is filed in the state or county the rule names.
+- **likely** (dashed) — part of the match is inferred. No campus has a site coordinate, so a town's rule matches the campuses filed under that town without checking its limits; a grid operator's region is read from the state; or the rule has a size threshold and the campus's size is not published.
+
+Click a line to open it: a one-sentence summary, **Why it reaches this campus** (for example *TX · announced · no permit on record*), which projects it **Covers**, its dates, **Would clear it** — the rule lifted, repealed or voted down, or for a rule on projects with no permit yet, this campus's permit approved first — and every article behind it, with the sentences the rule was kept on.
+
+Rules that **ease** building — a tax exemption, building allowed by right — are listed under their own small heading, **Helped by**, in the same form but with nothing to clear. When those are the only ones, the section is called **Helped by**.
 
 ## Fields and evidence
 

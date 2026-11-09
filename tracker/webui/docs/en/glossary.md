@@ -30,6 +30,10 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Energized** — power is connected and on.
 
+**Exact** — of a [rule](rules) reaching a campus: the campus is filed in the state or county the rule names, at a stage it covers.
+
+**Exposed to** — on a [project's page](project-page), the rules for the campus's place that make building harder there. Not obstacles of the campus, and counted nowhere they are.
+
 **Facility power (◒)** — the whole site's power draw, including cooling; usually 10–30% above IT load.
 
 **Floor** — a figure that is a minimum. Every total on [Capex](capex) is a floor.
@@ -44,6 +48,8 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Held** — a relationship between the figures the tracker enforces on every write; a write that would break one is refused. See [How the figures relate](invariants).
 
+**Helped by** — on a [project's page](project-page) and [Monitor](monitor), the rules for the campus's place that make building easier: a tax exemption, building allowed by right.
+
 **Hyperscaler** — a large cloud company building or leasing capacity for its own use.
 
 **Implied** — a milestone deduced from a later one (no groundbreaking without land), not reported. Power is never implied.
@@ -53,6 +59,10 @@ Terms you will meet in the console and these docs, alphabetically.
 **IT load** — the power the computing equipment itself uses. What planned capacity is meant to measure.
 
 **Landlord** — a developer that builds data centers to lease to others.
+
+**Likely** — of a [rule](rules) reaching a campus: part of the match is inferred — a town's limits (no campus has a site coordinate), a grid region (read from the state), or a size nobody published.
+
+**Market** — on [Rules](rules), rules for the whole country or for one input every campus needs, such as a tariff on transformers. They flag no project, because they touch every one.
 
 **Material** — the middle obstacle level: a source says the schedule or scope moved.
 
@@ -85,6 +95,8 @@ Terms you will meet in the console and these docs, alphabetically.
 **Quoted** — a value backed by a sentence the tracker checked is in the article and states it.
 
 **Relationship not yet closed** — a relationship between a campus's figures that its sources do not yet settle, such as tranches that describe it twice. Listed on its page; changes no figure. See [How the figures relate](invariants).
+
+**Rule** — something that applies to a place, or to every campus, rather than to one campus: a state's permit pause, a town's ban, a grid operator's rule, a tax break, a tariff. Read from the news, quoted, and matched by code to the projects it reaches. See [Rules](rules).
 
 **Ruled out** — a pair of rows judged to be different sites; or a claim judged not to describe this campus.
 

@@ -52,6 +52,7 @@ The bottom half looks at every project you follow and asks what is blocking it.
 | **Blocked** | How many have an obstacle reported in the last two months. |
 | **Blocking or material** | Obstacles by severity: *blocking* (work has stopped), *material* (a source says the schedule or scope moved), *to watch* (raised, no stated effect). |
 | **Unconfirmed** | Obstacles that were reported but could not be backed by a quote. |
+| **Rules for their places** | Rules for a place — a state's permit pause, a town's ban — that reach your projects, and how many projects they reach. Shown only when there are any; click it to jump to them. |
 
 Obstacles nobody has reported for two months are left out here, and the page says how many. They are still on each project's own page.
 
@@ -67,5 +68,14 @@ Obstacles nobody has reported for two months are left out here, and the page say
 - Five cells, one per progress track — site, permits, power, construction, customer & finance — each reading *done*, *blocked*, *nothing yet* or where it stands. See [Phases and progress](progress).
 - Each open blocker: its severity and kind, which track it holds up, how long it has been open, a summary, the publisher (opens the article in a new tab), and **the quote** to show the sentence.
 - A signpost: **Would clear it:** the milestone that would unblock the track, or **Next step:** the next milestone, followed by what to look for in the news.
+- **Also in a place where a rule applies:** the rules for its place that reach it, by name, and a link down to them. They are not among its obstacles.
 
 At the bottom, **Show N projects with nothing open** lists the rest, and **Show N unconfirmed** reveals obstacles nobody could quote, faded.
+
+### Rules for their places
+
+Below the cards, every [rule](rules) that reaches one of your projects is listed once — one Texas permit pause reaching twelve of your projects is one card, not twelve. A rule applies to a place rather than to one campus, so it is kept apart from the obstacles: it is not counted on their tiles, and it never makes a project *Blocked*.
+
+Each card gives where the rule applies, the need it touches and which projects it covers; its status; and each of your projects it reaches, with the fit — **exact** when the state or county matches, **likely** when part of the match is inferred, such as a town's limits or a grid region read from the state — and why it matched.
+
+A rule that **restricts** — a ban, a pause, a new cost — has **Would clear it:** the rule lifted, repealed or voted down; or, for a rule that covers only projects with no permit yet, the project's permit approved first. A rule that **eases** building — a tax break, building allowed by right — is listed under **Helped by**, with no such line: there is nothing to clear. The last line has when it was last reported and the newest article. The filter box narrows these to the projects it matches too.

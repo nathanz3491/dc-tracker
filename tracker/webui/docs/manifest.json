@@ -66,6 +66,13 @@
           }
         },
         {
+          "slug": "rules",
+          "title": {
+            "en": "Rules",
+            "zh": "规则"
+          }
+        },
+        {
           "slug": "sources",
           "title": {
             "en": "Sources",
