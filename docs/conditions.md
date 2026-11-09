@@ -60,6 +60,15 @@ Code, never the model (`conditions.reach`), rebuilt wholesale by `conditions mat
 | grid region | the project's state, where the state is mostly one operator | likely |
 | national, input | nothing | market context only |
 
+**A state's or a grid operator's proposal reaches no project.** Legislatures
+introduce bills by the dozen and pass few: the election-week replay held 29 Ohio
+rules, mostly bills in committee, and flagged every unbuilt Ohio project with each —
+13 to 19 rules a campus. Such a proposal is listed (the Rules view, the API) and
+reaches projects once it passes, is pledged by an official in office or elected, or
+takes effect. A town's or county's proposal still reaches: it is a vote coming on the
+place a campus is in. "Pledged" means an official in office or elected; a candidate's
+promise is a proposal.
+
 Then the stage (`new`: announced or permitting with no approved permit on record;
 `unbuilt`: not yet running; `all`: not cancelled) and the size threshold (a project of
 unknown size is `likely`; a smaller one is out). Every exposure stores why, e.g.

@@ -115,6 +115,15 @@ def conditions_read(
     url: Annotated[
         str | None, typer.Option("--url", help="Read this one saved page.", show_default=False)
     ] = None,
+    behind: Annotated[
+        str | None,
+        typer.Option(
+            "--behind",
+            help="Read again the pages behind every rule now holding this status "
+            "(e.g. pledged), whenever read: for a prompt that changed what it means.",
+            show_default=False,
+        ),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Pages to read. One call each.")] = 150,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Read at full cost and write nothing.")
@@ -183,8 +192,9 @@ def conditions_read(
             since=start,
             until=end,
             cache_dir=article_cache("articles"),
-            again=again,
+            again=again or bool(behind),
             url=url,
+            behind=behind,
         )
         if not items:
             console.print(

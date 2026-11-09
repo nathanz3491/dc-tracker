@@ -230,6 +230,7 @@ def pages(
     again: bool = False,
     url: str | None = None,
     until: dt.datetime | None = None,
+    behind: str | None = None,
 ) -> tuple[list[Page], int]:
     """Saved pages read since `since` (and before `until`) that may state a rule,
     newest first.
@@ -237,11 +238,22 @@ def pages(
     Returns the pages and how many were looked at. A page already read under
     :data:`STAMP` is passed over unless `again`. Only pages the news step settled —
     found a campus or found none — are candidates: the others were never read.
+
+    `behind` is a status: the pages behind every rule now holding it, whenever read,
+    for a prompt that changed what the status means. On 2026-11-10 "pledged" took in
+    losing candidates' promises; it now means an official in office or elected.
     """
     query = select(IngestUrl.url, IngestUrl.title, IngestUrl.published_at).where(
         IngestUrl.status.in_(("ok", "no_project"))
     )
-    if url:
+    if behind:
+        cited = (
+            select(ConditionSource.url)
+            .join(Condition, Condition.id == ConditionSource.condition_id)
+            .where(Condition.status == behind)
+        )
+        query = query.where(IngestUrl.url.in_(cited))
+    elif url:
         query = query.where(IngestUrl.url == url)
     else:
         query = query.where(IngestUrl.last_tried_at >= since)
@@ -262,7 +274,7 @@ def pages(
             continue
         looked += 1
         text = _cached(page_url, cache_dir)
-        if text and (url or worth_reading(text)):
+        if text and (url or behind or worth_reading(text)):
             out.append(Page(page_url, title or "", published, text))
     return out, looked
 
@@ -309,8 +321,9 @@ For each rule return:
 - status: one of """
     + ", ".join(CONDITION_STATUSES)
     + """
-  (pledged = promised by an official or candidate; passed = adopted but not yet in
-  effect; rejected = voted down or turned down)
+  (pledged = promised by an official in office or elected to it, such as a
+  governor-elect; a candidate's promise before or without winning is proposed;
+  passed = adopted but not yet in effect; rejected = voted down or turned down)
 - effective_on, ends_on: YYYY-MM-DD if the article states them, else null
 - summary: one plain sentence
 - quotes: {"rule": ..., "place": ..., "status": ..., "threshold": ...}, each ONE
@@ -964,9 +977,19 @@ def region_of(state: str) -> str | None:
     return STATE_REGIONS.get(state)
 
 
+#: Scopes whose proposals reach no project. A legislature introduces bills by the
+#: dozen and passes few: the election-week replay, 2026-11-10, held 29 Ohio rules,
+#: most of them bills in committee, and flagged every unbuilt Ohio project with each —
+#: 13 to 19 rules a campus. A town's or county's proposal is a vote coming on the
+#: places a campus is in, and still reaches them.
+_PROPOSALS_LISTED_ONLY: Final[frozenset[str]] = frozenset({"state", "grid_region"})
+
+
 def reach(condition: Condition, site: Site) -> tuple[str, str] | None:
     """`(fit, why)` when `condition` reaches `site`, else None. Code only."""
     if condition.status not in EXPOSING or condition.scope not in PLACED:
+        return None
+    if condition.status == "proposed" and condition.scope in _PROPOSALS_LISTED_ONLY:
         return None
     if site.phase not in _STAGES[condition.applies_to]:
         return None

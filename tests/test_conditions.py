@@ -348,6 +348,29 @@ def test_a_rule_lifted_or_for_the_whole_industry_reaches_nobody(session):
     assert got.dropped == 1 and not session.scalars(select(Exposure)).all()
 
 
+def test_a_bill_in_a_legislature_is_listed_and_a_towns_proposal_reaches(session):
+    """Election week held 29 Ohio rules, mostly bills in committee, and each flagged
+    every unbuilt Ohio project. A state's proposal is listed and reaches nobody; a
+    town's is a vote coming on the place a campus is in."""
+    ohio = _project(session, state="OH", city="Piqua", county="Miami", mw=300)
+    conditions.attach(
+        session,
+        _one(title="Ohio HB 999 data center tax bill", kind="law", channel="financing",
+             state="OH", status="proposed"),
+        {"rule": "a"}, _page(url="https://news.example/oh-bill"), now=NOW,
+    )  # fmt: skip
+    town, _ = conditions.attach(
+        session,
+        _one(title="Piqua moratorium vote", kind="moratorium", scope="place", state="OH",
+             place="Piqua", status="proposed", applies_to="unbuilt"),
+        {"rule": "b"}, _page(url="https://news.example/piqua-vote"), now=NOW,
+    )  # fmt: skip
+    conditions.rebuild(session, now=NOW)
+    assert [(e.condition_id, e.project_id) for e in session.scalars(select(Exposure))] == [
+        (town.id, ohio.id)
+    ]
+
+
 def test_first_seen_survives_a_rebuild(session):
     _project(session)
     conditions.attach(session, _one(), {"rule": "a"}, _page(), now=NOW)
@@ -411,6 +434,20 @@ def test_a_saved_page_is_read_once_and_its_rule_kept(session, tmp_path):
 
     again, _ = conditions.pages(session, since=NOW - dt.timedelta(days=1), cache_dir=cache)
     assert again == [], "a page read under this prompt is not paid for again"
+
+
+def test_the_pages_behind_a_status_are_read_again_whenever_read(session, tmp_path):
+    """ "Pledged" took in losing candidates' promises until the prompt said otherwise;
+    the pages behind every pledged rule are read again, however old."""
+    cache = tmp_path / "articles"
+    _saved(session, cache, "https://news.example/tx", "Texas. No rule words here.")
+    conditions.attach(session, _one(), {"rule": "a"}, _page(), now=NOW)
+    session.add(ConditionRead(url="https://news.example/tx", stamp=conditions.STAMP, read_at=NOW))
+    session.flush()
+    far = NOW + dt.timedelta(days=30)
+    items, _ = conditions.pages(session, since=far, cache_dir=cache, again=True, behind="pledged")
+    assert [p.url for p in items] == ["https://news.example/tx"]
+    assert conditions.pages(session, since=far, cache_dir=cache, behind="in_force")[0] == []
 
 
 def test_until_bounds_the_pages_to_a_past_day(session, tmp_path):
