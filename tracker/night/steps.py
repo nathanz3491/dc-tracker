@@ -1,11 +1,13 @@
 """The menu: every kind of step a night can run, and the fixed schedule built from it.
 
 A step is one `log.phase` line of the night and the `tracker` commands under it. The
-commands, their order and the phase lines are byte-for-byte what `Night.run_round`
-ran before steps existed, so a fixed night is the same night it always was — the
-tests that pin every command of a fixed night run unchanged. What the module docstring
-of `tracker.overnight` argues about each phase's place still holds; this module only
-makes each phase a value that something other than the fixed order can choose.
+commands, their order and the phase lines were byte-for-byte what `Night.run_round`
+ran before steps existed, and the tests that pin every command of a fixed night pin
+them still; what has changed since is changed there deliberately (2026-11-10: the rule
+reader after the news, and the free phase matching rules to campuses). What the module
+docstring of `tracker.overnight` argues about each phase's place still holds; this
+module only makes each phase a value that something other than the fixed order can
+choose.
 
 Each kind also carries what the director needs to choose it well and what the referee
 needs to stop it choosing badly: the unit its size is counted in, the range a size
@@ -67,10 +69,10 @@ class Kind:
     floor: int = 0
     #: Range for the article budget (enrich kinds only).
     budget_hi: int = 0
-    #: The count its result is read in: values, findings, groups, below, rows.
+    #: The count its result is read in: values, findings, groups, below, rows, rules.
     result: str = "values"
-    #: The director may choose it. The frame's steps (news, twins, free) are placed
-    #: by the referee, never by the director.
+    #: The director may choose it. The frame's steps (news, conditions, twins, free)
+    #: are placed by the referee, never by the director.
     choosable: bool = True
 
 
@@ -93,6 +95,24 @@ KINDS: Final[dict[str, Kind]] = {
             choosable=False,
         ),
         Kind(
+            "conditions",
+            "pages",
+            "rules that apply to a place (a state's permit pause, a town's ban, a grid "
+            "operator's large-load rule), read from pages the news saved in the last two "
+            "days: one model call per page a free word test says may state one. Right "
+            "after the news, once. Edits no campus's values; which campuses a rule "
+            "reaches is matched by code.",
+            paid=True,
+            ruling=False,
+            effort_env=JUDGEMENT_EFFORT,
+            once=True,
+            lo=0,
+            hi=300,
+            default=150,
+            result="rules",
+            choosable=False,
+        ),
+        Kind(
             "twins",
             "rows",
             "one fold attempt for each row created in the last three days, against its "
@@ -110,8 +130,8 @@ KINDS: Final[dict[str, Kind]] = {
         Kind(
             "free",
             "-",
-            "dates, Census places, scope re-gate, derive, mechanical logic repairs. No "
-            "model, no cost. Starts every round.",
+            "dates, Census places, scope re-gate, derive, which campuses each rule for a "
+            "place reaches, mechanical logic repairs. No model, no cost. Starts every round.",
             paid=False,
             ruling=False,
             result="values",
@@ -360,10 +380,12 @@ def label(step: Step, c: Context) -> str:
     n, k = step.size, step.kind
     if k == "news":
         return f"news — feeds and archives, the campus news watch, {n} queued article(s) read"
+    if k == "conditions":
+        return f"conditions — rules that apply to a place, in up to {n} saved page(s) the news read"
     if k == "twins":
         return f"duplicates — one attempt per row created in the last {TWIN_DAYS} day(s), {TWINS} at most"
     if k == "free":
-        return "free — dates, geo, scope, derive, logic --auto"
+        return "free — dates, geo, scope, derive, conditions match, logic --auto"
     if k == "duplicates":
         return f"duplicates — {n} pair(s)"
     if k == "audit":
@@ -420,6 +442,11 @@ def commands(step: Step, c: Context) -> list[Command]:
             ),
             Command(("ingest", "geo")),
         ]
+    if k == "conditions":
+        # Gated at the step, like every other paid step (`gate`), and inside the
+        # command too: `conditions read` asks the night's money ceiling before each
+        # wave of pages (`judged.run`) and says "spend ceiling reached" if it stops.
+        return [Command(("conditions", "read", "--limit", str(n)))]
     if k == "twins":
         if o.merge:
             return [
@@ -446,6 +473,10 @@ def commands(step: Step, c: Context) -> list[Command]:
         out += [
             Command(("backfill", "scope", "--apply")),
             Command(("backfill", "derive")),
+            # After derive, which settles each row's stage and county: a campus placed,
+            # merged or moved on since the last match is matched to the rules for its
+            # place now, not tomorrow. Code only, free.
+            Command(("conditions", "match")),
             Command(("logic", "resolve", "--auto", "--apply")),
         ]
         return out
@@ -544,13 +575,19 @@ def fixed_round(o: Any, number: int) -> list[Step]:
     """The fixed schedule's round `number`, step by step — `Night.run_round` as it was.
 
     The order is the argument the `tracker.overnight` docstring makes: the news first
-    (round 1), the free phase, duplicates ahead of every phase that pays to read a row,
-    audit, risks, logic, the suspects (round 1), tranches, the two enrich passes (the
-    first `enrich_rounds` rounds, `--fresh` after the first), then reread and recheck
-    (round 1).
+    (round 1), the rule reader right after it (round 1: it reads the pages the news
+    just saved), the twin pass, the free phase, duplicates ahead of every phase that
+    pays to read a row, audit, risks, logic, the suspects (round 1), tranches, the two
+    enrich passes (the first `enrich_rounds` rounds, `--fresh` after the first), then
+    reread and recheck (round 1).
+
+    The rule reader has its own switch (`--conditions`), not the news's: it reads the
+    pages saved over the last two days, so a night without discovery still has
+    yesterday's to read.
     """
     out: list[Step] = []
-    if o.do_discover and number == 1:
+    first = number == 1
+    if o.do_discover and first:
         out.append(
             Step(
                 "news",
@@ -561,6 +598,9 @@ def fixed_round(o: Any, number: int) -> list[Step]:
                 baselines=o.baselines,
             )
         )
+    if first and o.conditions > 0:
+        out.append(Step("conditions", size=o.conditions))
+    if o.do_discover and first:
         out.append(Step("twins", size=TWINS))
     out.append(Step("free"))
     out.append(Step("duplicates", size=o.pairs))
@@ -591,6 +631,7 @@ def defaults_per_night(o: Any) -> dict[str, int]:
     rounds = max(1, o.enrich_rounds)
     return {
         "news": o.discover,
+        "conditions": o.conditions,
         "twins": TWINS,
         "duplicates": o.pairs * 2,
         "audit": o.audit * 2,

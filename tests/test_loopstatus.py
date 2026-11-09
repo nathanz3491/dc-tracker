@@ -120,6 +120,7 @@ def test_cli_reads_the_log_beside_the_database(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert '"running": false' in result.output
     assert '"phase": null' in result.output
+    assert '"rules": null' in result.output, "a night before the rules has no line"
     result = CliRunner().invoke(app, ["loop"])
     assert result.exit_code == 0, result.output
     assert "nightly loop" in result.output
@@ -172,6 +173,28 @@ def test_a_directed_night_says_who_chose_and_why_it_handed_over():
     )
     assert len(night.referee) == 2 and night.referee[1].startswith("added audit 30")
     assert night.accuracy.startswith("answer key: 1 became right")
+
+
+def test_the_mornings_line_on_rules_for_a_place_is_read_and_shown():
+    """Pages read, rules kept (new), campuses newly affected: one plain line."""
+    morning = (
+        DIRECTED
+        + "[2026-11-06 19:30:00] overnight complete — 89m, ¥5.00 on models\n"
+        + "[2026-11-06 19:30:05] how the news came in\n"
+        + "[2026-11-06 19:30:09] rules that apply to a place\n"
+        + "    rules     38 saved page(s) read: 4 rule(s) kept (1 new); 23 project(s) newly affected\n"
+    )
+    nights = loopstatus.parse(line for line in io.StringIO(morning) if loopstatus.wanted(line))
+    night = nights[-1]
+    assert night.rules == (
+        "38 saved page(s) read: 4 rule(s) kept (1 new); 23 project(s) newly affected"
+    )
+    assert night.complete and night.stop is None, "the line ends nothing and stops nothing"
+    page = _draw(nights, loopstatus.Live(running=False), dt.datetime(2026, 11, 6, 20))
+    assert "rules for a place: 38 saved page(s) read: 4 rule(s) kept (1 new); 23" in page
+    assert "rules for a place" not in _draw(
+        _nights(), loopstatus.Live(running=False), dt.datetime(2026, 11, 3, 9)
+    ), "a night before the rules shows no such line"
 
 
 def test_a_director_that_stops_the_night_says_why():
