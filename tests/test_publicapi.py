@@ -568,7 +568,7 @@ def test_the_rule_endpoints_answer_over_http(api, db, key):
     status, _, one = call(address, f"/v1/conditions/{ids['piqua']}", key=key, host=API_HOST)
     assert status == 200 and one["data"]["place"] == "Piqua"
     status, _, gone = call(address, "/v1/conditions/999", key=key, host=API_HOST)
-    assert status == 404
+    assert status == 404 and gone["error"]["code"] == "not_found"
 
 
 def test_the_index_adds_the_rule_endpoints_and_keeps_every_other(api):
