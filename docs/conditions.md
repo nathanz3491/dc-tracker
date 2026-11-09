@@ -32,10 +32,18 @@ should reach every project in that place and stage, the day it is reported.
    any threshold's number is in them. A rule that fails is counted and dropped, never
    stored half-true.
 4. **One rule, however many articles.** The model's `same_as` (checked: it must be the
-   same place) or, failing that, the same place, need and kind. Status, summary and
+   same place) or, failing that, the same place, need and kind and a title about the
+   same thing (Aurora, Colorado had two zoning rules in one week). Status, summary and
    dates come from the newest article, so a pledge that becomes an order, and an order
    a court blocks, read as one history (`condition_source` holds each article's
    statement and sentences).
+
+**A rule can help as well as hinder** (`effect`, migration 0052): `restricts` for a
+ban, moratorium, pause, new cost or requirement; `eases` for a tax exemption, by-right
+zoning, a fast track, a law letting a large load build its own power. The first dry
+run kept Utah's self-generation law and an airport district's by-right zoning beside
+the moratoriums; shown as "exposed to", help reads as a threat. A rule the model does
+not class is taken to restrict.
 
 The article reader's own prompt is not touched. It is versioned and measured against
 the answer key; a second job inside it would move both.

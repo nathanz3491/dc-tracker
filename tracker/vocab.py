@@ -271,6 +271,10 @@ CONDITION_STATUSES: Final[tuple[str, ...]] = (
 #: every one that is not cancelled.
 CONDITION_APPLIES: Final[tuple[str, ...]] = ("new", "unbuilt", "all")
 
+#: Whether a rule makes building harder (a ban, a pause, a new cost) or easier (an
+#: exemption, by-right zoning). Migration 0052.
+CONDITION_EFFECTS: Final[tuple[str, ...]] = ("restricts", "eases")
+
 #: How sure the match of a condition to a project is. `likely` when the place or the
 #: grid region is inferred (a city name, a state that is mostly one grid operator) or
 #: the size threshold cannot be checked.

@@ -119,6 +119,7 @@ def test_an_offered_rule_is_normalised_and_a_malformed_one_says_why():
     )
     assert [r.state for r in rules] == ["TX"]
     assert rules[0].status == "in_force" and rules[0].kind == "executive_order"
+    assert rules[0].effect == "restricts", "an unclassed rule is taken to restrict"
     assert [t for t, _ in bad] == ["no place", "no such status"]
 
 
@@ -188,12 +189,31 @@ def test_a_threshold_must_be_stated_and_a_year_does_not_count():
 def test_two_readings_of_one_rule_are_one_condition(session):
     first, _ = conditions.attach(session, _one(), {"rule": "a"}, _page(days=2), now=NOW)
     second, new = conditions.attach(
-        session, _one(title="Texas freeze", summary="Later."), {"rule": "b"},
-        _page(url="https://news.example/tx2"), now=NOW,
+        session, _one(title="Texas pause on data center permits", summary="Later."),
+        {"rule": "b"}, _page(url="https://news.example/tx2"), now=NOW,
     )  # fmt: skip
     assert second.id == first.id and not new
     assert len(second.sources) == 2
     assert second.summary == "Later."
+
+
+def test_two_rules_of_one_kind_in_one_town_stay_two(session):
+    """Aurora, Colorado had a residential buffer and an airport district's by-right
+    zoning in one week: same town, same kind, same need, different rules."""
+    buffer, _ = conditions.attach(
+        session,
+        _one(title="Aurora, CO residential buffer for data centers", kind="zoning",
+             scope="place", state="CO", place="Aurora", status="proposed"),
+        {"rule": "a"}, _page(url="https://news.example/a1"), now=NOW,
+    )  # fmt: skip
+    airport, new = conditions.attach(
+        session,
+        _one(title="Aurora, CO Airport District use-by-right zoning", kind="zoning",
+             scope="place", state="CO", place="Aurora", status="in_force", effect="eases"),
+        {"rule": "b"}, _page(url="https://news.example/a2"), now=NOW,
+    )  # fmt: skip
+    assert new and airport.id != buffer.id
+    assert airport.effect == "eases" and buffer.effect == "restricts"
 
 
 def test_the_newest_article_sets_the_status(session):
@@ -379,7 +399,7 @@ def test_the_model_is_shown_the_rules_held_for_the_states_named(session, tmp_pat
     held, _ = conditions.attach(session, _one(), {"rule": "a"}, _page(), now=NOW)
     model = _Model({"rules": []})
     conditions.read(session, [_page(url="https://news.example/x")], extractor=model, now=NOW)
-    assert f"#{held.id} [TX, state, permitting, pledged]" in model.prompts[0]
+    assert f"#{held.id} [TX, state, permitting, pledged, restricts]" in model.prompts[0]
 
 
 def test_a_refused_rule_is_counted_and_not_stored(session):

@@ -76,6 +76,7 @@ from tracker.models import (
 from tracker.normalize import norm_state, state_name
 from tracker.vocab import (
     CONDITION_APPLIES,
+    CONDITION_EFFECTS,
     CONDITION_SCOPES,
     CONDITION_STATUSES,
     RISK_CATEGORIES,
@@ -292,6 +293,10 @@ For each rule return:
     + ", ".join(REGIONS)
     + """, for a grid_region rule
 - input: what is affected, for an input rule
+- effect: "restricts" if it makes building data centers harder (a ban, moratorium,
+  pause, new cost, condition or requirement) or "eases" if it makes it easier (a tax
+  exemption, by-right zoning, a fast-track permit, a law letting large loads build
+  their own power)
 - applies_to: "new" (projects not yet permitted), "unbuilt" (not yet running), or "all"
 - min_mw: the size threshold in megawatts, if the rule has one, else null
 - status: one of """
@@ -342,7 +347,11 @@ def known_rules(session: Session, text: str, *, limit: int = 40) -> list[Known]:
     out = []
     for c in list(rows)[:limit]:
         where = c.state or c.region or c.scope
-        out.append(Known(c.id, f"#{c.id} [{where}, {c.scope}, {c.channel}, {c.status}] {c.title}"))
+        out.append(
+            Known(
+                c.id, f"#{c.id} [{where}, {c.scope}, {c.channel}, {c.status}, {c.effect}] {c.title}"
+            )
+        )
     return out
 
 
@@ -381,6 +390,7 @@ class Rule:
     summary: str
     quotes: dict[str, str]
     same_as: int | None
+    effect: str = "restricts"
 
 
 def _text(value: Any, limit: int = 300) -> str:
@@ -462,6 +472,7 @@ def offered(payload: Any) -> tuple[list[Rule], list[tuple[str, str]]]:
             same_as = None
         applies = _text(item.get("applies_to"), 10).lower()
         kind = _text(item.get("kind"), 30).lower().replace(" ", "_")
+        effect = _text(item.get("effect"), 12).lower()
         rules.append(
             Rule(
                 title=title,
@@ -481,6 +492,9 @@ def offered(payload: Any) -> tuple[list[Rule], list[tuple[str, str]]]:
                 summary=_text(item.get("summary"), 300) or title,
                 quotes=quotes,
                 same_as=same_as,
+                # A rule the model did not class is taken to restrict: shown as a
+                # threat it is looked at, shown as help it would be passed over.
+                effect=effect if effect in CONDITION_EFFECTS else "restricts",
             )
         )
     return rules, bad
@@ -492,16 +506,22 @@ def offered(payload: Any) -> tuple[list[Rule], list[tuple[str, str]]]:
 _STATUS_WORDS: Final[dict[str, re.Pattern[str]]] = {
     status: re.compile(pattern, re.I)
     for status, pattern in {
+        # Widened after the second dry run, 2026-11-09, refused 30 of 106 rules on
+        # wording alone: "the county is working on an ordinance", "the bill died in
+        # committee", "data centers must limit noise" all state a status.
         "proposed": r"propos|introduc|petition|ballot|referend|consider|draft|seek|would|"
-        r"plan|calls? for|called for|push|question|vote on|weigh",
+        r"plan|calls? for|called for|push|question|vote on|weigh|working on|develop|"
+        r"discuss|stud(?:y|ies|ying)|review|hearing|could|may|explor|pending|weigh",
         "pledged": r"pledg|promis|vow|campaign|wants?|would|will|plan|calls? for|called for|"
         r"support|seek|intend|commit",
-        "passed": r"pass|approv|adopt|enact|sign|voted|ratif|amend",
+        "passed": r"pass|approv|adopt|enact|sign|voted|ratif|amend|unanimous|agreed",
         "in_force": r"in (?:effect|force|place)|took effect|takes effect|effective|order|paus|"
-        r"halt|froze|freez|ban|moratori|enact|approv|pass|imposed|bars?|prohibit",
+        r"halt|froze|freez|ban|moratori|enact|approv|pass|imposed|bars?|prohibit|requir|"
+        r"must|limits?|restrict|caps?|capped|allows?|exempt|grants?|under (?:the|a) ",
         "blocked": r"court|judge|block|enjoin|injunction|struck|overturn|invalid",
         "lifted": r"lift|repeal|rescind|expir|ended|ends|reversed|withdr|revok",
-        "rejected": r"reject|defeat|voted (?:down|against|no)|fail|turned down|denied|opposed",
+        "rejected": r"reject|defeat|voted (?:down|against|no)|fail|turned down|denied|opposed|"
+        r"did not pass|didn't pass|died|killed|veto|stalled|shelved|tabled|declined",
     }.items()
 }
 
@@ -630,6 +650,45 @@ def _rule_key(rule: Rule) -> str:
     )
 
 
+#: Words that say nothing about which rule a title names.
+_FILLER: Final = frozenset(
+    [
+        "a",
+        "an",
+        "and",
+        "the",
+        "of",
+        "on",
+        "for",
+        "in",
+        "to",
+        "by",
+        "at",
+        "with",
+        "from",
+        "new",
+        "data",
+        "center",
+        "centers",
+        "centre",
+        "centres",
+        "proposed",
+        "proposal",
+        "rule",
+        "rules",
+    ]
+)
+
+
+def similar(a: str, b: str, *, share: float = 0.34) -> bool:
+    """Whether two titles name the same rule: enough of their telling words shared."""
+    left = set(_fold(a).split()) - _FILLER
+    right = set(_fold(b).split()) - _FILLER
+    if not left or not right:
+        return False
+    return len(left & right) / len(left | right) >= share
+
+
 def _same_place(condition: Condition, rule: Rule) -> bool:
     return condition.match_key.split("|")[:2] == _rule_key(rule).split("|")[:2]
 
@@ -661,11 +720,21 @@ def attach(
         if candidate is not None and _same_place(candidate, rule):
             condition = candidate
     if condition is None:
-        condition = session.scalars(
-            select(Condition)
-            .where(Condition.match_key == key, Condition.kind == rule.kind)
-            .order_by(Condition.id)
-        ).first()
+        # Same place, need and kind is not enough on its own: Aurora, Colorado had a
+        # residential buffer and an airport district's by-right zoning in one week,
+        # both zoning, both permits. The titles have to be about the same thing too.
+        condition = next(
+            (
+                c
+                for c in session.scalars(
+                    select(Condition)
+                    .where(Condition.match_key == key, Condition.kind == rule.kind)
+                    .order_by(Condition.id)
+                )
+                if similar(c.title, rule.title)
+            ),
+            None,
+        )
     new = condition is None
     if condition is None:
         condition = Condition(
@@ -685,6 +754,7 @@ def attach(
             effective_on=rule.effective_on,
             ends_on=rule.ends_on,
             match_key=key,
+            effect=rule.effect,
             created_at=now,
             updated_at=now,
         )
@@ -711,6 +781,7 @@ def attach(
         # order, an order narrowed to new projects, a date set.
         condition.title, condition.kind = rule.title, rule.kind
         condition.applies_to, condition.min_mw = rule.applies_to, rule.min_mw
+        condition.effect = rule.effect
         condition.effective_on = rule.effective_on or condition.effective_on
         condition.ends_on = rule.ends_on or condition.ends_on
     settle(condition)
@@ -1064,6 +1135,7 @@ def as_json(condition: Condition, *, reach: int | None = None) -> dict[str, Any]
         "place": condition.place,
         "region": condition.region,
         "input": condition.input,
+        "effect": condition.effect,
         "applies_to": condition.applies_to,
         "min_mw": condition.min_mw,
         "status": condition.status,

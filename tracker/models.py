@@ -31,6 +31,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from tracker.vocab import (
     BLOCK_STATUSES,
     CONDITION_APPLIES,
+    CONDITION_EFFECTS,
     CONDITION_SCOPES,
     CONDITION_STATUSES,
     EVENT_TYPES,
@@ -1617,6 +1618,11 @@ class Condition(Base):
     match_key: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    #: `restricts` (a ban, a pause, a new cost) or `eases` (an exemption, by-right
+    #: zoning), migration 0052: a rule that helps must not read as a threat.
+    effect: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'restricts'"), default="restricts"
+    )
 
     sources: Mapped[list[ConditionSource]] = relationship(
         back_populates="condition", cascade="all, delete-orphan", passive_deletes=True
@@ -1626,6 +1632,7 @@ class Condition(Base):
         CheckConstraint(sql_in("scope", CONDITION_SCOPES), name="ck_condition_scope"),
         CheckConstraint(sql_in("status", CONDITION_STATUSES), name="ck_condition_status"),
         CheckConstraint(sql_in("applies_to", CONDITION_APPLIES), name="ck_condition_applies"),
+        CheckConstraint(sql_in("effect", CONDITION_EFFECTS), name="ck_condition_effect"),
         CheckConstraint(
             "state IS NULL OR (length(state) = 2 AND state = upper(state))",
             name="ck_condition_state",
