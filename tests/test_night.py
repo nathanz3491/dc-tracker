@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+from collections import Counter
 
 import pytest
 from typer.testing import CliRunner
@@ -99,6 +100,50 @@ def test_the_manual_names_every_kind_and_its_rules():
     for key in steps.KINDS:
         assert f"- {key}" in text
     assert "placed by the referee" in text and "night floor 20 pairs" in text
+    (line,) = [entry for entry in text.splitlines() if entry.startswith("- conditions")]
+    assert "[placed by the referee, not chosen]" in line
+    assert "size 0-300 pages" in line and "once a night" in line
+    assert "result read in rules" in line
+    assert "rules on published values" not in line, "it edits no campus's values"
+
+
+def test_the_rule_reader_reads_saved_pages_at_the_judgement_effort_behind_the_ceiling():
+    step = Step("conditions", size=150)
+    (command,) = steps.commands(step, _context())
+    assert command.args == ("conditions", "read", "--limit", "150")
+    assert steps.gate(step) == "conditions", "the money ceiling is asked before it runs"
+    assert steps.label(step, _context()) == (
+        "conditions — rules that apply to a place, in up to 150 saved page(s) the news read"
+    )
+    kind = steps.KINDS["conditions"]
+    assert (kind.paid, kind.ruling, kind.once, kind.choosable) == (True, False, True, False)
+    assert (kind.unit, kind.lo, kind.hi, kind.default, kind.result) == (
+        "pages", 0, 300, 150, "rules"
+    )  # fmt: skip
+    assert steps.env(Step("conditions", size=150, effort="max")) == {steps.JUDGEMENT_EFFORT: "max"}
+
+
+def test_the_free_phase_matches_the_rules_after_derive_every_round():
+    """Derive settles each row's stage and county; the match reads both."""
+    for number in (1, 2):
+        args = [c.args for c in steps.commands(Step("free"), _context(number))]
+        at = args.index(("conditions", "match"))
+        assert args[at - 1] == ("backfill", "derive")
+        assert args[at + 1] == ("logic", "resolve", "--auto", "--apply")
+    assert steps.label(Step("free"), _context()) == (
+        "free — dates, geo, scope, derive, conditions match, logic --auto"
+    )
+
+
+def test_the_fixed_schedule_reads_the_rules_in_round_one_right_after_the_news():
+    one = [s.kind for s in steps.fixed_round(_options(), 1)]
+    assert one[:4] == ["news", "conditions", "twins", "free"]
+    assert "conditions" not in [s.kind for s in steps.fixed_round(_options(), 2)]
+    assert [s.kind for s in steps.fixed_round(_options("--discover", "0"), 1)][:2] == [
+        "conditions", "free"
+    ]  # fmt: skip
+    assert "conditions" not in [s.kind for s in steps.fixed_round(_options("--conditions", "0"), 1)]
+    assert steps.defaults_per_night(_options("--conditions", "90"))["conditions"] == 90
 
 
 # --- the referee --------------------------------------------------------------------------
@@ -111,10 +156,44 @@ def _review(proposed, rules=None, tonight=None, first_round=False):
 
 
 def test_a_step_off_the_menu_or_from_the_frame_is_refused():
-    got = _review([Step("teleport", size=3), Step("news", size=100), Step("free")])
+    got = _review(
+        [
+            Step("teleport", size=3),
+            Step("news", size=100),
+            Step("conditions", size=300),
+            Step("free"),
+        ]
+    )
     assert got.steps == []
     assert any("not a step on the menu" in n for n in got.notes)
-    assert sum("the night places it" in n for n in got.notes) == 2
+    assert sum("the night places it" in n for n in got.notes) == 3
+    assert "conditions" not in director_mod.CHOOSABLE
+    step_names = director_mod.PLAN_SCHEMA["properties"]["steps"]["items"]["properties"]["step"]
+    assert "conditions" not in step_names["enum"], "the plan's schema does not offer it"
+
+
+def test_the_frame_places_the_rule_reader_right_after_the_news_in_round_one():
+    """It reads the pages the news step has just saved."""
+    notes: list[str] = []
+    one = referee.frame({"queue": 900}, _options(), 1, referee.Tonight(), notes)
+    assert [(s.kind, s.origin) for s in one] == [
+        ("news", "director"), ("conditions", "frame"), ("twins", "frame"), ("free", "frame"),
+    ]  # fmt: skip
+    assert one[0].size == 900 and one[1].size == 150
+    assert [s.kind for s in referee.frame(None, _options(), 2, referee.Tonight(), [])] == ["free"]
+    no_news = referee.frame(None, _options("--discover", "0"), 1, referee.Tonight(), [])
+    assert [s.kind for s in no_news] == ["conditions", "free"]
+    off = referee.frame(None, _options("--conditions", "0"), 1, referee.Tonight(), [])
+    assert [s.kind for s in off] == ["news", "twins", "free"]
+
+
+def test_the_frame_places_a_once_a_night_step_once():
+    tonight = referee.Tonight()
+    tonight.add(Step("conditions", size=150))
+    notes: list[str] = []
+    again = referee.frame(None, _options(), 1, tonight, notes)
+    assert [s.kind for s in again] == ["news", "twins", "free"]
+    assert notes == ["conditions: once a night, and it has run"]
 
 
 def test_sizes_are_clamped_and_a_zero_is_skipped():
@@ -293,6 +372,58 @@ def test_a_steps_result_is_signed_so_that_more_is_better():
     assert record_mod.result("below", before, after) == 3
     assert record_mod.result("values", before, after) == 12
     assert record_mod.result("values", None, after) is None
+    assert before.rules == 0 and before.exposed == 0, "records from before the rules"
+    read = Metrics(10, 5, 100, 500, 50, rules=12, exposed=300)
+    assert record_mod.result("rules", read, read._replace(rules=15, exposed=340)) == 3
+
+
+def _rules_db(tmp_path, migrated_copy):
+    """Two rules, one held before the night and one found tonight, each reaching a
+    campus; two pages read, one before the night."""
+    from tracker.db import make_engine, session_scope
+    from tracker.models import Condition, ConditionRead, ConditionSource, Exposure, Project
+
+    db = migrated_copy(tmp_path / "tracker.db")
+    before, tonight = dt.datetime(2026, 11, 9, 9, 0), dt.datetime(2026, 11, 10, 11, 0)
+    engine = make_engine(db)
+    with session_scope(engine) as s:
+        for i in (1, 2, 3):
+            s.add(Project(id=i, name=f"C{i}", company="Co", city="Abilene", state="TX",
+                          dedup_key=f"co|c{i}|TX", phase="announced"))  # fmt: skip
+        for cid, when in ((1, before), (2, tonight)):
+            s.add(Condition(id=cid, title=f"rule {cid}", kind="moratorium", channel="permitting",
+                            scope="state", state="TX", applies_to="new", status="in_force",
+                            summary="s", match_key=f"k{cid}", created_at=when, updated_at=when))  # fmt: skip
+            s.add(ConditionSource(condition_id=cid, url=f"https://news.example/{cid}",
+                                  read_at=when, status="in_force", summary="s", quotes="{}"))  # fmt: skip
+            s.add(ConditionRead(url=f"https://news.example/{cid}", stamp="conditions-1",
+                                read_at=when))  # fmt: skip
+        s.flush()
+        s.add(Exposure(condition_id=1, project_id=1, fit="exact", why="TX", first_seen=before))
+        s.add(Exposure(condition_id=2, project_id=1, fit="exact", why="TX", first_seen=tonight))
+        s.add(Exposure(condition_id=2, project_id=2, fit="exact", why="TX", first_seen=tonight))
+    engine.dispose()
+    return db
+
+
+def test_a_step_is_measured_in_the_rules_held_and_the_campuses_they_reach(tmp_path, migrated_copy):
+    db = _rules_db(tmp_path, migrated_copy)
+    got = record_mod.probe(db)
+    assert (got.rules, got.exposed, got.rows) == (2, 2, 3)
+
+
+def test_the_morning_counts_what_the_rule_reader_and_the_matching_did_tonight(
+    tmp_path, migrated_copy
+):
+    """Pages read and rules kept since the night began, the new ones, and the campuses
+    a rule reached for the first time — each once: #1 counts, since tonight's rule is
+    news to it though an older one already reached it, and #3 under none does not."""
+    db = _rules_db(tmp_path, migrated_copy)
+    got = record_mod.rules_tonight(db, dt.datetime(2026, 11, 10, 10, 0))
+    assert got == record_mod.RulesTonight(pages=1, kept=1, new=1, projects=2)
+    assert got.line() == (
+        "1 saved page(s) read: 1 rule(s) kept (1 new); 2 project(s) newly affected"
+    )
 
 
 def _record(night: str, kind: str, size: int, cny: float, result: int | None, **kw) -> StepRecord:
@@ -328,6 +459,7 @@ def test_past_nights_are_rebuilt_from_the_log_and_their_ledgers(tmp_path):
         "[2026-11-04 18:01:08] overnight starting  (pid 1)\n"
         "[2026-11-04 18:01:17] round 1 of 20  (¥0.00, ~0 tokens, 599m left)\n"
         "--- 18:01:17  news — feeds and archives, the campus news watch, 1350 queued article(s) read\n"
+        "--- 18:20:00  conditions — rules that apply to a place, in up to 150 saved page(s) the news read\n"
         "--- 18:28:31  duplicates — one attempt per row created in the last 3 day(s), 60 at most\n"
         "--- 18:38:21  audit — implausible figures, 60 at a time\n"
         "--- 23:59:00  enrich — 75 row(s) below T2, 300 article budget\n"
@@ -344,11 +476,12 @@ def test_past_nights_are_rebuilt_from_the_log_and_their_ledgers(tmp_path):
     got = record_mod.backfill(log, tmp_path, tz)
     assert [(r.kind, r.size, r.round) for r in got] == [
         ("news", 1350, 1),
+        ("conditions", 150, 1),
         ("twins", 60, 1),
         ("audit", 60, 1),
         ("enrich", 75, 1),
     ]
-    news, _twins, audit, enrich = got
+    news, _conditions, _twins, audit, enrich = got
     assert news.searches == 1 and audit.cny > 0 and enrich.searches == 1
     assert enrich.minutes == pytest.approx(11.0), "past midnight, the day rolls over"
     assert all(r.result is None and r.origin == "backfill" for r in got)
@@ -552,6 +685,7 @@ def test_a_replayed_night_runs_its_recorded_steps_round_by_round(tmp_path):
     plan_file.write(
         "step", round=1, step=Step("news", size=900, searches=800, baselines=100).as_json()
     )
+    plan_file.write("step", round=1, step=Step("conditions", size=150, origin="frame").as_json())
     plan_file.write("step", round=1, step=Step("free", origin="frame").as_json())
     plan_file.write("step", round=1, step=Step("audit", size=30, origin="director").as_json())
     plan_file.write("step", round=2, step=Step("logic", size=10, origin="floor").as_json())
@@ -658,6 +792,36 @@ def test_the_briefing_and_lookups_read_the_database_and_keep_names_as_data(tmp_p
         "price_history",
         "night_so_far",
     }
+
+
+def test_the_director_is_told_what_the_night_places_and_what_it_costs():
+    """The frame spends from the director's ceiling before its first step: the rule
+    reader alone is up to 150 calls."""
+    from tracker.night import briefing
+
+    records = [
+        _record("20261110-180100", "conditions", 100, 1.0, 2),
+        _record("20261110-180100", "news", 1000, 8.0, 40),
+    ]
+    text = briefing.placed_text(_options(), record_mod.prices(records))
+    assert text.splitlines() == [
+        "- round 1: news, 1350 articles; about ¥10.80 at that size (¥0.0080 each)",
+        "- round 1: conditions, 150 pages; about ¥1.50 at that size (¥0.0100 each)",
+        "- round 1: twins, 60 rows; not yet priced by the record",
+        "- every round, first: free (no model, no cost)",
+    ]
+    assert "conditions" not in briefing.placed_text(_options("--conditions", "0"), {})
+    told = briefing.briefing(
+        state=briefing.State([], Counter(), {}, Counter(), 0, 0, 0, 0), prices={},
+        limits="x", conditions=[], note="", mode="m", last_nights=[], placed=text,
+    )  # fmt: skip
+    assert "=== PLACED BY THE NIGHT (not yours to choose; paid from the same ceiling) ===" in told
+    night = [
+        _record("20261110-180100", "news", 1, 0.0, 0, before={"rules": 10}, after={"rules": 10}),
+        _record("20261110-180100", "conditions", 1, 0.0, 2, before={"rules": 10},
+                after={"rules": 12}),
+    ]  # fmt: skip
+    assert briefing.last_nights(night)[0].endswith("rules 10->12")
 
 
 # --- the accuracy check -------------------------------------------------------------------

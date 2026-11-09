@@ -7,9 +7,13 @@ here, and nothing here reads what the director wrote except the fields of a step
 
 The rules, and why each exists (the brainstorm of 2026-11-05 has the edge cases):
 
-* **The menu only.** Unknown kinds and the frame's steps (news, twins, free) are
-  refused: the frame is placed by the night, never chosen.
-* **Once a night** for the news, the suspects, reread and recheck.
+* **The menu only.** Unknown kinds and the frame's steps (news, conditions, twins,
+  free) are refused: the frame is placed by the night (:func:`frame`), never chosen.
+* **The frame.** Round 1 starts with the news, the rule reader right after it (it
+  reads the pages the news just saved), and the twin pass; every round starts with
+  the free phase. The director sizes the news and nothing else of it.
+* **Once a night** for the news, the rule reader, the twins, the suspects, reread and
+  recheck — a frame step already run is not placed again either.
 * **Ranges.** Every size and article budget is clamped to its kind's range.
 * **Drift.** A kind's units across the night may not pass one and a half times what
   fixed nights ask of it (the median of the record's fixed nights, or today's
@@ -49,6 +53,7 @@ from tracker.night.steps import (
     SELECTING,
     Step,
     defaults_per_night,
+    fixed_round,
 )
 
 #: How far a kind's night may pass its baseline.
@@ -388,6 +393,39 @@ def news_step(proposal: dict[str, Any] | None, options: Any, fixed: Step, notes:
     return out
 
 
+def frame(
+    news: dict[str, Any] | None,
+    options: Any,
+    number: int,
+    tonight: Tonight,
+    notes: list[str],
+) -> list[Step]:
+    """The steps the night itself places at the start of round `number`, in order.
+
+    Round 1: the news (with the director's searches and sizes, :func:`news_step`), the
+    rule reader right after it — it reads the pages the news step has just saved, and
+    one that ran before the news would read only yesterday's — then the twin pass.
+    Every round: the free phase. Each is the fixed schedule's own step, so a directed
+    night and a fixed one place the same frame; a once-a-night step that has already
+    run tonight is not placed again.
+    """
+    out: list[Step] = []
+    if number == 1:
+        for fixed in fixed_round(options, 1):
+            kind = KINDS[fixed.kind]
+            if kind.choosable:
+                continue
+            if kind.once and tonight.totals.get(fixed.kind, 0) > 0:
+                notes.append(f"{fixed.kind}: once a night, and it has run")
+                continue
+            if fixed.kind == "news":
+                out.append(news_step(news, options, fixed, notes))
+            elif fixed.kind != "free":
+                out.append(dataclasses.replace(fixed, origin="frame"))
+    out.append(Step("free", origin="frame"))
+    return out
+
+
 __all__ = [
     "ARTICLES_PER_ROW",
     "DRIFT",
@@ -399,6 +437,7 @@ __all__ = [
     "Tonight",
     "Verdict",
     "allowance",
+    "frame",
     "news_step",
     "order",
     "review",

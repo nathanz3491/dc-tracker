@@ -540,6 +540,13 @@ def sync() -> Canvas:
     )
     c.arrow([queue.right(), (520, 642)], label="extract", label_dy=-6)
 
+    rules = c.box(
+        520, 744, 206, 110, "Rules for a place",
+        ["nightly, right after the news:", "saved pages that may state a", "state's pause or a town's ban,", "one model call each (150 a night)", "edits no campus; which campuses", "a rule reaches: code, every round"],
+        role="orange", title_size=11.5,
+    )
+    c.arrow([(queue.x + queue.w, rules.cy), rules.left()], colour=ORANGE, dashed=True)
+
     rows = c.box(776, 560, 190, 76, "New rows", ["with their citations, parties", "and a confidence score"], role="cool2")
     routed = c.box(776, 656, 190, 68, "Routed instead", ["citations land on the row", "we already had"], role="teal")
     c.arrow([gate.right(-34), (776, 598)])

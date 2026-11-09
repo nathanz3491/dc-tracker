@@ -285,7 +285,13 @@ has a balance, comes back with its pages ([how](docs/workflows/sync.md#a-publish
 published within the email's two-month window goes first, newest first, so what the
 email reports is days old rather than weeks; then articles naming no tracked campus.
 Enrich reads for one row and creates none, so without this step nothing in the loop
-added a campus. The first round also asks publishers for the dates of up to 150
+added a campus. Right after it, the first round reads the saved pages that may state a
+rule for a place rather than one campus — a state's permit pause, a town's ban — one
+model call each (`--conditions`, default 150, `0` to skip; [conditions](docs/conditions.md)).
+Which campuses each rule reaches is matched by code, free, in every round's free phase
+and once more before the morning report, whose line on it says how many pages were
+read, how many rules kept (and new), and how many campuses a rule newly reaches.
+The first round also asks publishers for the dates of up to 150
 undated articles (`--dates`; one plain request each, newest first, never the same page
 twice in 90 days) and SEC for the filing date of every undated filing, which no page
 states (one request a company, outside that 150), and re-reads up to 180 cached articles

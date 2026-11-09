@@ -15,14 +15,16 @@ So every step the night runs — fixed or directed — appends one record to
 * **time** and the **exit status** of each command — a phase that crashed is not a
   phase that found nothing, and a director told only "nothing" would stop running it;
 * **counts before and after** (:class:`Metrics`): the loop's three, plus the stored
-  values and the rows. A step's *result* is the change in the count its kind is read
-  in (`steps.Kind.result`), signed so that more is better;
+  values, the rows, the rules for a place held and the campuses they reach. A step's
+  *result* is the change in the count its kind is read in (`steps.Kind.result`),
+  signed so that more is better;
 * the director's **prediction**, when there was one, so predicted and actual sit on
   one line.
 
 :func:`prices` turns the last fourteen nights of records into the price list the
 director is briefed with. :func:`backfill` rebuilds cost and time (not results) for
 nights before the record existed, from `overnight.log` and the nights' ledgers.
+:func:`rules_tonight` counts the morning report's line on rules for a place.
 """
 
 from __future__ import annotations
@@ -55,6 +57,12 @@ class Metrics(NamedTuple):
     #: that empties one lowers it. A field marked "searched, nothing found" does not.
     values: int
     rows: int
+    #: Rules for a place held (`tracker.conditions`), and the campuses at least one
+    #: of them reaches. The rule reader's result is read in the first; neither is a
+    #: campus's value, so neither moves the three above. Records written before
+    #: 2026-11-10 lack both.
+    rules: int = 0
+    exposed: int = 0
 
 
 #: Which way is better, per count.
@@ -62,11 +70,11 @@ BETTER_LOWER: Final = frozenset({"findings", "groups", "below"})
 
 
 def probe(db_path: Path) -> Metrics:
-    """The counts, from a fresh read-only session: the loop's three and two more."""
-    from sqlalchemy import case, func, literal, select
+    """The counts, from a fresh read-only session: the loop's three and four more."""
+    from sqlalchemy import case, distinct, func, literal, select
 
     from tracker.db import open_db, session_scope
-    from tracker.models import Project
+    from tracker.models import Condition, Exposure, Project
     from tracker.quality import night_counts
     from tracker.vocab import TRACKED_FIELDS
 
@@ -81,7 +89,78 @@ def probe(db_path: Path) -> Metrics:
             values, rows = session.execute(
                 select(func.coalesce(func.sum(filled), 0), func.count(Project.id))
             ).one()
-            return Metrics(three.findings, three.groups, three.below_t2, int(values), int(rows))
+            rules = session.scalar(select(func.count(Condition.id)))
+            exposed = session.scalar(select(func.count(distinct(Exposure.project_id))))
+            return Metrics(
+                three.findings,
+                three.groups,
+                three.below_t2,
+                int(values),
+                int(rows),
+                int(rules or 0),
+                int(exposed or 0),
+            )
+    finally:
+        engine.dispose()
+
+
+class RulesTonight(NamedTuple):
+    """What the rule reader and the matching did tonight, counted from the database."""
+
+    #: Saved pages put to the model.
+    pages: int
+    #: Rules kept from them, one per page that states each, and how many are new.
+    kept: int
+    new: int
+    #: Campuses a rule reached tonight that it did not reach before.
+    projects: int
+
+    def line(self) -> str:
+        return (
+            f"{self.pages} saved page(s) read: {self.kept} rule(s) kept ({self.new} new); "
+            f"{self.projects} project(s) newly affected"
+        )
+
+
+def rules_tonight(db_path: Path, since: dt.datetime) -> RulesTonight:
+    """The morning report's line on rules for a place, since `since` (naive UTC).
+
+    From the database rather than the reader's own output, so a campus the free phase
+    matched later in the night — placed, merged or moved to another stage — counts
+    too, and a reader that crashed halfway still reports what it committed.
+    """
+    from sqlalchemy import distinct, func, select
+
+    from tracker.db import open_db, session_scope
+    from tracker.models import Condition, ConditionRead, ConditionSource, Exposure
+
+    engine = open_db(db_path)
+    try:
+        with session_scope(engine, commit=False) as session:
+
+            def count(query: Any) -> int:
+                return int(session.scalar(query) or 0)
+
+            return RulesTonight(
+                pages=count(
+                    select(func.count())
+                    .select_from(ConditionRead)
+                    .where(ConditionRead.read_at >= since)
+                ),
+                kept=count(
+                    select(func.count())
+                    .select_from(ConditionSource)
+                    .where(ConditionSource.read_at >= since)
+                ),
+                new=count(
+                    select(func.count()).select_from(Condition).where(Condition.created_at >= since)
+                ),
+                projects=count(
+                    select(func.count(distinct(Exposure.project_id))).where(
+                        Exposure.first_seen >= since
+                    )
+                ),
+            )
     finally:
         engine.dispose()
 
@@ -331,6 +410,7 @@ def per_night(records: Sequence[StepRecord], mode: str | None = "fixed") -> dict
 #: The phase lines a fixed night printed, and the kind and size each names.
 _PHASES: Final = (
     (re.compile(r"^news — .*?, (\d+) queued article"), "news"),
+    (re.compile(r"^conditions — rules that apply to a place, in up to (\d+)"), "conditions"),
     (re.compile(r"^duplicates — one attempt per row created"), "twins"),
     (re.compile(r"^free — "), "free"),
     (re.compile(r"^duplicates — (\d+) pair"), "duplicates"),
@@ -346,6 +426,7 @@ _PHASES: Final = (
     (re.compile(r"^recheck — (\d+) article"), "recheck"),
     (re.compile(r"^settle — "), ""),
     (re.compile(r"^losses — "), ""),
+    (re.compile(r"^match — "), ""),
 )
 _STAMPED: Final = re.compile(r"^\[(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)\] (.*)$")
 _PHASE: Final = re.compile(r"^--- (\d\d:\d\d:\d\d)  (.*)$")
@@ -467,6 +548,7 @@ __all__ = [
     "Cost",
     "Metrics",
     "Price",
+    "RulesTonight",
     "StepRecord",
     "append",
     "backfill",
@@ -479,4 +561,5 @@ __all__ = [
     "read",
     "recent",
     "result",
+    "rules_tonight",
 ]
