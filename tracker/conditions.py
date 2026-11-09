@@ -877,7 +877,7 @@ def merge_into(session: Session, keeper: Condition, other: Condition) -> None:
     held = {s.url for s in keeper.sources}
     for source in list(other.sources):
         if source.url in held:
-            session.delete(source)
+            other.sources.remove(source)  # an orphan now: deleted at the flush
         else:
             source.condition = keeper
             held.add(source.url)
