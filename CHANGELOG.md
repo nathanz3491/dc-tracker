@@ -25,6 +25,30 @@ initial build of the v1 PRD.
   because no project has a site coordinate and grid regions are inferred from the
   state. Whole-industry rules flag no project. Kept apart from obstacles, so no count
   or answer moves (`tracker/conditions.py`, migration 0051, `docs/conditions.md`).
+  Each rule says whether it **restricts** building or **eases** it (migration 0052):
+  the first dry run kept Utah's self-generation law and an equipment tax exemption
+  beside the moratoriums, and help shown as a threat misleads.
+- **The nightly loop reads those rules every night.** Right after the news step, up to
+  150 of the pages it just saved, one model call each, inside the night's money
+  ceiling (`--conditions`, `0` to skip); every round re-matches rules to campuses for
+  free, and once more after the last round, so a campus merged or moved to another
+  stage is under the right rules by morning. The morning report and `tracker loop` give
+  one line: pages read, rules kept and new, campuses newly affected.
+- **The console shows them, never as obstacles.** A project page has an **Exposed to**
+  section — the rule, where it applies, where it stands, exact or likely, what would
+  clear it, the articles behind it — and **Helped by** for rules that ease building.
+  Monitor lists each rule reaching your projects once and never counts a project
+  blocked because of one. A new **Rules** view lists them by state, with nationwide and
+  whole-industry rules apart as market context.
+- **Readers hear of them.** The morning email carries one card per rule per status for
+  a reader whose projects it reaches ("Texas: pause on new data center permits —
+  pledged — 31 of your projects"), a "cleared" card once when a rule they were told of
+  is lifted or voted down, and easing rules under their own heading. The public API
+  answers `/v1/conditions` and `/v1/conditions/{id}`, with each article's own sentences
+  and every campus a rule reaches and why (additive; no existing shape changed). The
+  news watch searches each rule not yet settled every three days, at most 20 a night,
+  out of the same search allowance (migration 0053), so a pledge that became an order
+  does not wait for a campus story to mention it.
 
 ### Changed
 

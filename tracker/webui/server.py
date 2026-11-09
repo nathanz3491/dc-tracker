@@ -1136,6 +1136,10 @@ class Handler(BaseHTTPRequestHandler):
                 answer = {"data": publicapi.company(session, parts[1], prefix, tally=tally)}
             elif parts == ("updates",):
                 answer = publicapi.updates(session, req)
+            elif parts == ("conditions",):
+                answer = publicapi.conditions_list(session, req)
+            elif len(parts) == 2 and parts[0] == "conditions":
+                answer = {"data": publicapi.condition_detail(session, parts[1], prefix)}
             else:
                 raise publicapi.ApiError(
                     404, "not_found", f"no endpoint {prefix}/{'/'.join(parts)}"

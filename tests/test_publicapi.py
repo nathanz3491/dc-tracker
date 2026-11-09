@@ -133,7 +133,15 @@ def test_the_index_and_health_need_no_key(api):
 
 def test_everything_else_needs_a_key(api, key):
     address, _ = api
-    for path in ("/v1/me", "/v1/projects", "/v1/projects/1", "/v1/capex", "/v1/updates"):
+    for path in (
+        "/v1/me",
+        "/v1/projects",
+        "/v1/projects/1",
+        "/v1/capex",
+        "/v1/updates",
+        "/v1/conditions",
+        "/v1/conditions/1",
+    ):
         status, _, body = call(address, path, host=API_HOST)
         assert status == 401 and body["error"]["code"] == "key_required", path
     status, _, body = call(address, "/v1/projects", key=key[:-1] + "x", host=API_HOST)
@@ -550,6 +558,17 @@ def test_a_missing_or_malformed_rule_id_says_so(db):
     with pytest.raises(publicapi.ApiError) as raised:
         _ask(db, publicapi.condition_detail, "999", "/v1")
     assert raised.value.status == 404 and "dropped" in raised.value.message
+
+
+def test_the_rule_endpoints_answer_over_http(api, db, key):
+    ids = _rules(db)
+    address, _ = api
+    status, _, listed = call(address, "/v1/conditions?state=WI", key=key, host=API_HOST)
+    assert status == 200 and [r["id"] for r in listed["data"]] == [ids["wisconsin"]]
+    status, _, one = call(address, f"/v1/conditions/{ids['piqua']}", key=key, host=API_HOST)
+    assert status == 200 and one["data"]["place"] == "Piqua"
+    status, _, gone = call(address, "/v1/conditions/999", key=key, host=API_HOST)
+    assert status == 404
 
 
 def test_the_index_adds_the_rule_endpoints_and_keeps_every_other(api):
