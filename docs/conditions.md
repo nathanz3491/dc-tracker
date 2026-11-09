@@ -90,6 +90,22 @@ project. Flagging every row says nothing a reader can act on, so these are liste
 market context, and a campus hears of them when an article about that campus does
 ("transformer delivery slipped to 2028").
 
+## Who hears of it
+
+- **The console**: a project's page lists the rules reaching it under **Exposed to**
+  (restricting) and **Helped by** (easing), apart from its obstacles; Monitor says what
+  would clear each; the **Rules** view lists them all, with a market section for the
+  nationwide and whole-industry ones.
+- **The morning email**: one card per rule per status for a reader whose watchlist it
+  reaches ("Texas: pause on new data center permits — pledged — 31 of your projects"),
+  a "cleared" card once when a rule they were told of is lifted or voted down, and
+  easing rules under their own heading (`tracker/notify.py`).
+- **The public API**: `/v1/conditions` and `/v1/conditions/{id}`, with each article's
+  own sentences and every project a rule reaches, its fit and why.
+- **Follow-up searches**: a rule not yet settled is searched for by the news watch
+  every three days, at most 20 a night (`tracker news --rules`), so a pledge that became
+  an order is read without waiting for a campus story to mention it.
+
 ## Commands
 
 ```bash
