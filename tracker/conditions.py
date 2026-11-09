@@ -164,6 +164,11 @@ ARTICLE_CHARS: Final = 24_000
 #: last two nights, so a night that did not run is caught up.
 DEFAULT_DAYS: Final = 2
 
+#: Room for the reasoning and the answer. At 4,096 the first dry run lost 18 of 40
+#: replies inside the reasoning; a reply that still runs out is asked again with
+#: reasoning off (:func:`read`).
+MAX_TOKENS: Final = 12_000
+
 # --- which pages are worth a call ---------------------------------------------
 
 #: Words a rule is stated in. Three of them, a word for a jurisdiction, and data
@@ -523,6 +528,14 @@ def _fold(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
 
 
+def _sentences(article: str) -> Iterable[str]:
+    """The article's sentences of a readable length, in order."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", article[:ARTICLE_CHARS]):
+        sentence = sentence.strip()
+        if 20 <= len(sentence) <= 400:
+            yield sentence
+
+
 def _names(words: Iterable[str], text: str) -> bool:
     """Whether the folded `text` contains one of `words` as whole words."""
     said = f" {_fold(text)} "
@@ -562,7 +575,13 @@ def gate(rule: Rule, article: str, *, title: str = "") -> tuple[dict[str, str], 
     sentences = " ".join(kept.values())
     words = _place_words(rule)
     if words and not _names(words, f"{sentences} {title}"):
-        return {}, f"neither the sentences nor the headline name {words[0]}"
+        # "She wants a halt to new projects" is the rule; the article names the state
+        # elsewhere. That sentence, the article's own, is kept as the place's.
+        named = next((s for s in _sentences(article) if _names(words, s)), "")
+        if not named:
+            return {}, f"the article never names {words[0]}"
+        kept["place"] = named
+        sentences = " ".join(kept.values())
     if rule.min_mw is not None and not _states_number(rule.min_mw, sentences):
         return {}, f"no sentence states the {rule.min_mw:g} MW threshold"
     return kept, ""
@@ -738,7 +757,7 @@ def read(
     wave and every page's answer is committed as it lands.
     """
     from tracker import judged
-    from tracker.llm import LLMJsonError, parse_json_object
+    from tracker.llm import LLMJsonError, parse_json_object, without_thinking
 
     now = now or utcnow()
 
@@ -746,7 +765,19 @@ def read(
         return _Asked(page, question(page, known_rules(session, page.text)))
 
     def ask(asked: _Asked, _db: Session | None) -> Any:
-        return extractor.complete(system=SYSTEM, user=asked.user, max_tokens=4096)
+        reply = extractor.complete(system=SYSTEM, user=asked.user, max_tokens=MAX_TOKENS)
+        try:
+            parse_json_object(reply.text)
+            return reply
+        except (LLMJsonError, ValueError):
+            pass
+        # The first dry run, 2026-11-09: 18 of 40 replies spent the whole budget
+        # reasoning and never wrote the answer. With reasoning off the reply is the
+        # JSON, as on the article reader's retry (`llm.without_thinking`).
+        quiet = without_thinking(extractor)
+        if quiet is None:
+            return reply
+        return quiet.complete(system=SYSTEM, user=asked.user, max_tokens=MAX_TOKENS)
 
     def apply(page: Page, _asked: _Asked, reply: Any) -> judged.Done:
         result = Read(page.url, page.title)

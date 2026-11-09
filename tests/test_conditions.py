@@ -151,9 +151,13 @@ def test_the_place_must_be_named_in_the_sentences_or_the_headline():
     text = "She wants a pause on new data center permits until rules are written."
     rule = _one(quotes={"rule": text, "status": text})
     _, refusal = conditions.gate(rule, text, title="Governor-elect's first week")
-    assert "name Texas" in refusal
+    assert "never names Texas" in refusal
     kept, refusal = conditions.gate(rule, text, title="Texas governor-elect's first week")
     assert kept and not refusal
+    # Named elsewhere in the article: that sentence is kept as the place's.
+    longer = "Voters in Texas elected a new governor on Tuesday. " + text
+    kept, refusal = conditions.gate(rule, longer, title="Governor-elect's first week")
+    assert not refusal and kept["place"] == "Voters in Texas elected a new governor on Tuesday."
 
 
 def test_a_threshold_must_be_stated_and_a_year_does_not_count():
