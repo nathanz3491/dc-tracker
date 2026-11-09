@@ -1689,6 +1689,14 @@ def news(
             "as a company: for a campus somewhere the database holds nothing.",
         ),
     ] = True,
+    rules: Annotated[
+        int,
+        typer.Option(
+            "--rules",
+            help="Rules not yet settled (proposed, pledged, passed, blocked) to search for "
+            "word of, most overdue first, out of --max-queries. 0 to skip.",
+        ),
+    ] = 20,
 ) -> None:
     """Search the news for every campus that is due, and queue what is new.
 
@@ -1720,26 +1728,44 @@ def news(
     one with three or more campuses here weekly, a watched one daily, for news since
     its last search -- the route to a campus the database holds nothing about, which
     no campus search can find. Its results are queued as `watch:company:<key>`.
+
+    **First of all, each rule not yet settled is searched for word of where it
+    stands** (`--rules`, 20 by default, 0 to skip): a state's pledged permit pause, a
+    town's proposed ban, an order a judge blocked -- one news search for its place
+    and kind, three days after the last word of it, out of `--max-queries`. A rule
+    is read from the pages the news step happens to fetch, so without this a pledge
+    that became an order waited for some campus story to mention it. Results are
+    queued as `watch:condition:<id>`; the crawl reads and saves them, and
+    `tracker conditions read` reads the saved pages.
     """
     if ctx.invoked_subcommand:
         return
     from tracker.ingest import watch as watch_mod
 
     engine, _ = init_db(_db_path())
+    spent = 0
+    if rules > 0 and not project:
+        with session_scope(engine) as session:
+            rule_report = watch_mod.run_conditions(session, limit=rules, max_queries=max_queries)
+        spent = rule_report.queries
+        _print_report_rows(rule_report.as_rows(), title="rule watch", warn={"searches failed"})
+        if rule_report.stopped:
+            err.print(f"[yellow]rule searches stopped early:[/yellow] {rule_report.stopped}")
     with session_scope(engine) as session:
         report = watch_mod.run(
             session,
             followups=followups,
             baselines=None if every else baselines,
             golive=golive,
-            max_queries=max_queries,
+            max_queries=None if max_queries is None else max(0, max_queries - spent),
             project_ids=project or None,
         )
+    spent += report.queries
     _print_report_rows(report.as_rows(), title="news watch", warn={"searches failed"})
     if report.stopped:
         err.print(f"[yellow]stopped early:[/yellow] {report.stopped}")
     if companies and not project and not report.stopped:
-        left = None if max_queries is None else max(0, max_queries - report.queries)
+        left = None if max_queries is None else max(0, max_queries - spent)
         with session_scope(engine) as session:
             company_report = watch_mod.run_companies(session, max_queries=left)
         _print_report_rows(

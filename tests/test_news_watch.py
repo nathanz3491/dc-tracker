@@ -31,7 +31,16 @@ from tracker.ingest.discover import (
 )
 from tracker.ingest.fetch import FetchResult
 from tracker.ingest.search import QuotaExhausted, SearchHit
-from tracker.models import CompanyWatch, IngestUrl, NewsWatch, Project, SeenUrl, Source, Watch
+from tracker.models import (
+    CompanyWatch,
+    Condition,
+    IngestUrl,
+    NewsWatch,
+    Project,
+    SeenUrl,
+    Source,
+    Watch,
+)
 from tracker.vocab import PENDING_URL_STATUS
 
 NOW = dt.datetime(2026, 10, 18, 10, 0)
@@ -1164,3 +1173,155 @@ def test_what_could_settle_a_late_flag_is_read_before_anything_else(session, mon
         assert urls[:2] == ["https://a.test/opened", "https://a.test/undated"], order
         assert len(urls) == len(set(urls)) == 5, "read once, not twice"
     assert [r.url for r in discover.pending(session, limit=1)] == ["https://a.test/opened"]
+
+
+# --- rules not yet settled ---------------------------------------------------------------
+
+
+def _rule(session, n: int = 1, *, status="pledged", reported_days=4, checked=None, **kw):
+    """A rule as `tracker conditions read` keeps it, last reported `reported_days` ago."""
+    row = Condition(
+        title=kw.pop("title", f"Texas data center moratorium {n}"),
+        kind=kw.pop("kind", "moratorium"),
+        channel="permitting",
+        scope=kw.pop("scope", "state"),
+        state=kw.pop("state", "TX"),
+        status=status,
+        summary="A pause on new data centers.",
+        match_key=f"rule-{n}",
+        last_reported=NOW.date() - dt.timedelta(days=reported_days),
+        checked_at=checked,
+        created_at=NOW - dt.timedelta(days=30),
+        updated_at=NOW - dt.timedelta(days=30),
+        **kw,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _rule_feeds(session) -> Path:
+    """A filter that keeps a headline about a rule, as the real one does."""
+    path = Path(session.get_bind().url.database).with_name("rule-feeds.toml")
+    path.write_text(
+        '[[feed]]\nname = "f"\nurl = "https://f.test/rss"\n\n'
+        '[filter]\ntopic = ["data cent*"]\nsignal = ["plans"]\n'
+        'risk_signal = ["moratori*", "ban*", "pause*"]\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_rule_not_yet_settled_is_searched_by_its_place_and_kind(session):
+    """A pledge that became an order waited for a campus story to mention it, while
+    every Texas project was flagged under the pledge."""
+    pledge = _rule(session, 1)
+    _rule(session, 2, status="in_force", title="Texas order")
+    _rule(session, 3, status="lifted", title="Texas lifted")
+    provider = FakeNews(
+        news=[
+            _hit("https://news.test/tx-order", "Texas governor orders data center moratorium"),
+            _hit("https://news.test/oh-ban", "Ohio town passes data center ban"),
+            _hit("https://news.test/tx-rodeo", "Texas rodeo draws record crowd"),
+        ]
+    )
+
+    report = watch.run_conditions(
+        session, provider=provider, now=NOW, feeds_path=_rule_feeds(session)
+    )
+
+    assert report.due == 1, "a rule in force or lifted is settled: not searched"
+    assert provider.calls == [
+        (
+            "news",
+            '"Texas" data center ("moratorium" OR "pause")',
+            "cdr:1,cd_min:10/13/2026,cd_max:10/18/2026,sbd:1",
+        )
+    ], "from the day before its newest article, newest first"
+    queued = {row.url: row.feed for row in session.scalars(select(IngestUrl))}
+    assert queued == {"https://news.test/tx-order": f"watch:condition:{pledge.id}"}, (
+        "another place's ban and a story off the topic are not queued"
+    )
+    assert report.queued == 1 and pledge.checked_at == NOW
+
+
+def test_a_rule_is_searched_again_three_days_after_the_last_word_of_it(session):
+    searched = _rule(session, 1, checked=NOW)
+    fresh = _rule(session, 2, reported_days=1, title="Texas ban")
+    assert watch.conditions_due(session, now=NOW + dt.timedelta(days=1)) == []
+    later = watch.conditions_due(session, now=NOW + dt.timedelta(days=3))
+    assert [c.id for c in later] == [fresh.id, searched.id], "the one heard of longest ago first"
+
+
+def test_the_rule_searches_keep_to_their_nightly_cap_and_the_allowance(session):
+    for n in range(watch.CONDITIONS_PER_RUN + 5):
+        _rule(session, n)
+    provider = FakeNews()
+    report = watch.run_conditions(session, provider=provider, now=NOW, feeds_path=_feeds(session))
+    assert report.due == watch.CONDITIONS_PER_RUN + 5
+    assert len(provider.calls) == watch.CONDITIONS_PER_RUN
+
+    rest = FakeNews()
+    report = watch.run_conditions(
+        session, provider=rest, max_queries=3, now=NOW, feeds_path=_feeds(session)
+    )
+    assert len(rest.calls) == 3 and "allowance" in report.stopped
+
+
+def test_a_failed_rule_search_leaves_it_first_in_line(session):
+    from tracker.ingest.search import SearchError
+
+    rule = _rule(session)
+
+    class Broken(FakeNews):
+        def news(self, query, *, page=1, window="qdr:w"):
+            raise SearchError("proxy 502")
+
+    report = watch.run_conditions(session, provider=Broken(), now=NOW, feeds_path=_feeds(session))
+    assert report.failures == 1 and rule.checked_at is None
+
+
+def test_a_county_or_town_is_searched_with_its_state_beside_it(session):
+    """Washington County is in thirty states; the state's name narrows it."""
+    county = _rule(session, 1, scope="county", state="VA", county="Loudoun", kind="ban")
+    town = _rule(session, 2, scope="place", state="OH", place="Piqua", kind="zoning")
+    grid = _rule(session, 3, scope="grid_region", state=None, region="ERCOT", kind="grid_rule")
+    land = _rule(session, 4, scope="national", state=None, kind="executive_order")
+    assert watch.condition_query(county, now=NOW).text == (
+        '"Loudoun County" Virginia data center ("ban" OR "prohibit")'
+    )
+    assert watch.condition_query(town, now=NOW).text.startswith('"Piqua" Ohio data center (')
+    assert watch.condition_query(grid, now=NOW).text.startswith('"ERCOT" data center ("large load"')
+    assert watch.condition_query(land, now=NOW).text == 'federal data center ("executive order")'
+
+
+def test_the_news_command_searches_rules_first_out_of_its_allowance(engine, db_path, monkeypatch):
+    """Twenty rule searches at most, and every one of them is one the campus watch
+    does not send: the night's search allowance is not raised by a rule."""
+    from typer.testing import CliRunner
+
+    from tracker.cli import app
+    from tracker.db import session_scope
+    from tracker.ingest import search
+
+    with session_scope(engine) as session:
+        _rule(session)
+        _campus(session, 1)
+    provider = FakeNews()
+    monkeypatch.setattr(search, "SerperProvider", lambda *a, **k: provider)
+    runner = CliRunner()
+    args = ["--db", str(db_path), "news", "--golive", "0", "--no-companies", "--max-queries", "2"]
+
+    done = runner.invoke(app, args)
+
+    assert done.exit_code == 0, done.output
+    assert [query for _, query, _ in provider.calls] == [
+        '"Texas" data center ("moratorium" OR "pause")'
+    ], "the rule first; the campus's first look needs two searches and one was left"
+
+    provider.calls.clear()
+    with session_scope(engine) as session:
+        session.scalars(select(Condition)).one().checked_at = None
+    done = runner.invoke(app, [*args, "--rules", "0"])
+    assert done.exit_code == 0, done.output
+    assert len(provider.calls) == 2 and all("Kuna" in q for _, q, _ in provider.calls)
