@@ -395,6 +395,16 @@ def test_a_saved_page_is_read_once_and_its_rule_kept(session, tmp_path):
     assert again == [], "a page read under this prompt is not paid for again"
 
 
+def test_until_bounds_the_pages_to_a_past_day(session, tmp_path):
+    cache = tmp_path / "articles"
+    body = TEXAS + " The data center bill, the ballot and the moratorium."
+    _saved(session, cache, "https://news.example/tx", body)
+    since = NOW - dt.timedelta(days=1)
+    assert conditions.pages(session, since=since, until=NOW, cache_dir=cache)[0] == []
+    later = NOW + dt.timedelta(hours=1)
+    assert len(conditions.pages(session, since=since, until=later, cache_dir=cache)[0]) == 1
+
+
 def test_the_model_is_shown_the_rules_held_for_the_states_named(session, tmp_path):
     held, _ = conditions.attach(session, _one(), {"rule": "a"}, _page(), now=NOW)
     model = _Model({"rules": []})

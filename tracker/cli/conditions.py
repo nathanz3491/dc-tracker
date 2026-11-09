@@ -104,6 +104,14 @@ def conditions_read(
             show_default=False,
         ),
     ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option(
+            "--until",
+            help="Only pages read before this date (YYYY-MM-DD): a past week, a day at a time.",
+            show_default=False,
+        ),
+    ] = None,
     url: Annotated[
         str | None, typer.Option("--url", help="Read this one saved page.", show_default=False)
     ] = None,
@@ -144,8 +152,9 @@ def conditions_read(
         _fail(f"database not found: {path}\nRun `tracker init` first.")
     try:
         start = dt.datetime.fromisoformat(since) if since else conditions.since_default()
+        end = dt.datetime.fromisoformat(until) if until else None
     except ValueError:
-        _fail("--since must be a date, YYYY-MM-DD")
+        _fail("--since and --until must be dates, YYYY-MM-DD")
         return
     extractor = _model("judgement")
     engine = _read_engine() if dry_run else _writable("conditions read")
@@ -170,7 +179,12 @@ def conditions_read(
 
     with _explain_db_locks(), session_scope(engine, commit=not dry_run) as session:
         items, looked = conditions.pages(
-            session, since=start, cache_dir=article_cache("articles"), again=again, url=url
+            session,
+            since=start,
+            until=end,
+            cache_dir=article_cache("articles"),
+            again=again,
+            url=url,
         )
         if not items:
             console.print(

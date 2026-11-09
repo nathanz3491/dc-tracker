@@ -229,8 +229,10 @@ def pages(
     cache_dir: Path,
     again: bool = False,
     url: str | None = None,
+    until: dt.datetime | None = None,
 ) -> tuple[list[Page], int]:
-    """Saved pages read since `since` that may state a rule, newest first.
+    """Saved pages read since `since` (and before `until`) that may state a rule,
+    newest first.
 
     Returns the pages and how many were looked at. A page already read under
     :data:`STAMP` is passed over unless `again`. Only pages the news step settled —
@@ -243,6 +245,8 @@ def pages(
         query = query.where(IngestUrl.url == url)
     else:
         query = query.where(IngestUrl.last_tried_at >= since)
+        if until is not None:
+            query = query.where(IngestUrl.last_tried_at < until)
     rows = session.execute(
         query.order_by(IngestUrl.last_tried_at.desc(), IngestUrl.id.desc())
     ).all()
