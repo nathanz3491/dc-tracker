@@ -16,6 +16,8 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | `GET /v1/companies/{slug}` | 单个公司：它是什么、它的园区和近期新闻。 |
 | `GET /v1/capex` | 按买方统计的容量和投资。 |
 | `GET /v1/updates` | 你关注列表中的近期新闻。 |
+| `GET /v1/conditions` | 适用于某个地方的规则（例如某个州暂停审批、某个镇的禁令），可筛选和分页。 |
+| `GET /v1/conditions/{id}` | 单条规则：报道它的文章，以及它波及的每个园区。 |
 
 ## GET /v1/projects
 
@@ -208,6 +210,119 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | `days` | 回溯天数，1–60。默认 7。 |
 
 `data` 包含已确认的动态，最重要的排在最前；`unconfirmed` 包含无人能引证的动态。每条动态都有 `kind`、`sign`（`good` 利好、`bad` 利空、`neutral` 中性）、`project_id`、`company`（运营商唯一的名称）、`project`、`headline`、`detail`、`happened`、`reported`、`expected`、`quote`、`source_url` 和 `publisher`。`last_crawl` 说明上次抓取文章的时间。关注列表为空时，`data` 也为空。
+
+## GET /v1/conditions
+
+适用于某个地方、而不是某一个园区的规则 —— 某个州暂停发放新许可、某个镇禁止大型数据中心、某个电网运营商针对大负荷用户的规定、一项关税 —— 按最新报道日期从新到旧排列。只有当文章原句写明了规则本身、适用的地方和目前的进展时，这条规则才会被收录；它波及哪些园区，则由系统根据每个园区的所在地、阶段和规模计算得出，从不交给模型判断。
+
+| 参数 | 含义 |
+| --- | --- |
+| `state` | 两个字母的州代码，例如 `TX`。 |
+| `status` | 一个状态，或用逗号分隔的多个状态：`proposed`（已提出）、`pledged`（官员或候选人已承诺）、`passed`（已通过、尚未生效）、`in_force`（已生效）、`blocked`（被法院叫停）、`lifted`（已解除）、`rejected`（被否决或驳回）。默认返回所有状态，这样自己保存副本的程序也能得知某条规则已经结束。 |
+| `scope` | 一个范围，或用逗号分隔的多个范围：`state`（州）、`county`（县）、`place`（市、镇、村或乡）、`grid_region`（电网区域）、`national`（全国）、`input`（影响所有园区的某种投入品，例如大型变压器）。 |
+| `limit` | 每页行数，1–200。默认 30。 |
+| `offset` | 跳过的行数。默认 0。 |
+
+分页方式与 `/v1/projects` 相同。未知的参数或取值会返回 `400`。
+
+| 键 | 含义 |
+| --- | --- |
+| `id`、`title`、`summary` | 规则的编号、带地名的简短名称，以及一句平实的说明。 |
+| `kind` | `moratorium`（暂停令）、`ban`（禁令）、`permit_pause`（暂停审批）、`zoning`（分区规定）、`law`（法律）、`executive_order`（行政命令）、`ballot_measure`（投票提案）、`tax`（税收）、`tariff`（关税）、`grid_rule`（电网规定）、`pledge`（承诺）或 `other`（其他）。 |
+| `need` | 它涉及的是哪方面，用障碍类别表示，例如 `permitting`（审批）或 `grid_capacity`（电网容量）。 |
+| `effect` | `restricts` 表示它让建设更难（禁令、暂停、新增成本），`eases` 表示它让建设更容易（税收减免、无需审批即可建设的分区规定、允许大负荷用户自行发电的法律）。让建设更容易的规则永远不算作障碍。 |
+| `scope`、`where` | 适用范围，以及用文字写出的地名：`Texas`、`Piqua, OH`、`ERCOT`。`state`、`county`、`place`、`region` 和 `input` 分别存放各个组成部分，该范围用不到的为 null。 |
+| `applies_to` | `new`（已宣布或正在审批、且没有获批许可记录的园区）、`unbuilt`（尚未投运的园区）或 `all`（全部）。 |
+| `min_mw` | 规模门槛（兆瓦）；规则没有门槛时为 null。 |
+| `status` | 规则目前的进展，以最新一篇文章的说法为准。 |
+| `effective_on`、`ends_on` | 文章写明的生效日期和终止日期。 |
+| `first_reported`、`last_reported` | 最早和最新一篇相关文章的日期。 |
+| `projects` | 它目前波及的园区数量。已解除或被否决的规则不波及任何园区。 |
+| `market_context` | 全国性规则，或针对所有园区都要用到的某种投入品的规则，此项为 `true`。这类规则按设计不标记任何园区 —— 把每一行都标上等于什么也没说 —— 所以 `projects` 为 0。 |
+
+```json
+{
+  "total": 14,
+  "offset": 0,
+  "limit": 30,
+  "next_offset": null,
+  "data": [
+    {
+      "id": 12,
+      "title": "Texas pause on new data center permits",
+      "kind": "pledge",
+      "need": "permitting",
+      "effect": "restricts",
+      "scope": "state",
+      "state": "TX",
+      "county": null,
+      "place": null,
+      "region": null,
+      "input": null,
+      "applies_to": "new",
+      "min_mw": null,
+      "status": "pledged",
+      "summary": "The governor-elect wants new data center permits paused until water and power rules are written.",
+      "effective_on": null,
+      "ends_on": null,
+      "first_reported": "2026-11-05",
+      "last_reported": "2026-11-08",
+      "projects": 31,
+      "where": "Texas",
+      "market_context": false,
+      "links": {"self": "/v1/conditions/12"}
+    }
+  ]
+}
+```
+
+以上数值均为虚构，仅作示例。
+
+规则的波及范围与园区自身的障碍分开存放：它不计入 `blocker`、`obstacles` 或 `confidence`，因此园区上的每个数值仍然可以追溯到一篇关于该园区本身的文章。
+
+## GET /v1/conditions/{id}
+
+单条规则：包含摘要中的全部内容，另外还有：
+
+| 键 | 含义 |
+| --- | --- |
+| `articles` | 报道过这条规则的每篇文章，从新到旧：`url`、`title`、`published_at`、`status`（该文章所说的进展）、`summary`，以及 `quotes` —— 文章的原句，按引用用途分别列出：`rule`（规则本身）、`place`（适用地方）、`status`（进展），有门槛时还有 `threshold`（门槛）。 |
+| `affected_projects` | 它波及的每个园区：`project_id`、`name`、`company`、`city`、`county`、`state`、`phase`、`fit`、`why`、`first_seen`（该园区最早被纳入的时间）和 `links.self`。 |
+
+园区的所在地和阶段都有记录时，`fit` 为 `exact`；匹配中有一部分是推断出来的，则为 `likely`：镇一级的规则匹配的是登记在该镇名下的园区 —— 由于没有任何园区有实测的场址坐标，无法核实它是否真的在镇界之内；电网区域的规则按州推断，前提是该州大部分位于这个运营商的区域内；规模门槛遇到来源没有写明规模的园区时，同样只能算作可能。`why` 用文字说明属于哪种情况，例如 `TX · announced · no permit on record`。
+
+```json
+{
+  "data": {
+    "id": 12,
+    "title": "Texas pause on new data center permits",
+    "status": "pledged",
+    "articles": [
+      {
+        "url": "https://news.example.com/texas-pause",
+        "title": "Governor-elect calls for data center permit pause",
+        "published_at": "2026-11-08T00:00:00",
+        "status": "pledged",
+        "summary": "The governor-elect wants new data center permits paused.",
+        "quotes": {
+          "rule": "The governor-elect wants a statewide pause on new data center permits until the legislature writes water and power rules.",
+          "status": "She campaigned on freezing new data center construction across Texas."
+        }
+      }
+    ],
+    "affected_projects": [
+      {
+        "project_id": 42, "name": "North Campus", "company": "Acme Data Centers",
+        "city": "Abilene", "county": "Taylor County", "state": "TX", "phase": "announced",
+        "fit": "exact", "why": "TX · announced · no permit on record",
+        "first_seen": "2026-11-08T18:40:12", "links": {"self": "/v1/projects/42"}
+      }
+    ]
+  }
+}
+```
+
+以上数值均为虚构，仅作示例。如果发现某条规则读错了，它会被删除，之后它的 id 会返回 `404`。
 
 ## GET /v1/me
 

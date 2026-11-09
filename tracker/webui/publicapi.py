@@ -4,9 +4,10 @@
 console's pages need this week, and change with them. A program calling this API
 was written once and is not redeployed when a page is redesigned, so every
 response here is built by this module from the export (`export.to_json_object`)
-and the existing readers (`webui/query.py`, `capex`, `company`, `feed`) into a
-shape documented in the reader docs (`docs/en/api-reference.md`). Adding a key is
-allowed; renaming or removing one is a new version.
+and the existing readers (`webui/query.py`, `capex`, `company`, `feed`,
+`conditions`) into a shape documented in the reader docs
+(`docs/en/api-reference.md`). Adding a key is allowed; renaming or removing one is
+a new version.
 
 **Reads as the key's account.** The dataset is the same for every account, so most
 endpoints do not depend on who calls; `/v1/me` and `/v1/updates` do — the latter
@@ -114,6 +115,38 @@ LIST_PARAMS: dict[str, str] = {
     "limit": "limit",
     "offset": "offset",
 }
+
+#: `/v1/conditions` parameters. `status` and `scope` take one value or several,
+#: comma-separated.
+CONDITION_PARAMS: frozenset[str] = frozenset({"state", "status", "scope", "limit", "offset"})
+
+#: The fields a rule's summary carries, in this order: `conditions.as_json`'s, named
+#: here so that a key the CLI adds or renames there does not move this contract.
+CONDITION_FIELDS: tuple[str, ...] = (
+    "id",
+    "title",
+    "kind",
+    "need",
+    "effect",
+    "scope",
+    "state",
+    "county",
+    "place",
+    "region",
+    "input",
+    "applies_to",
+    "min_mw",
+    "status",
+    "summary",
+    "effective_on",
+    "ends_on",
+    "first_reported",
+    "last_reported",
+    "projects",
+)
+
+#: Rows on one page of `/v1/conditions` when `limit` is not given, as `/v1/projects`.
+CONDITION_PAGE = 30
 
 _SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
 
@@ -331,6 +364,8 @@ def index(prefix: str, docs: str) -> dict[str, Any]:
             f"GET {prefix}/companies/{{slug}}": "one company's campuses and recent news",
             f"GET {prefix}/capex": "capacity and investment by buyer",
             f"GET {prefix}/updates": "recent news on the key's account's watchlist",
+            f"GET {prefix}/conditions": "rules that apply to a place, filtered and paged",
+            f"GET {prefix}/conditions/{{id}}": "one rule: its articles and the projects it reaches",
         },
     }
 
@@ -476,6 +511,143 @@ def updates(session: Session, req: Request) -> dict[str, Any]:
     }
 
 
+def _values(query: dict[str, list[str]], name: str, allowed: tuple[str, ...]) -> set[str]:
+    """`?status=pledged,in_force` as a set, or a 400 naming the value not allowed."""
+    raw = _one(query, name)
+    wanted = {v.strip().lower() for v in raw.split(",") if v.strip()}
+    bad = sorted(wanted - set(allowed))
+    if bad:
+        raise ApiError(
+            400, "bad_parameter", f"{name} {bad[0]!r} is not one of {', '.join(allowed)}"
+        )
+    return wanted
+
+
+def _whole(query: dict[str, list[str]], name: str, default: int) -> int:
+    raw = _one(query, name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ApiError(
+            400, "bad_parameter", f"{name} must be a whole number, not {raw!r}"
+        ) from None
+
+
+def condition_summary(condition: Any, prefix: str, *, reach: int) -> dict[str, Any]:
+    """One rule as `/v1/conditions` lists it.
+
+    `where` is the place in words ("Piqua, OH", "ERCOT"), and `market_context` is
+    true for a rule of the whole country or a whole-industry input, which reaches
+    no project by design (`conditions.PLACED`): `projects` is 0 for those because
+    flagging every campus says nothing, not because none is affected.
+    """
+    from tracker import conditions
+
+    obj = conditions.as_json(condition, reach=reach)
+    out = {name: obj.get(name) for name in CONDITION_FIELDS}
+    out["where"] = conditions.where_words(condition)
+    out["market_context"] = condition.scope not in conditions.PLACED
+    out["links"] = {"self": f"{prefix}/conditions/{condition.id}"}
+    return out
+
+
+def conditions_list(session: Session, req: Request) -> dict[str, Any]:
+    """Rules that apply to a place, newest report first, filtered and paged like
+    `/v1/projects`. Every status by default, lifted and voted-down ones included:
+    a program keeping its own copy needs to hear that a rule ended."""
+    from tracker import conditions
+    from tracker.vocab import CONDITION_SCOPES, CONDITION_STATUSES
+
+    unknown = sorted(set(req.query) - CONDITION_PARAMS)
+    if unknown:
+        raise ApiError(400, "unknown_parameter", f"unknown parameter {unknown[0]!r}")
+    state = _one(req.query, "state").upper()
+    if state and not re.fullmatch(r"[A-Z]{2}", state):
+        raise ApiError(400, "bad_parameter", "state is a two-letter code, such as TX")
+    statuses = _values(req.query, "status", CONDITION_STATUSES)
+    scopes = _values(req.query, "scope", CONDITION_SCOPES)
+    offset = _whole(req.query, "offset", 0)
+    if offset < 0:
+        raise ApiError(400, "bad_parameter", "offset cannot be negative")
+    limit = _whole(req.query, "limit", CONDITION_PAGE)
+    if limit < 1:
+        raise ApiError(400, "bad_parameter", "limit must be at least 1")
+    limit = min(limit, MAX_LIMIT)
+
+    matching = [
+        c
+        for c in conditions.listing(session, state=state or None, cleared=True)
+        if (not statuses or c.status in statuses) and (not scopes or c.scope in scopes)
+    ]
+    counts = conditions.reach_counts(session)
+    page = matching[offset : offset + limit]
+    nxt = offset + limit if offset + limit < len(matching) else None
+    return {
+        "total": len(matching),
+        "offset": offset,
+        "limit": limit,
+        "next_offset": nxt,
+        "data": [condition_summary(c, req.prefix, reach=counts.get(c.id, 0)) for c in page],
+    }
+
+
+def condition_detail(session: Session, raw: str, prefix: str) -> dict[str, Any]:
+    """One rule: its summary, each article that stated it with the article's own
+    sentences, and every project it reaches with how sure the match is and why."""
+    from sqlalchemy import select
+
+    from tracker import conditions
+    from tracker.models import Condition, Exposure, Project
+
+    if not raw.isdigit() or len(raw) > 18:
+        raise ApiError(400, "bad_id", "a condition id is a whole number")
+    condition = session.get(Condition, int(raw))
+    if condition is None:
+        raise ApiError(
+            404, "not_found", f"no condition {raw}; it may have been dropped as read wrongly"
+        )
+    reached = session.execute(
+        select(Exposure, Project)
+        .join(Project, Project.id == Exposure.project_id)
+        .where(Exposure.condition_id == condition.id)
+        .order_by(Project.state, Project.id)
+    ).all()
+    out = condition_summary(condition, prefix, reach=len(reached))
+    sources = sorted(
+        condition.sources, key=lambda s: (s.published_at or s.read_at, s.id or 0), reverse=True
+    )
+    out["articles"] = [
+        {
+            "url": s.url,
+            "title": s.title,
+            "published_at": s.published_at.isoformat() if s.published_at else None,
+            "status": s.status,
+            "summary": s.summary,
+            "quotes": conditions.quotes_of(s),
+        }
+        for s in sources
+    ]
+    out["affected_projects"] = [
+        {
+            "project_id": project.id,
+            "name": project.name,
+            "company": project.company,
+            "city": project.city,
+            "county": project.county,
+            "state": project.state,
+            "phase": project.phase,
+            "fit": exposure.fit,
+            "why": exposure.why,
+            "first_seen": exposure.first_seen.isoformat() if exposure.first_seen else None,
+            "links": {"self": f"{prefix}/projects/{project.id}"},
+        }
+        for exposure, project in reached
+    ]
+    return out
+
+
 def me(session: Session, req: Request) -> dict[str, Any]:
     from tracker import accounts
     from tracker.models import ApiKey
@@ -491,6 +663,8 @@ def me(session: Session, req: Request) -> dict[str, Any]:
 
 
 __all__ = [
+    "CONDITION_FIELDS",
+    "CONDITION_PARAMS",
     "LABELS",
     "MAX_LIMIT",
     "OPEN",
@@ -501,6 +675,9 @@ __all__ = [
     "Request",
     "capex",
     "company",
+    "condition_detail",
+    "condition_summary",
+    "conditions_list",
     "index",
     "me",
     "project_detail",
