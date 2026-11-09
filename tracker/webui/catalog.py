@@ -373,6 +373,7 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # them to projects is code; a rule read wrongly is dropped by hand.
             "conditions read",
             "conditions match",
+            "conditions fold",
             "conditions drop",
             # Under Repair rather than Inspect: it is the only command in the
             # palette that writes a file the pipeline then obeys.

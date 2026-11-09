@@ -371,6 +371,71 @@ def test_a_bill_in_a_legislature_is_listed_and_a_towns_proposal_reaches(session)
     ]
 
 
+def test_a_candidates_promise_is_a_proposal_and_a_governor_elects_a_pledge(session):
+    """The election-week replay kept "Pennsylvania candidate Chris Thomas pledge" as a
+    pledge reaching every project in the state."""
+    candidate, _ = conditions.attach(
+        session,
+        _one(title="Pennsylvania candidate Chris Thomas pledge to mandate own power",
+             state="PA", status="pledged",
+             summary="A candidate for governor promised data centers would bring their own power."),
+        {"rule": "a"}, _page(url="https://news.example/pa"), now=NOW,
+    )  # fmt: skip
+    elected, _ = conditions.attach(
+        session,
+        _one(title="Texas governor-elect pledge of a data center moratorium"),
+        {"rule": "b"}, _page(url="https://news.example/tx-elect"), now=NOW,
+    )  # fmt: skip
+    assert candidate.status == "proposed"
+    assert elected.status == "pledged"
+
+
+class _Grouper:
+    """Answers the fold's question with fixed groups."""
+
+    def __init__(self, same):
+        self.same = same
+        self.asked: list[str] = []
+
+    def complete(self, *, system, user, max_tokens=None):
+        self.asked.append(user)
+
+        class R:
+            text = json.dumps({"same": self.same})
+
+        return R()
+
+
+def test_readings_of_one_rule_filed_apart_are_folded_into_the_oldest(session):
+    """Election week filed Texas's governor-elect moratorium four times."""
+    _project(session)
+    first, _ = conditions.attach(
+        session, _one(title="Texas statewide moratorium (Hinojosa)"), {"rule": "a"},
+        _page(url="https://news.example/1"), now=NOW,
+    )  # fmt: skip
+    second, _ = conditions.attach(
+        session, _one(title="Governor-elect promise to halt construction", kind="moratorium"),
+        {"rule": "b"}, _page(url="https://news.example/2"), now=NOW,
+    )  # fmt: skip
+    other, _ = conditions.attach(
+        session, _one(title="Texas repeal of sales tax exemption", kind="tax"), {"rule": "c"},
+        _page(url="https://news.example/3"), now=NOW,
+    )  # fmt: skip
+    conditions.rebuild(session, now=NOW)
+    assert first.id != second.id
+
+    got = conditions.fold(session, _Grouper([[1, 2]]), commit=False)
+
+    assert (got.groups, got.merged) == (1, 1)
+    held = session.scalars(select(Condition).order_by(Condition.id)).all()
+    assert [c.id for c in held] == [first.id, other.id]
+    assert sorted(s.url for s in held[0].sources) == [
+        "https://news.example/1",
+        "https://news.example/2",
+    ]
+    assert session.scalars(select(Exposure).where(Exposure.condition_id == second.id)).all() == []
+
+
 def test_first_seen_survives_a_rebuild(session):
     _project(session)
     conditions.attach(session, _one(), {"rule": "a"}, _page(), now=NOW)

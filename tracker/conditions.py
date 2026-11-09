@@ -730,13 +730,33 @@ def _when(source: ConditionSource) -> dt.datetime:
     return source.published_at or source.read_at
 
 
+_CANDIDATE: Final = re.compile(r"\bcandidates?\b|\bcampaign(?:ed|ing|s)? (?:on|for)\b", re.I)
+_ELECTED: Final = re.compile(r"\b(?:\w+-)?elect\b|\belected\b|\bgovernor's\b|\bgov\.", re.I)
+
+
+def candidates_promise(status: str, *texts: str) -> bool:
+    """A "pledge" in an article written before the vote is a candidate's promise.
+
+    The prompt says so, and the model still called it pledged when the article
+    called the person a candidate: the election-week replay kept "Pennsylvania
+    candidate Chris Thomas pledge" and "Michigan candidate Benson pledge" as pledges
+    reaching every project in their states. Read as a proposal, unless the words say
+    the person won or holds office.
+    """
+    said = " ".join(t for t in texts if t)
+    return status == "pledged" and bool(_CANDIDATE.search(said)) and not _ELECTED.search(said)
+
+
 def settle(condition: Condition) -> None:
     """Status, summary and dates from the condition's articles, newest first."""
     sources = sorted(condition.sources, key=lambda s: (_when(s), s.id or 0))
     if not sources:
         return
     newest = sources[-1]
-    condition.status = newest.status
+    status = newest.status
+    if candidates_promise(status, condition.title, newest.summary):
+        status = "proposed"
+    condition.status = status
     condition.summary = newest.summary
     condition.first_reported = _when(sources[0]).date()
     condition.last_reported = _when(newest).date()
@@ -820,6 +840,146 @@ def attach(
     settle(condition)
     condition.updated_at = now
     return condition, new
+
+
+# --- folding readings of one rule ----------------------------------------------
+
+FOLD_SYSTEM: Final = """You tidy a list of rules about data centers that all apply to one
+place and one need. Several lines may be readings of ONE rule from different articles:
+the same bill, order, ordinance, ballot measure or tariff, or the same person's pledge —
+including a pledge and the order that later carried it out, or a proposal and its
+passing. Group those together. Different measures stay apart: two different bills, a
+tax change and a zoning change, two different people's pledges.
+
+Each line: its number, [kind, status, first..last reported], the title, then the
+summary.
+
+Answer with JSON only, listing only groups of two or more:
+{"same": [[1, 4], [2, 3, 5]]}
+{"same": []} when every line is its own rule."""
+
+
+@dataclass
+class Folded:
+    """What one fold pass did."""
+
+    #: Place-and-need groups put to the model.
+    asked: int = 0
+    #: Rules found to be one, and conditions merged into another.
+    groups: int = 0
+    merged: int = 0
+    #: Why the pass stopped early, or "".
+    ceiling: str = ""
+
+
+def merge_into(session: Session, keeper: Condition, other: Condition) -> None:
+    """Move `other`'s articles onto `keeper` and delete `other`, its exposures with it."""
+    held = {s.url for s in keeper.sources}
+    for source in list(other.sources):
+        if source.url in held:
+            session.delete(source)
+        else:
+            source.condition = keeper
+            held.add(source.url)
+    session.flush()
+    session.execute(delete(Exposure).where(Exposure.condition_id == other.id))
+    session.delete(other)
+    session.flush()
+    settle(keeper)
+
+
+def fold(
+    session: Session,
+    extractor: Extractor,
+    *,
+    keys: Iterable[str] | None = None,
+    commit: bool = True,
+) -> Folded:
+    """Merge readings of one rule that were filed as several conditions.
+
+    The reader is shown the rules already held and the fallback compares titles,
+    and the election-week replay still filed Texas's governor-elect's moratorium
+    four times and Georgia's five: each project in those states carried one rule
+    four or five times. So each place-and-need group holding more than one rule is
+    put to a model, without reasoning — a short list to sort, not an article to
+    read — and every group it names is merged into its oldest condition.
+    """
+    from sqlalchemy import func
+
+    from tracker.llm import LLMError, parse_json_object, spend_stage, without_thinking
+    from tracker.spend import ceiling_reached
+
+    quick = without_thinking(extractor) or extractor
+    query = select(Condition.match_key).group_by(Condition.match_key).having(func.count() > 1)
+    if keys is not None:
+        wanted = sorted(set(keys))
+        if not wanted:
+            return Folded()
+        query = query.where(Condition.match_key.in_(wanted))
+    out = Folded()
+    for key in list(session.scalars(query)):
+        why = ceiling_reached()
+        if why:
+            out.ceiling = why
+            break
+        rows = list(
+            session.scalars(
+                select(Condition).where(Condition.match_key == key).order_by(Condition.id)
+            )
+        )
+        if len(rows) < 2:
+            continue
+        lines = "\n".join(
+            f"{n}. [{c.kind}, {c.status}, {c.first_reported}..{c.last_reported}] "
+            f"{c.title} — {c.summary}"
+            for n, c in enumerate(rows, 1)
+        )
+        try:
+            with spend_stage("conditions fold"):
+                reply = quick.complete(
+                    system=FOLD_SYSTEM, user=f"Place and need: {key}\n\n{lines}", max_tokens=4096
+                )
+            payload = parse_json_object(reply.text)
+        except (LLMError, ValueError) as exc:
+            log.warning("conditions fold: %s kept apart, no usable answer: %s", key, exc)
+            continue
+        out.asked += 1
+        groups = payload.get("same") if isinstance(payload, dict) else None
+        gone: set[int] = set()
+        for group in groups if isinstance(groups, list) else []:
+            if not isinstance(group, list):
+                continue
+            numbers = {int(n) for n in group if str(n).strip().isdigit()}
+            members = sorted(
+                (
+                    rows[n - 1]
+                    for n in numbers
+                    if 1 <= n <= len(rows) and rows[n - 1].id not in gone
+                ),
+                key=lambda c: c.id,
+            )
+            if len(members) < 2:
+                continue
+            keeper, *rest = members
+            for other in rest:
+                gone.add(other.id)
+                merge_into(session, keeper, other)
+            out.groups += 1
+            out.merged += len(rest)
+        if commit:
+            session.commit()
+    return out
+
+
+def resettle(session: Session) -> int:
+    """Settle every condition again; returns how many changed status."""
+    changed = 0
+    for condition in session.scalars(select(Condition)):
+        before = condition.status
+        settle(condition)
+        changed += condition.status != before
+    session.flush()
+    return changed
 
 
 # --- reading ------------------------------------------------------------------

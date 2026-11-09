@@ -133,6 +133,7 @@ COMMANDS = {
     "director steps",
     "conditions",
     "conditions drop",
+    "conditions fold",
     "conditions match",
     "conditions read",
     "conditions show",

@@ -13,6 +13,7 @@ import typer
 from rich import box
 from rich.markup import escape
 from rich.table import Table
+from sqlalchemy import select
 
 from tracker.cli._shared import (
     _db_path,
@@ -155,6 +156,7 @@ def conditions_read(
     """
     _use_llm(llm_provider)
     from tracker import conditions
+    from tracker.models import Condition
 
     path = _db_path()
     if not path.is_file():
@@ -219,6 +221,15 @@ def conditions_read(
             commit=not dry_run,
             on_each=announce,
         )
+        folded = None
+        if not dry_run:
+            # Readings of one rule filed apart are merged before matching, so a
+            # project is not shown one rule four times (`conditions.fold`).
+            touched = {cid for r in run.results for cid, *_ in r.kept}
+            keys = session.scalars(
+                select(Condition.match_key).where(Condition.id.in_(sorted(touched)))
+            ).all()
+            folded = conditions.fold(session, extractor, keys=keys)
         matched = None if dry_run else conditions.rebuild(session)
     results = run.results
     kept = sum(len(r.kept) for r in results)
@@ -255,12 +266,73 @@ def conditions_read(
             f"\n{len(results)} page(s) read: {kept} rule(s) kept ({new} new), "
             f"{refused} refused, {failed} failed."
         )
+        if folded is not None and folded.merged:
+            console.print(
+                f"{folded.merged} reading(s) of {folded.groups} rule(s) filed apart, merged."
+            )
         if matched is not None:
             console.print(
                 f"projects affected: {matched.added} newly, {matched.kept} still, "
                 f"{matched.dropped} no longer."
             )
     _print_ceiling(run)
+
+
+@conditions_app.command("fold")
+def conditions_fold(
+    llm_provider: Annotated[
+        str | None,
+        typer.Option(
+            "--llm-provider",
+            help="Which model answers: 'deepseek' (the API) or 'ollama' (local).",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Merge readings of one rule that were filed as separate rules, then match again.
+
+    Every place-and-need group holding more than one rule is put to a model, without
+    reasoning, which names the lines that are the same bill, order, measure or
+    person's pledge; each such group is merged into its oldest rule, its articles
+    kept. `conditions read` does this itself for the groups it touched; this runs it
+    over all of them, and settles every rule's status again first (a candidate's
+    promise read as a pledge becomes a proposal).
+    """
+    _use_llm(llm_provider)
+    from tracker import conditions
+
+    extractor = _model("judgement")
+    engine = _writable("conditions fold")
+    with _explain_db_locks(), session_scope(engine) as session:
+        changed = conditions.resettle(session)
+        session.commit()
+        folded = conditions.fold(session, extractor)
+        matched = conditions.rebuild(session)
+    if json_mode():
+        emit(
+            {
+                "resettled": changed,
+                "asked": folded.asked,
+                "groups": folded.groups,
+                "merged": folded.merged,
+                "exposures": {
+                    "added": matched.added,
+                    "kept": matched.kept,
+                    "dropped": matched.dropped,
+                },
+            }
+        )
+        return
+    console.print(
+        f"{changed} status(es) settled again; {folded.asked} place-and-need group(s) "
+        f"asked, {folded.merged} reading(s) of {folded.groups} rule(s) merged."
+    )
+    console.print(
+        f"projects affected: {matched.added} newly, {matched.kept} still, "
+        f"{matched.dropped} no longer."
+    )
+    if folded.ceiling:
+        console.print(f"[yellow]stopped early[/yellow] [dim]— {escape(folded.ceiling)}[/dim]")
 
 
 @conditions_app.command("match")
@@ -295,8 +367,6 @@ def conditions_show(
     condition_id: Annotated[int, typer.Argument(help="The rule's number.")],
 ) -> None:
     """One rule: where it stands, each article and its sentences, the projects it reaches."""
-    from sqlalchemy import select
-
     from tracker import conditions
     from tracker.models import Condition, Exposure, Project
 

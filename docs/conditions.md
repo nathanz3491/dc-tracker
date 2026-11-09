@@ -33,7 +33,15 @@ should reach every project in that place and stage, the day it is reported.
    stored half-true.
 4. **One rule, however many articles.** The model's `same_as` (checked: it must be the
    same place) or, failing that, the same place, need and kind and a title about the
-   same thing (Aurora, Colorado had two zoning rules in one week). Status, summary and
+   same thing (Aurora, Colorado had two zoning rules in one week). That was not enough:
+   the election-week replay filed Texas's governor-elect moratorium four times and
+   Georgia's five. So after each read, every place-and-need group holding more than one
+   rule is put to a model without reasoning, which names the lines that are one bill,
+   order, measure or person's pledge, and each such group is merged into its oldest
+   rule (`conditions fold`, also a command of its own).
+5. **A candidate's promise is a proposal.** Read from an article written before the
+   vote, a pledge whose words call its maker a candidate, and nothing says they won,
+   is settled as `proposed`, so a losing candidate's promise reaches nobody. Status, summary and
    dates come from the newest article, so a pledge that becomes an order, and an order
    a court blocks, read as one history (`condition_source` holds each article's
    statement and sentences).
@@ -129,6 +137,8 @@ tracker conditions show 12               # one rule: articles, sentences, projec
 tracker conditions read --since 2026-11-03 --dry-run   # read at full cost, write nothing
 tracker conditions read                  # the last two days' saved pages
 tracker conditions match                 # rebuild which projects each rule reaches; free
+tracker conditions fold                  # merge readings of one rule filed apart, then match
+tracker conditions read --behind pledged # read again the pages behind every pledged rule
 tracker conditions drop 12               # a rule read wrongly
 ```
 
