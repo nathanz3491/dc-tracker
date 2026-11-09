@@ -16,7 +16,16 @@ from sqlalchemy import select
 
 from tracker import accounts, notify, watchlist
 from tracker.feed import Digest, Signal
-from tracker.models import Event, NotifyDelivery, NotifyRun, NotifySent, Project, Risk, utcnow
+from tracker.models import (
+    Event,
+    Exposure,
+    NotifyDelivery,
+    NotifyRun,
+    NotifySent,
+    Project,
+    Risk,
+    utcnow,
+)
 
 NOW = dt.datetime(2026, 8, 29, 9, 0)
 TODAY = dt.date.today()
@@ -871,3 +880,197 @@ def test_sending_without_a_sender_is_refused():
 
     with pytest.raises(notify.EmailError, match="TRACKER_NOTIFY_FROM"):
         notify.ResendTransport(Settings(resend_api_key=SecretStr("re_x"), notify_from=""))
+
+
+# --- rules affecting a reader's projects ----------------------------------------------
+
+PAUSE = "Texas pause on new data center permits"
+
+
+def _place_rule(
+    session,
+    *,
+    status="pledged",
+    days=3,
+    url="https://news.example/tx",
+    same_as=None,
+    title=PAUSE,
+    state="TX",
+    kind="pledge",
+    effect="restricts",
+):
+    """A rule as the condition reader files it, matched to every project it reaches."""
+    from tracker import conditions
+
+    [rule], bad = conditions.offered(
+        {
+            "rules": [
+                {
+                    "title": title,
+                    "kind": kind,
+                    "channel": "permitting",
+                    "scope": "state",
+                    "state": state,
+                    "applies_to": "unbuilt",
+                    "status": status,
+                    "effect": effect,
+                    "summary": "The governor-elect wants new data center permits paused.",
+                    "quotes": {"rule": "x", "status": "x"},
+                    "same_as": same_as,
+                }
+            ]
+        }
+    )
+    assert not bad, bad
+    page = conditions.Page(url, "Governor-elect", utcnow() - dt.timedelta(days=days), "")
+    sentences = {
+        "rule": "The governor-elect wants a statewide pause on new data center permits.",
+        "status": f"The pause is {status.replace('_', ' ')}, she said.",
+    }
+    condition, _ = conditions.attach(session, rule, sentences, page, now=utcnow())
+    conditions.rebuild(session)
+    return condition
+
+
+def test_a_rule_over_a_watched_project_is_mailed_once_at_each_status(session):
+    """The reason the section exists: a state's pause reached every Texas project,
+    and a reader following one heard of it only if a story about that campus said so.
+    One card per rule per status — the same pledge never twice, the order it becomes
+    once more."""
+    account = _reader(session)
+    _project(session, state="TX", city="Abilene")
+    rule = _place_rule(session)
+
+    post = Recorder()
+    [first] = send(session, post, now=utcnow())
+
+    assert first.kind == "updates", "a day whose only news is a rule is not a quiet day"
+    assert (first.signals, first.rules) == (0, 1)
+    message = post.sent[0]
+    assert message["subject"] == (
+        "Texas: pause on new data center permits — pledged — 1 of your projects"
+    )
+    assert "Rules affecting your projects" in message["html"]
+    assert "Reaches 1 of your projects: Nscale — Monarch." in message["text"]
+    assert "The pause is pledged, she said." in message["html"], "the article's own sentence"
+    assert f"condition:{rule.id}:pledged" in notify.sent_keys(session, account.id)
+
+    [second] = send(session, post, now=utcnow() + dt.timedelta(days=1))
+    assert second.kind == "quiet", "the same rule at the same status is never sent again"
+
+    _place_rule(
+        session, status="in_force", days=0, url="https://news.example/order", same_as=rule.id
+    )
+    [third] = send(session, post, now=utcnow() + dt.timedelta(days=2))
+    assert third.kind == "updates" and third.rules == 1
+    assert "— in force —" in post.sent[-1]["subject"]
+
+
+def test_a_lifted_rule_is_cleared_only_for_readers_told_of_it(session):
+    """Somebody told a pause was coming hears that it was lifted; somebody who never
+    heard of it is not told of a rule that no longer exists."""
+    _reader(session, "told@example.com")
+    _project(session, state="TX", city="Abilene")
+    rule = _place_rule(session)
+    post = Recorder()
+    send(session, post, now=utcnow())
+    _reader(session, "late@example.com")
+
+    _place_rule(session, status="lifted", days=0, url="https://news.example/lift", same_as=rule.id)
+    assert session.scalars(select(Exposure)).all() == [], "a lifted rule reaches nothing"
+    outcomes = send(session, post, now=utcnow() + dt.timedelta(days=1))
+
+    by_email = {o.email: o for o in outcomes}
+    assert by_email["told@example.com"].kind == "updates"
+    assert by_email["told@example.com"].rules == 1
+    assert by_email["late@example.com"].kind == "quiet"
+    cleared = next(m for m in post.sent[1:] if m["to"] == "told@example.com")
+    assert cleared["subject"] == "Texas: pause on new data center permits — lifted"
+    assert "cleared · lifted" in cleared["html"]
+    assert "No longer holds over your projects (you were told it was pledged)." in cleared["text"]
+
+    [again] = send(
+        session, post, now=utcnow() + dt.timedelta(days=2), only_email="told@example.com"
+    )
+    assert again.kind == "quiet", "cleared once"
+
+
+def test_a_rule_elsewhere_or_reported_over_two_months_ago_is_not_mailed(session):
+    _reader(session)
+    _project(session, state="TX", city="Abilene")
+    _place_rule(session, state="OK", title="Oklahoma permit pause", url="https://news.example/ok")
+    _place_rule(session, days=notify.REPORT_WINDOW_DAYS + 5)
+    [outcome] = send(session, Recorder())
+    assert outcome.kind == "quiet" and outcome.rules == 0
+
+
+def test_a_rule_that_eases_has_its_own_heading_and_is_not_drawn_as_a_problem(session):
+    """A tax exemption under "Rules affecting your projects", in the danger colour,
+    would read as a threat to the project it helps."""
+    _reader(session)
+    _project(session, state="TX", city="Abilene")
+    _place_rule(
+        session,
+        title="Texas sales tax exemption for data center equipment",
+        kind="tax",
+        status="in_force",
+        effect="eases",
+        url="https://news.example/tax",
+    )
+    _place_rule(session)
+
+    post = Recorder()
+    [outcome] = send(session, post)
+
+    assert outcome.rules == 2 and outcome.blockers == 0, "an easing is never a blocker"
+    message = post.sent[0]
+    assert message["subject"].startswith("Texas: pause on new data center permits — pledged")
+    assert message["subject"].endswith("(+1 more rule)")
+    html, text = message["html"], message["text"]
+    assert html.index("Rules affecting your projects") < html.index("Rules easing your projects")
+    assert "RULES EASING YOUR PROJECTS" in text
+    assert "Applies to 1 of your projects" in text
+
+
+def test_a_rules_colours_say_which_way_it_cuts():
+    def card(effect: str, status: str) -> str:
+        return notify._rule_row(
+            notify.RuleCard(1, "Texas", PAUSE, status, "Summary.", reach=1, effect=effect)
+        )
+
+    assert notify.TOKENS["danger"] in card("restricts", "in_force")
+    assert notify.TOKENS["success"] in card("restricts", "lifted")
+    assert notify.TOKENS["success"] in card("eases", "in_force")
+    assert notify.TOKENS["danger"] not in card("eases", "in_force")
+    assert "ended · lifted" in card("eases", "lifted"), "an easing ending is not good news"
+
+
+def test_a_rule_card_escapes_what_an_article_said():
+    rule = notify.RuleCard(
+        7, "Texas", "<script>x</script>", "pledged", 'a "pause" & more', reach=2,
+        projects=("Acme — <b>North</b>",), quote="<img src=x>",
+    )  # fmt: skip
+    body = notify.render(brief_of(), (), rules=(rule,))
+    assert "<script>" not in body and "<img" not in body and "<b>North" not in body
+    assert "&lt;script&gt;" in body and "&amp; more" in body
+    assert "Reaches 2 of your projects: Acme — <b>North</b> and 1 more." in notify.render_text(
+        brief_of(), (), rules=(rule,)
+    )
+
+
+def test_a_day_with_updates_and_a_rule_keeps_the_updates_subject(session):
+    _reader(session)
+    project = _project(session, state="TX", city="Abilene")
+    _milestone(session, project)
+    _place_rule(session)
+
+    post = Recorder()
+    [outcome] = send(session, post)
+
+    assert (outcome.signals, outcome.rules) == (1, 1)
+    message = post.sent[0]
+    assert message["subject"].startswith("1 update — Nscale")
+    assert message["html"].index("1 new update") < message["html"].index(
+        "Rules affecting your projects"
+    )
+    assert session.scalars(select(NotifyDelivery)).one().updates == 2, "both cards counted"
