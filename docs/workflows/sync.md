@@ -243,6 +243,34 @@ else, while 115 more of its articles would not load (66 refused with HTTP 403, 3
 whose robots.txt did not answer) and 410 left the queue unread — copies of a story
 already read or queued, and pages on publishers closed to us.
 
+## Rules that apply to a place, read the same night
+
+A page the news step reads and finds no campus in is still saved, and since
+2026-11-10 the nightly loop reads those pages a second way, right after the news:
+for **rules that apply to a place** rather than one campus — a state's permit pause, a
+town's ban, a ballot measure, a grid operator's large-load rule
+([conditions](../conditions.md)). The article reader keeps only what a named campus
+did, so in the week after the 2026-11-03 elections 72 articles about the vote were
+filed "no project", and the Texas governor-elect's permit moratorium reached 21 of 205
+Texas projects — only those a stock story happened to name.
+
+* **Which pages, and what they cost.** The pages the news step settled in the last two
+  days that a free word test passes — three or more words a rule is stated in, a word
+  for a jurisdiction, and data centers; about 150 of ~700 a day — each put to a model
+  once (`tracker conditions read --limit`, the night's `--conditions`, default 150, `0`
+  to skip). Round 1 only, right after the news step, because those are the pages it has
+  just saved; behind the money ceiling like every paid step, and inside it before each
+  wave of pages.
+* **It edits no campus.** A rule is kept only on the article's own sentences, and is a
+  row of its own, kept apart from a campus's values, obstacles and tier.
+* **Which campuses a rule reaches is code, every round** (`tracker conditions match`,
+  in the free phase after `derive`, and once more after the last round): by place,
+  stage and size. A campus the night placed, merged or moved to another stage is
+  matched by morning. Free, so `--conditions 0` leaves it running.
+* **The morning report** says, in one line after the news, how many pages were read,
+  how many rules were kept and how many of those are new, and how many campuses a rule
+  reached for the first time; `tracker loop` shows the same line.
+
 ## What search looks for, and why it is not a model's idea
 
 Search used to ask a model to **name projects** to look for. That can only ever
@@ -947,6 +975,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Archives every night | `tracker/ingest/discover.py` — `watch_newsrooms`, `NEWSROOM_SURGE`, `LATE_LISTING_DAYS`, `NEWSROOM_NEW`, `_month_from_path`, `_absolute`, `run(sitemaps=)`, `RememberingFetcher`, `RecentWalkFetcher`, `walk_cache`, `WALK_FRESH`; `tracker/ingest/enrich.py` — `sweep_archives`; `tracker/ingest/fetch.py` — `date_from_url`; `tracker/normalize.py` — `url_variants`; `tracker/cli/sync.py` — `discover --archives` |
 | The news watch | `tracker/ingest/watch.py` — `run`, `golive_query`, `relist`, `LISTING_STALE`, `GOLIVE_PER_RUN`, `GOLIVE_LEAD`, `GOLIVE_WORDS`, `due`, `cadence`, `recently_cited`, `is_quiet`, `QUIET_AFTER`, `QUIET_CADENCE`, `EARLY`, `plan_queries`, `anchor`, `_company_term`, `_places`, `_names`, `_VAGUE`, `window_for`, `_screened`, `judge`, `split_followups`, `group_queries`, `judge_group`, `GROUP_WORDS`, `GROUP_PAGES`, `GROUP_MAX_GAP`, `CADENCE`, `NEXT_WORDS`, `BASELINE_PER_RUN`; the company watch — `run_companies`, `companies_due`, `company_query`, `judge_company`, `COMPANY_MIN_CAMPUSES`, `COMPANY_CADENCE`; migrations `0039_news_watch` (`news_watch`), `0040_company_watch`, `0047_golive_check`; `tracker/delays.py` — `awaiting_search`, `GOLIVE_RECHECK`, `searched_since_due`; `tracker/cli/sync.py` — `news`; `tracker/ingest/crawl.py` — `record_url` (a watch row's date gives way to the page's) |
 | A search the cap refused | `tracker/agent.py` — `SEARCH_REFUSED`, `_search_web`; `tracker/gapfill.py` — `fill` |
+| Rules for a place, read nightly after the news | `tracker/night/steps.py` — `KINDS` (`conditions`), `commands` (`conditions`, `free`), `fixed_round`, `defaults_per_night`; `tracker/night/referee.py` — `frame`; `tracker/overnight.py` — `Options.conditions`, `Night.directed_round`, `Night.match_rules`, `Night.report_rules`, `RULES_LINE`, `frame_words`; `tracker/night/record.py` — `Metrics` (`rules`, `exposed`), `probe`, `RulesTonight`, `rules_tonight`; `tracker/night/briefing.py` — `placed_text`; `tracker/loopstatus.py` — `Night.rules`; `tracker/conditions.py` — `pages`, `worth_reading`, `read`, `rebuild`; `tracker/cli/conditions.py` — `conditions read`, `conditions match` |
 | Searches counted and capped; the morning report | `tracker/ingest/search.py` — `SerperProvider._spend_one`, `_post`; `tracker/llm.py` — `record_search`; `tracker/spend.py` — `searches`, `SEARCH_MODEL`, `SEARCH_CNY`, `FETCH_CNY`, `report`, `summary`; `tracker/config.py` — `search_cap`; `tracker/ingest/desk.py` — `build`, `Desk.lines`, `FAILED`, `SET_ASIDE`, `serper_credit`; `tracker/cli/sync.py` — `news report`; `tracker/night/steps.py` — `commands` (`news`), `fixed_round`, `SEARCHES_KEPT`; `tracker/night/referee.py` — `news_step`, `NEWS_SEARCH_FLOOR`; `tracker/overnight.py` — `Night.run_step` |
 | Closed feeds, and naming a challenge | `tracker/seed/feeds.toml` — `closed`; `tracker/ingest/discover.py` — `FeedSpec.closed`, `SitemapSpec.closed`, `_closed_reason`, `DiscoverReport.closed`, `_RawFetcher`, `CHALLENGE_NOTE`; `tracker/ingest/probe.py` — `configured_hosts` |
 | The weekly check of closed entries | `tracker/ingest/discover.py` — `probe_closed`, `record_probe`, `reopened_names`, `without_reopened`, `PROBE_EVERY`; migration `0034_feed_probe`; `tracker/cli/sync.py` — `discover --probe-closed`; for a refusing publisher, `probe_refusing` on the same clock |

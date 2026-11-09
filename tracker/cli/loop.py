@@ -50,6 +50,7 @@ def _payload(night: loopstatus.Night, state: loopstatus.Live) -> dict:
         "stop_why": night.stop_why or None,
         "referee": night.referee,
         "accuracy": night.accuracy or None,
+        "rules": night.rules or None,
         "director_cny": state.director_cny,
         "steps": [r.as_json() for r in state.steps],
     }

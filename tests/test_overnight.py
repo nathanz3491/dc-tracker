@@ -341,6 +341,8 @@ ROUND_ONE = [
     ("news", "--baselines", "300", "--max-queries", "1200"),
     ("ingest", "queue", "--new-first", "--limit", "1350", "--screen"),
     ("ingest", "geo"),
+    # The rule reader, right after the news: it reads the pages the news just saved.
+    ("conditions", "read", "--limit", "150"),
     (
         "duplicates", "resolve", "--merge", "--min-confidence", "0.85",
         "--created-since", TWIN_SINCE, "--limit", "60",
@@ -348,6 +350,7 @@ ROUND_ONE = [
     ("backfill", "dates", "--apply", "--refetch", "--yes", "--limit", "150"),
     ("backfill", "scope", "--apply"),
     ("backfill", "derive"),
+    ("conditions", "match"),
     ("logic", "resolve", "--auto", "--apply"),
     ("duplicates", "resolve", "--merge", "--limit", "40", "--min-confidence", "0.85"),
     ("audit", "resolve", "--no-ask", "--limit", "60"),
@@ -368,6 +371,7 @@ ROUND_TWO = [
     ("ingest", "geo"),
     ("backfill", "scope", "--apply"),
     ("backfill", "derive"),
+    ("conditions", "match"),
     ("logic", "resolve", "--auto", "--apply"),
     ("duplicates", "resolve", "--merge", "--limit", "40", "--min-confidence", "0.85"),
     ("audit", "resolve", "--no-ask", "--limit", "60"),
@@ -384,6 +388,8 @@ ROUND_TWO = [
 def _report(snap: Path) -> list[tuple[str, ...]]:
     return [
         ("losses", "--against", str(snap), "--restore"),
+        # The rules matched once more, to the campuses as the last round left them.
+        ("conditions", "match"),
         ("clean",),
         ("logic", "check"),
         ("invariants", "--record"),
@@ -396,12 +402,14 @@ def _report(snap: Path) -> list[tuple[str, ...]]:
 
 
 def test_the_night_runs_every_phase_in_order_and_the_first_round_does_more(tmp_path):
-    """The whole night, command by command: the news first, then free, duplicates
-    ahead of every phase that pays to read one row, audit, risks, logic, tranches,
-    the two enrich passes (again in round 2, on rows round 1 did not ask about),
-    reread and recheck in round 1 only, a settle per round, then the morning report.
-    Identical to the shell's order except that round 1 no longer runs the Census
-    lookup twice with nothing in between that adds a row."""
+    """The whole night, command by command: the news first, the rule reader right after
+    it, then free (which matches the rules to campuses after derive), duplicates ahead
+    of every phase that pays to read one row, audit, risks, logic, tranches, the two
+    enrich passes (again in round 2, on rows round 1 did not ask about), reread and
+    recheck in round 1 only, a settle per round, one last match, then the morning
+    report. Identical to the shell's order except that round 1 no longer runs the
+    Census lookup twice with nothing in between that adds a row, and the rules for a
+    place (2026-11-10)."""
     run = go(
         make(
             tmp_path,
@@ -509,7 +517,9 @@ def test_a_night_with_nothing_left_stops_settled(tmp_path):
 # Each paid phase, and the command that runs just before its ceiling check.
 CEILINGS = [
     ("news", (), ("news", "--baselines", "300", "--max-queries", "1200"), ("ingest", "queue")),
-    ("duplicates", (), ("ingest", "geo"), ("duplicates", "resolve")),
+    ("conditions", (), ("ingest", "geo"), ("conditions", "read")),
+    ("conditions", ("--discover", "0"), ("suspect", "score"), ("conditions", "read")),
+    ("duplicates", (), ("conditions", "read"), ("duplicates", "resolve")),
     ("duplicates", ("--discover", "0"), ("logic", "resolve", "--auto", "--apply"), ("duplicates",)),
     ("audit", ("--discover", "0"), ("duplicates", "resolve"), ("audit",)),
     ("risks", ("--discover", "0"), ("audit",), ("risks",)),
@@ -563,11 +573,12 @@ def test_the_ceiling_is_checked_before_every_paid_phase(tmp_path, before, argv, 
 
 
 def test_the_token_ceiling_still_stops_the_night(tmp_path):
+    """At the first paid step: without discovery, the rule reader."""
     run = go(
         make(tmp_path, ["--tokens", "1000", "--discover", "0"], spent=lambda: Spent(0.1, 1000))
     )
     assert (
-        "spend ceiling reached (¥0.10 of ¥15, ~1000 of 1000 tokens) before duplicates" in run.text
+        "spend ceiling reached (¥0.10 of ¥15, ~1000 of 1000 tokens) before conditions" in run.text
     )
 
 
@@ -761,6 +772,7 @@ def test_the_defaults_are_the_shells():
     )  # fmt: skip
     assert (o.discover, o.screen, o.baselines, o.search_cap) == (1350, True, 300, 1700)
     assert (o.dates, o.reread, o.recheck, o.min_confidence) == (150, 180, 180, "0.85")
+    assert o.conditions == 150
     assert (o.merge, o.cny, o.tokens, o.backup_every) == (True, None, None, 5)
     assert (o.judgement_effort, o.extraction_effort, o.agent_effort) == ("high", None, None)
     assert o.local_judgement is False
@@ -846,16 +858,99 @@ def test_no_merge_never_folds(tmp_path):
 
 
 def test_discover_0_skips_the_news_and_places_rows_in_the_free_phase(tmp_path):
+    """The rule reader has its own switch: it reads the pages saved over two days, so
+    a night without discovery still has yesterday's."""
     run = go(make(tmp_path, ["--rounds", "1", "--discover", "0"]))
     firsts = {c[0] for c in run.stub.calls}
     assert "discover" not in firsts
     assert not any(c[:2] in {("ingest", "queue"), ("news", "--baselines")} for c in run.stub.calls)
-    assert run.stub.calls[:3] == [
+    assert run.stub.calls[:4] == [
         ("suspect", "score"),
+        ("conditions", "read", "--limit", "150"),
         ("backfill", "dates", "--apply", "--refetch", "--yes", "--limit", "150"),
         ("ingest", "geo"),
     ]
     assert "after news" not in run.text
+
+
+def test_the_rule_reader_runs_once_a_night_right_after_the_news(tmp_path):
+    """It reads the pages the news step has just saved; one that ran before the news,
+    or again in a later round, would read only what the last reading already had."""
+    run = go(
+        make(
+            tmp_path,
+            ["--rounds", "3", "--conditions", "40"],
+            counts=[(50, 50, 50), (40, 40, 40), (30, 30, 30), (20, 20, 20), (10, 10, 10)],
+        )
+    )
+    reads = [i for i, c in enumerate(run.stub.calls) if c[:2] == ("conditions", "read")]
+    assert len(reads) == 1, "once a night, however many rounds"
+    (at,) = reads
+    assert run.stub.calls[at] == ("conditions", "read", "--limit", "40")
+    assert run.stub.calls[at - 1] == ("ingest", "geo"), "the news step's last command"
+    assert run.stub.calls[at + 1][:3] == ("duplicates", "resolve", "--merge"), "then the twins"
+    assert re.search(
+        r"\n--- \d\d:\d\d:\d\d  conditions — rules that apply to a place, in up to 40 saved "
+        r"page\(s\) the news read\n",
+        run.text,
+    )
+
+
+def test_the_free_phase_matches_the_rules_every_round_and_once_more_after_the_last(tmp_path):
+    """A campus the night placed, merged or moved to another stage is matched by morning:
+    every free phase matches after derive, and the last round's own merges are matched
+    after the rounds, before the report."""
+    run = go(make(tmp_path, ["--rounds", "2"], counts=[(10, 5, 100), (12, 6, 101), (11, 5, 99)]))
+    calls = run.stub.calls
+    matches = [i for i, c in enumerate(calls) if c == ("conditions", "match")]
+    assert len(matches) == 3
+    for i in matches[:2]:
+        assert calls[i - 1] == ("backfill", "derive")
+        assert calls[i + 1] == ("logic", "resolve", "--auto", "--apply")
+    losses = next(i for i, c in enumerate(calls) if c[0] == "losses")
+    assert matches[2] == losses + 1
+    assert "  match — which campuses each rule for a place reaches, as the night left them\n" in (
+        run.text
+    )
+
+
+def test_conditions_0_skips_the_reading_but_not_the_matching(tmp_path):
+    """The reading is paid and can be switched off; matching the rules already held is
+    free, and campuses still move under them."""
+    run = go(make(tmp_path, ["--rounds", "1", "--conditions", "0"]))
+    assert not any(c[:2] == ("conditions", "read") for c in run.stub.calls)
+    assert run.stub.calls.count(("conditions", "match")) == 2
+    assert overnight.parse_options(["--conditions", "0"]).conditions == 0
+
+
+def test_the_morning_report_says_what_the_rule_reader_did(tmp_path):
+    """Pages read, rules kept and how many are new, and the campuses newly affected —
+    counted from the database since the night began, in the database's clock."""
+    from tracker.night.record import RulesTonight
+
+    asked: list[dt.datetime] = []
+
+    def counted(since):
+        asked.append(since)
+        return RulesTonight(pages=38, kept=4, new=1, projects=23)
+
+    run = make(tmp_path, ["--rounds", "1"])
+    run.night.rules_read = counted
+    go(run)
+    assert asked == [dt.datetime(2026, 10, 29, 22, 1)], "naive UTC, the database's own"
+    assert (
+        "] rules that apply to a place\n"
+        "    rules     38 saved page(s) read: 4 rule(s) kept (1 new); 23 project(s) newly "
+        "affected\n"
+    ) in run.text
+    report = run.text.index("] how the news came in")
+    assert run.text.index("] rules that apply to a place") > report
+
+    broken = make(tmp_path, ["--rounds", "1"])
+    broken.night.rules_read = lambda _since: 1 / 0
+    go(broken)
+    assert "    rules     could not be counted: ZeroDivisionError" in broken.text
+    assert "] overnight complete — " in broken.text
 
 
 def test_enrich_0_skips_the_t2_pass_but_not_the_pipeline_pass(tmp_path):
@@ -1048,7 +1143,8 @@ def test_the_line_shapes_are_the_shells(tmp_path):
     text = run.text
     assert text.startswith("\n[2026-10-29 18:01:00] overnight starting  (pid 4242)\n    repo      ")
     assert re.search(
-        r"\n--- \d\d:\d\d:\d\d  free — dates, geo, scope, derive, logic --auto\n", text
+        r"\n--- \d\d:\d\d:\d\d  free — dates, geo, scope, derive, conditions match, logic --auto\n",
+        text,
     )
     assert re.search(
         r"\n\[2026-10-29 \d\d:\d\d:\d\d\] overnight complete — \d+m, ¥0\.00 on models", text
@@ -1318,14 +1414,16 @@ def test_a_directed_night_runs_the_frame_then_the_directors_steps_inside_the_rul
     stop = Plan(stop=True, why="nothing left worth the money")
     run = go(directed(tmp_path, first, floors_only, stop))
     assert run.status == 0
-    # The news, the twins and the free phase first, as on every night; the duplicate
-    # floor moved ahead of what reads a row; the plan revised after three steps (the
-    # named rows dropped, the floors kept, the logic floor topped up to 60); then the
-    # stop, with the floors still run.
+    # The news, the rule reader, the twins and the free phase first, as on every night;
+    # the duplicate floor moved ahead of what reads a row; the plan revised after three
+    # steps (the named rows dropped, the floors kept, the logic floor topped up to 60);
+    # then the stop, with the floors still run.
     assert _kinds(run) == [
-        "news", "twins", "free", "duplicates", "logic", "enrich",
+        "news", "conditions", "twins", "free", "duplicates", "logic", "enrich",
         "audit", "risks", "logic", "suspects", "tranches", "reread", "recheck",
     ]  # fmt: skip
+    assert [r.origin for r in run.night.records][1:4] == ["frame"] * 3
+    assert ("conditions", "read", "--limit", "150") in run.stub.calls
     assert ("logic", "resolve", "--limit", "50") in run.stub.calls
     assert ("news", "--baselines", "300", "--max-queries", "800") in run.stub.calls
     assert ("ingest", "queue", "--new-first", "--limit", "900", "--screen") in run.stub.calls
@@ -1348,6 +1446,11 @@ def test_a_directed_night_runs_the_frame_then_the_directors_steps_inside_the_rul
     director = run.night.director
     assert len(director.messages) == 3
     assert "THIS ROUND STARTS WITH the news" in director.messages[0]
+    assert (
+        "the rule reader (up to 150 saved pages that may state a rule for a place, one model "
+        "call each, from the same ceiling as your steps; it changes no campus's values), the "
+        "twin pass, then the free phase. Then your steps."
+    ) in director.messages[0]
     assert "RAN SINCE YOUR LAST CHECK-IN" in director.messages[2]
     assert "effort low raised to high" in director.answers[0]
     assert (
@@ -1356,7 +1459,7 @@ def test_a_directed_night_runs_the_frame_then_the_directors_steps_inside_the_rul
     assert "the director stopped the night: nothing left worth the money" in run.text
     assert "how the night was chosen" in run.text
     lines = (tmp_path / "steps.jsonl").read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 13
+    assert len(lines) == 14
 
 
 def test_both_readers_of_the_log_follow_a_directed_night(tmp_path):
@@ -1372,7 +1475,9 @@ def test_both_readers_of_the_log_follow_a_directed_night(tmp_path):
     [seen] = loopstatus.parse(line for line in run.text.splitlines(True) if loopstatus.wanted(line))
     assert seen.chosen_by == "director" and seen.fell_back == "timeout"
     assert any("clamped to 120" in change for change in seen.referee)
-    assert [p.name for p in seen.rounds[0].phases][:3] == ["news", "duplicates", "free"]
+    assert [p.name for p in seen.rounds[0].phases][:4] == [
+        "news", "conditions", "duplicates", "free"
+    ]  # fmt: skip
 
     (tmp_path / "b").mkdir()
     stopped = go(directed(tmp_path / "b", Plan(stop=True, why="enough for tonight")))
@@ -1404,10 +1509,12 @@ def test_a_director_that_fails_before_round_one_leaves_an_ordinary_fixed_night(t
 def test_a_director_that_fails_mid_round_hands_the_rest_of_the_round_over(tmp_path):
     run = go(directed(tmp_path, Plan(steps=[Step("audit", size=30)]), DirectorFailed("timeout")))
     assert _kinds(run) == [
-        "news", "twins", "free", "duplicates", "audit", "risks",
+        "news", "conditions", "twins", "free", "duplicates", "audit", "risks",
         "logic", "suspects", "tranches", "pipeline", "enrich", "reread", "recheck",
     ]  # fmt: skip
-    assert [r.origin for r in run.night.records][6:] == ["fallback"] * 7
+    # The fixed schedule takes the rest of the round without reading the rules again.
+    assert [r.origin for r in run.night.records][7:] == ["fallback"] * 7
+    assert sum(1 for c in run.stub.calls if c[:2] == ("conditions", "read")) == 1
 
 
 def test_a_round_that_loses_answers_hands_the_night_back(tmp_path):

@@ -10,6 +10,9 @@ On a directed night (`tracker.night`) it also says who is choosing the steps, wh
 the director had to hand them back and why, what the director itself has spent, every
 change the referee made to its plans, the accuracy check, and — from the step record
 (`data/runs/steps.jsonl`) — what each step cost and did against what was predicted.
+Once a night has written its morning report, one line says what it did about rules
+that apply to a place: pages read, rules kept and how many are new, and the campuses
+a rule reached for the first time.
 
 The parse is pure — lines in, a `Night` out — so the tests feed it a log; reading the
 files and the lock, and drawing, are the two thin layers either side.
@@ -60,6 +63,7 @@ _WANTED: Final = (
     overnight.STEPS_LINE,
     overnight.REFEREE_LINE,
     overnight.ACCURACY_LINE,
+    overnight.RULES_LINE,
 )
 
 #: How many past nights the history shows.
@@ -146,6 +150,8 @@ class Night:
     referee: list[str] = field(default_factory=list)
     #: The latest accuracy check.
     accuracy: str = ""
+    #: The morning report's line on rules that apply to a place.
+    rules: str = ""
 
     @property
     def complete(self) -> bool:
@@ -269,6 +275,8 @@ def parse(lines: Iterable[str]) -> list[Night]:
             night.referee.append(line[len(overnight.REFEREE_LINE) :].strip())
         elif line.startswith(overnight.ACCURACY_LINE):
             night.accuracy = line[len(overnight.ACCURACY_LINE) :].strip()
+        elif line.startswith(overnight.RULES_LINE):
+            night.rules = line[len(overnight.RULES_LINE) :].strip()
     return nights
 
 
@@ -806,6 +814,8 @@ def render(
         parts += [_section("Did it help?", note), progress]
         if night.accuracy:
             parts.append(Text(f"accuracy: {night.accuracy}", style=theme.MUTED))
+    if night.rules:
+        parts.append(Text(f"rules for a place: {night.rules}", style=theme.MUTED))
     if night.rounds:
         parts += [_section("Round by round"), _rounds(night, state, now, ascii_only)]
     steps = _steps(state, ascii_only)

@@ -207,6 +207,31 @@ def prices_text(prices: dict[str, record_mod.Price]) -> str:
     return "\n".join(p.line() for p in prices.values())
 
 
+def placed_text(options: Any, prices: dict[str, record_mod.Price]) -> str:
+    """The steps the night places itself tonight, at their sizes, with what each costs.
+
+    Their spend comes out of the same money ceiling as the director's steps, so a plan
+    sized as if the frame were free overspends: the rule reader (from 2026-11-10) adds up
+    to 150 model calls before the director's first step runs. Priced from the record's
+    median per unit; a kind the record has not priced yet says so rather than guess.
+    """
+    from tracker.night.steps import KINDS, fixed_round
+
+    lines = []
+    for step in fixed_round(options, 1):
+        kind = KINDS[step.kind]
+        if kind.choosable or step.kind == "free":
+            continue
+        price = prices.get(step.kind)
+        if price is not None and price.cny is not None:
+            cost = f"about ¥{price.cny[1] * step.size:.2f} at that size (¥{price.cny[1]:.4f} each)"
+        else:
+            cost = "not yet priced by the record"
+        lines.append(f"- round 1: {step.kind}, {step.size} {kind.unit}; {cost}")
+    lines.append("- every round, first: free (no model, no cost)")
+    return "\n".join(lines)
+
+
 def briefing(
     *,
     state: State,
@@ -216,11 +241,14 @@ def briefing(
     note: str,
     mode: str,
     last_nights: Sequence[str],
+    placed: str = "",
 ) -> str:
     """The first message of the night's conversation."""
     rows = "\n".join(r.line() for r in shortlist(state.rows))
+    frame = "=== PLACED BY THE NIGHT (not yours to choose; paid from the same ceiling) ==="
     sections = [
         f"=== TONIGHT ({mode}) ===\n{limits}",
+        *([f"{frame}\n{placed}"] if placed else []),
         "=== KNOWN CONDITIONS ===\n" + ("\n".join(f"- {c}" for c in conditions) or "- none"),
         "=== THE OPERATOR'S NOTE ===\n"
         + (f"<note>{clip(note, 500)}</note>" if note else "none tonight"),
@@ -436,7 +464,7 @@ def last_nights(records: Sequence[record_mod.StepRecord], nights: int = 5) -> li
             first, last = known[0].before, known[-1].after
             delta = "; " + ", ".join(
                 f"{k} {first[k]}->{last[k]}"
-                for k in ("below", "findings", "groups", "values")
+                for k in ("below", "findings", "groups", "values", "rules")
                 if k in first and k in last
             )
         out.append(
@@ -495,6 +523,7 @@ __all__ = [
     "clip",
     "last_nights",
     "lessons",
+    "placed_text",
     "read_state",
     "shortlist",
     "state_text",

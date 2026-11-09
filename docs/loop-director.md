@@ -49,8 +49,10 @@ whether its estimates can be trusted is visible within a week.
 
 1. The frame, which the director cannot change: counts, the snapshot, the suspicion
    score. Round 1 always starts with the **news** (the director sets its searches,
-   queue size and first looks, inside a floor of 400 searches), then the **twin
-   pass**, then the **free phase**. Every later round starts with the free phase.
+   queue size and first looks, inside a floor of 400 searches), then the **rule
+   reader**, then the **twin pass**, then the **free phase**. Every later round starts
+   with the free phase. The frame is placed by the referee (`referee.frame`), the same
+   steps at the same sizes as on a fixed night; see [the rule reader](#the-rule-reader).
 2. **Check-ins.** One conversation for the whole night. The director is briefed once
    (`tracker/night/briefing.py`), then checks in at the start of each round and after
    every three of its steps. Each check-in tells it what ran, what it cost, what the
@@ -90,8 +92,11 @@ whether its estimates can be trusted is visible within a week.
 
 ## The referee's rules
 
-- **The menu only.** Unknown steps and the frame's steps are refused.
-- **Once a night**: the news, the twins, the suspects, reread, recheck.
+- **The menu only.** Unknown steps and the frame's steps (the news, the rule reader,
+  the twins, the free phase) are refused. The plan's schema does not offer the rule
+  reader, and the referee refuses it if a plan names it anyway.
+- **Once a night**: the news, the rule reader, the twins, the suspects, reread,
+  recheck. A frame step that has already run is not placed again.
 - **Ranges.** Every size and budget is clamped to its kind's range
   (`steps.KINDS`). An enrich step with no budget gets four articles a row, the fixed
   schedule's ratio.
@@ -124,6 +129,37 @@ whether its estimates can be trusted is visible within a week.
   duplicate pass may fold; logic and the suspects before the tranche review.
 - **Size of a night**: at most 60 steps.
 
+## The rule reader
+
+Since 2026-11-10 round 1 reads, right after the news, the rules that apply to a place
+rather than one campus — a state's permit pause, a town's ban, a grid operator's
+large-load rule ([conditions](conditions.md)). The article reader drops an article
+that names no campus, so after the 11-03 elections 72 articles about the vote went
+unread, and the Texas governor-elect's moratorium reached 21 of 205 Texas projects.
+
+- **What it reads.** The pages the news step saved in the last two days that a free
+  word test passes (about 150 of ~700 a day), one judgement call each, at most
+  `--conditions` (default 150, range 0–300; `0` skips it). Right after the news,
+  because those are the pages it has just saved.
+- **Why it is placed, not chosen.** It edits no campus's values, so the answer key
+  and the counts the director is judged by cannot see it; a director weighing it
+  against a step that moves a count would always cut it, and a rule nobody read is
+  missing from every campus in its place. Its cost comes out of the same money ceiling,
+  so the briefing lists it under **placed by the night** with its size and its price
+  per page from the record, and the round-1 check-in says it runs before the
+  director's steps.
+- **The ceiling.** It is a paid step: the money ceiling is asked before it starts
+  (`spend ceiling reached … before conditions`) and inside it, before each wave of
+  pages.
+- **Which campuses a rule reaches** is code (`tracker conditions match`): matched again
+  in every free phase after `derive`, and once more after the last round, so a campus
+  the night placed, merged or moved to another stage is matched by morning. Free;
+  `--conditions 0` does not turn it off, since campuses keep moving under the rules
+  already held.
+- **Its result** is read in rules held: the step record carries the rules held and the
+  campuses they reach before and after, and the morning report gives it one line after
+  the news — pages read, rules kept (how many new), projects newly affected.
+
 ## When the director fails
 
 Any of these ends the director's part of the night, and the fixed schedule runs the
@@ -148,7 +184,9 @@ starts a new conversation with the briefing and the night so far as a table.
 
 ## What it is told
 
-The briefing is built by code: the limits and what is left; known conditions (an
+The briefing is built by code: the limits and what is left; the steps the night places
+itself, at their sizes and their measured price (their spend comes out of the same
+ceiling); known conditions (an
 empty DeepSeek balance, the Serper credit); the operator's note; the database (rows by
 tier, rows below T2 by missing field, findings by kind and how many the agent can
 repair, duplicate groups, the queue); the last nights; the price list; and a shortlist
@@ -182,8 +220,8 @@ It steers within the rules; it cannot lift a ceiling or a floor.
 - **time**, and the **exit status** of each command — a crash is not a finding of
   nothing, and the director is told the difference;
 - **counts before and after**: findings, duplicate groups, rows below T2, stored
-  values and rows. A step's **result** is the change in its kind's count, signed so
-  that more is better;
+  values, rows, and the rules for a place held and the campuses they reach. A step's
+  **result** is the change in its kind's count, signed so that more is better;
 - the **prediction**, when there was one;
 - the code version.
 
@@ -204,7 +242,8 @@ tracker director backfill --write        # cost and time for nights before the r
 `tracker loop` (on the host) says who is choosing tonight's steps, whether the director
 handed them back and why, what the director has spent of its ¥5, the referee's changes,
 the latest accuracy check, and a step-by-step table — each step's cost, searches, time
-and result beside the prediction, failed steps marked. Its history says who chose each
+and result beside the prediction, failed steps marked. Once the morning report is
+written it adds the line on rules for a place. Its history says who chose each
 past night. `tracker --json loop` carries the same, with the steps as records. The
 public status page treats a night the director stopped as finished, and its JSON says
 who chose each night.

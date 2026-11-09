@@ -46,9 +46,24 @@ THE PHASE ORDER IS THE ARGUMENT. The news first, then cheapest and most-blocking
             read costs about ¥0.0075 (10-18: 156 for ¥1.17) and 40 took 48
             seconds. At 150 the backlog would have taken two months to clear; at
             600 it is about ¥4.5 a night and about two weeks.
-  free      dates, geo, scope, derive, logic --auto. No model, no cost. `scope`
-            re-gates stored labels against their own quotes; `derive` re-applies
-            every derived value, and both are pure functions of what is stored.
+  conditions first round only, right after the news, since 2026-11-10: rules that
+            apply to a place rather than one campus — a state's permit pause, a
+            town's ban, a grid operator's large-load rule (`tracker conditions
+            read`, `docs/conditions.md`). The reader drops an article that names no
+            campus, so after the 11-03 elections 72 articles about the vote went
+            unread and the Texas governor-elect's moratorium reached 21 of 205
+            Texas projects. It reads the pages the news step saved in the last two
+            days that a free word test passes (about 150 of ~700 a day), one model
+            call each, `--conditions` at most; right after the news, because those
+            are the pages it has just saved. It edits no campus's values. Which
+            campuses a rule reaches is code, matched again in every free phase and
+            once after the last round (`conditions match`), so a campus placed,
+            merged or moved to another stage tonight is matched by morning.
+  free      dates, geo, scope, derive, conditions match, logic --auto. No model,
+            no cost. `scope` re-gates stored labels against their own quotes;
+            `derive` re-applies every derived value, and both are pure functions of
+            what is stored. `conditions match` rebuilds which campuses each rule
+            for a place reaches from the rows as derive left them.
             In the first round the dates step also asks publishers (`--dates`,
             one plain request a page, each page once per 90 days, newest first).
   duplicates the agent: reads both rows, folds or parks. The only step that
@@ -211,10 +226,10 @@ stops, re-planning after every three steps. On the nights between, the order abo
 runs exactly as before and the director only predicts each step's cost and yield. The
 model chooses; code decides whether the choice is allowed (`tracker.night.referee`:
 ranges, drift, floors, the order rules, effort), runs it as the same commands, and
-measures it. The news, the twin pass and the free phase are placed by the night, never
-chosen. A director that fails, spends its ¥5, or presides over a round that loses two
-answers in the answer key (`tracker.night.guard`) hands the rest of the night to the
-fixed schedule. Every step of every night leaves a record of its cost and result
+measures it. The news, the rule reader, the twin pass and the free phase are placed by
+the night (`referee.frame`), never chosen. A director that fails, spends its ¥5, or
+presides over a round that loses two answers in the answer key (`tracker.night.guard`)
+hands the rest of the night to the fixed schedule. Every step of every night leaves a record of its cost and result
 (`tracker.night.record`, `data/runs/steps.jsonl`). `docs/loop-director.md` has the
 rules and why each exists.
 
@@ -244,8 +259,9 @@ into `data/runs/overnight.log`.
 
 THE LOG IS A CONTRACT. The status page reads `data/runs/overnight.log`
 (`tracker.webui.statussite.parse_nights`), `tracker loop` reads it with the opening
-block's `ceilings`, `at start`, `spend` and `steps` lines and a directed night's
-`referee:` and `accuracy` lines and its hand-over and stop (`tracker.loopstatus`), and
+block's `ceilings`, `at start`, `spend` and `steps` lines, a directed night's
+`referee:` and `accuracy` lines and its hand-over and stop, and the morning's `rules`
+line (`tracker.loopstatus`), and
 `overnight.sh --status` greps it, so the words and line shapes they look for are
 constants below, imported from here by both readers, and the formats — `[YYYY-MM-DD HH:MM:SS] msg`, `--- HH:MM:SS  msg`,
 `  round N: findings A -> B (+d) ...` — are byte-for-byte what the shell printed, so
@@ -307,6 +323,9 @@ STEPS_LINE: Final = "    steps     "
 REFEREE_LINE: Final = "    referee: "
 #: The accuracy check after a directed round, and in the morning report.
 ACCURACY_LINE: Final = "    accuracy  "
+#: The morning report's line on rules for a place: pages read, rules kept (new),
+#: projects newly affected (`record.RulesTonight.line`).
+RULES_LINE: Final = "    rules     "
 #: Accuracy items shown with the step that moved each, in the log and to the director.
 ATTRIBUTED_SHOWN: Final = 8
 #: A director's stop is put back to it once while at least this share of the search cap
@@ -402,6 +421,11 @@ class Options:
     dates: int = 150
     reread: int = 180
     recheck: int = 180
+    # Saved pages the rule reader puts to a model in round 1, right after the news
+    # (`conditions read --limit`): about 150 of the ~700 pages a day pass its free word
+    # test. 0 skips the reading only; matching the rules already held to campuses is
+    # free and runs every round regardless, since campuses move under them.
+    conditions: int = 150
     min_confidence: str = "0.85"
     merge: bool = True
     #: None: tonight's share of the month (`tracker.spend allowance`).
@@ -577,6 +601,14 @@ def parser() -> argparse.ArgumentParser:
         type=int,
         default=d.recheck,
         help="articles holding a refusal from before the gate's last revision to re-read, first round (default 180); 0 to skip",
+    )
+    a(
+        "--conditions",
+        type=int,
+        default=d.conditions,
+        help="saved pages to read for rules that apply to a place, first round, right "
+        "after the news (default 150); 0 to skip the reading. Matching the rules held "
+        "to campuses is free and runs either way",
     )
     a(
         "--min-confidence",
@@ -920,6 +952,9 @@ class Night:
     director_spent: Callable[[], float] = lambda: 0.0
     #: Runs once the morning report is written (a directed night clears the operator's note).
     on_finish: Callable[[], Any] = lambda: None
+    #: What the rule reader and the matching did since the night began (naive UTC), for
+    #: the morning report (`record.rules_tonight`), or None to leave the line out.
+    rules_read: Callable[[dt.datetime], record_mod.RulesTonight] | None = None
     night_id: str = ""
     version: str = ""
 
@@ -1104,6 +1139,7 @@ class Night:
         if self.capped_:
             self.settle("settle — re-derive and score, after the ceiling")
         self.restore_losses()
+        self.match_rules()
         self.morning_report()
         # Tidying up after the night must not fail it.
         with contextlib.suppress(Exception):
@@ -1123,6 +1159,20 @@ class Night:
             return
         self.log.phase("losses — values dropped with no ruling behind them, put back")
         self.tracker("losses", "--against", self.first_snapshot, "--restore")
+
+    def match_rules(self) -> None:
+        """Match every rule for a place to the campuses as the night left them. Free.
+
+        The free phase matches at the start of each round, so without this a campus the
+        last round merged, or whose stage enrich or a ruling moved, would wait for
+        tomorrow's first round — and the morning's console would show it under rules
+        that no longer fit it, or none that do. After the losses pass, which can put a
+        stage back.
+        """
+        self.log.phase(
+            "match — which campuses each rule for a place reaches, as the night left them"
+        )
+        self.tracker("conditions", "match")
 
     def run_round(self, number: int) -> bool:
         """One round: the fixed schedule's steps or the director's, then the settle.
@@ -1339,11 +1389,11 @@ class Night:
     # --- the director ----------------------------------------------------------------------
 
     def directed_round(self, number: int) -> bool:
-        """The night's frame (news, twins, free), then the director's steps, re-planned
-        after every three. A director that fails hands the rest to the fixed schedule."""
+        """The night's frame (news, the rule reader, twins, free), then the director's
+        steps, re-planned after every three. A director that fails hands the rest to
+        the fixed schedule."""
         from tracker.night.director import DirectorFailed, expect_of
 
-        o = self.options
         try:
             plan = self.director.check_in(
                 self.check_in_text(number, at_start=True), round_number=number, at_start=True
@@ -1352,13 +1402,10 @@ class Night:
             self.fall_back(str(exc))
             return self.fixed_round(number)
         notes: list[str] = []
-        frame: list[Step] = []
-        if o.do_discover and number == 1:
-            fixed = steps_mod.fixed_round(o, 1)
-            news = referee.news_step(plan.news, o, fixed[0], notes)
-            news.expect = expect_of((plan.news or {}).get("expect"))
-            frame += [news, dataclasses.replace(fixed[1], origin="frame")]
-        frame.append(Step("free", origin="frame"))
+        frame = referee.frame(plan.news, self.options, number, self.tonight, notes)
+        for step in frame:
+            if step.kind == "news":
+                step.expect = expect_of((plan.news or {}).get("expect"))
         if plan.stop:
             self.stop_why = plan.why or "no reason given"
         verdict = referee.review(
@@ -1475,7 +1522,8 @@ class Night:
             m = self.metrics
             lines.append(
                 f"COUNTS NOW: {m.below} rows below T2, {m.findings} findings, {m.groups} "
-                f"duplicate groups, {m.values} stored values, {m.rows} rows"
+                f"duplicate groups, {m.values} stored values, {m.rows} rows; {m.rules} "
+                f"rules for a place, reaching {m.exposed} campuses"
             )
         if self.guard_lines:
             lines.append("ACCURACY (against tonight's first snapshot): " + self.guard_lines[-1])
@@ -1499,16 +1547,8 @@ class Night:
                 "your expectation (cny, searches, minutes, result) for each listed step by index."
             )
             return "\n".join(lines)
-        if at_start and number == 1 and o.do_discover:
-            fixed = steps_mod.fixed_round(o, 1)[0]
-            lines.append(
-                "THIS ROUND STARTS WITH the news (fixed: "
-                f"{fixed.searches} searches, {fixed.size} queued articles, {fixed.baselines} "
-                "first looks; set yours in `news`), the twin pass, then the free phase. "
-                "Then your steps."
-            )
-        elif at_start:
-            lines.append("THIS ROUND STARTS WITH the free phase. Then your steps.")
+        if at_start:
+            lines.append(f"THIS ROUND STARTS WITH {frame_words(o, number)}. Then your steps.")
         if upcoming:
             lines.append(
                 "STILL PLANNED (your answer replaces these): "
@@ -1678,6 +1718,7 @@ class Night:
         # waiting, search credit running low.
         log.say("how the news came in")
         self.tracker("news", "report", "--since", self.started_utc)
+        self.report_rules()
 
         # Every value the night changed, each with the sentence now behind it. The
         # quality counts above cannot see a wrong value that has a real quote; a reader
@@ -1698,6 +1739,21 @@ class Night:
             log.say("how the night was chosen")
             for line in self.choice_report():
                 log.line(line)
+
+    def report_rules(self) -> None:
+        """One line on rules that apply to a place: pages read, rules kept and how many
+        are new, and the campuses a rule reached tonight for the first time. Counted from
+        the database, so the free phase's matches count too. A count that fails says so
+        and costs nothing else."""
+        if self.rules_read is None:
+            return
+        self.log.say("rules that apply to a place")
+        since = self.started.astimezone(dt.UTC).replace(tzinfo=None)
+        try:
+            line = self.rules_read(since).line()
+        except Exception as exc:
+            line = f"could not be counted: {type(exc).__name__}: {exc}"
+        self.log.line(f"{RULES_LINE}{line}")
 
     def choice_report(self) -> list[str]:
         """Who chose the steps, what each cost and did, against what was predicted."""
@@ -1786,6 +1842,31 @@ def record_line(r: record_mod.StepRecord) -> str:
     return line
 
 
+def frame_words(o: Options, number: int) -> str:
+    """What round `number` starts with before the director's steps, as it is told.
+
+    The fixed schedule's frame steps at their sizes, in the order they run: the
+    director plans the rest of a round whose money the frame has already begun to spend.
+    """
+    said = []
+    for step in steps_mod.fixed_round(o, number):
+        if step.kind == "news":
+            said.append(
+                f"the news (fixed: {step.searches} searches, {step.size} queued articles, "
+                f"{step.baselines} first looks; set yours in `news`)"
+            )
+        elif step.kind == "conditions":
+            said.append(
+                f"the rule reader (up to {step.size} saved pages that may state a rule for "
+                "a place, one model call each, from the same ceiling as your steps; it "
+                "changes no campus's values)"
+            )
+        elif step.kind == "twins":
+            said.append("the twin pass")
+    said.append("the free phase")
+    return said[0] if len(said) == 1 else ", ".join(said[:-1]) + ", then " + said[-1]
+
+
 # --- entry point ------------------------------------------------------------------------
 
 
@@ -1847,6 +1928,7 @@ def build(o: Options, stream: BinaryIO) -> Night:
             since=dt.datetime.fromtimestamp(first.stat().st_mtime, dt.UTC).replace(tzinfo=None),
         ),
         director_spent=lambda: director_spend(ledger),
+        rules_read=lambda since: record_mod.rules_tonight(db, since),
         night_id=f"{started:%Y%m%d-%H%M%S}",
         version=__version__,
     )
@@ -1934,9 +2016,10 @@ def attach_director(
         f"{o.hours} hours from the start; at most {o.rounds} rounds; your own budget "
         f"¥{director_mod.BUDGET_CNY:g}; started {started:%Y-%m-%d %H:%M}"
     )
+    prices = record_mod.prices(records)
     text = briefing.briefing(
         state=state,
-        prices=record_mod.prices(records),
+        prices=prices,
         limits=limits,
         conditions=conditions,
         note=note,
@@ -1944,6 +2027,7 @@ def attach_director(
         if mode == "director"
         else "a fixed night: you predict in the background",
         last_nights=briefing.last_nights(records),
+        placed=briefing.placed_text(o, prices),
     )
     lookups = briefing.Lookups(
         db, records=lambda: [*records, *night.records], tonight=night.history_text, today=today
