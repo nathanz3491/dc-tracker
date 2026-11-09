@@ -20,6 +20,22 @@ deployed, one reader's next email would have carried 64, most of them obstacles
 closed in one batch on 08-12. The ledger stops a repeat; it does not make an
 update that was never news worth sending late.
 
+**Rules affecting your projects** (:func:`rule_cards`). A rule that applies to a
+place — a state's permit pause, a town's ban, a grid operator's rule
+(`tracker.conditions`) — goes in when it reaches at least one project on the
+reader's watchlist and they have not been sent it **at its present status**: one
+card per rule per status, recorded in the same ledger as `condition:<id>:<status>`,
+so a pledge that becomes an order is a second card and the same order is never a
+third. A rule they were told of that is then lifted or voted down comes back once
+as *cleared*; one they never heard of is not cleared to them. The two-month window
+applies, on the date of the rule's newest article, and the catch-up rule does not:
+a reader holds a handful of rules, not sixty updates, and a rule still standing over
+a project they have just started following is news to them. A day whose only news
+is a rule is not a quiet day: it is an `updates` email led by the rule. A rule that
+makes building easier — a tax exemption, by-right zoning (`Condition.effect`) — is
+not a problem and is never drawn as one: it has its own heading, its own colours,
+and it is not counted among a project's blockers.
+
 **A day with no news still gets an email** — the list of what to watch for on
 each followed project (`watchfor`), so a quiet day reads as a quiet day and not as
 a broken service. A day with news carries a short version of the same list. Both
@@ -87,7 +103,18 @@ from sqlalchemy.orm import Session
 
 from tracker.config import Settings, get_settings
 from tracker.feed import REPORT_WINDOW_DAYS, Digest, Signal, notable
-from tracker.models import Account, NotifyDelivery, NotifyRun, NotifySent, Source, utcnow
+from tracker.models import (
+    Account,
+    Condition,
+    Exposure,
+    NotifyDelivery,
+    NotifyRun,
+    NotifySent,
+    Project,
+    Source,
+    utcnow,
+)
+from tracker.vocab import CONDITION_STATUSES
 from tracker.watchfor import (
     EMAIL_BLOCKERS_PER_PROJECT,
     EMAIL_PROJECTS,
@@ -178,6 +205,46 @@ _SEVERITY_COLOURS: dict[str, tuple[str, str]] = {
     "watch": (TOKENS["muted"], TOKENS["muted_foreground"]),
 }
 
+_WARNING_COLOURS: Final = (TOKENS["warning"], TOKENS["warning_soft"], TOKENS["warning"])
+
+#: (a rule's effect, its status) -> (edge colour, chip background, chip text), read
+#: as what it means for the projects under it. A rule that **restricts** — a ban, a
+#: pause, a new cost — cuts against them once adopted, is a warning while argued
+#: over, is neither yet while a court holds it up, and is good news when lifted or
+#: voted down. A rule that **eases** — a tax exemption, by-right zoning — is the
+#: other way round: adopted is good news, and its ending is the warning.
+_RULE_COLOURS: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("restricts", "proposed"): _WARNING_COLOURS,
+    ("restricts", "pledged"): _WARNING_COLOURS,
+    ("restricts", "passed"): _SIGN_COLOURS["bad"],
+    ("restricts", "in_force"): _SIGN_COLOURS["bad"],
+    ("restricts", "blocked"): _SIGN_COLOURS["neutral"],
+    ("restricts", "lifted"): _SIGN_COLOURS["good"],
+    ("restricts", "rejected"): _SIGN_COLOURS["good"],
+    ("eases", "proposed"): _SIGN_COLOURS["neutral"],
+    ("eases", "pledged"): _SIGN_COLOURS["neutral"],
+    ("eases", "passed"): _SIGN_COLOURS["good"],
+    ("eases", "in_force"): _SIGN_COLOURS["good"],
+    ("eases", "blocked"): _WARNING_COLOURS,
+    ("eases", "lifted"): _WARNING_COLOURS,
+    ("eases", "rejected"): _WARNING_COLOURS,
+}
+
+#: What a rule does to the projects under it (`Condition.effect`). One that eases is
+#: never shown as a problem: it has its own heading, and nothing counts it as an
+#: obstacle.
+RESTRICTS: Final = "restricts"
+EASES: Final = "eases"
+
+#: Statuses that settle a rule: it reaches no project any more.
+CLEARED: Final = frozenset({"lifted", "rejected"})
+
+#: A rule's statuses in the order a rule usually moves through them.
+_STATUS_ORDER: Final[dict[str, int]] = {s: i for i, s in enumerate(CONDITION_STATUSES)}
+
+#: How many of a reader's projects a rule's card names before "and N more".
+RULE_PROJECTS_NAMED: Final[int] = 3
+
 #: Email clients are unreliable past roughly this width, and a line of prose is
 #: easier to read short anyway.
 WIDTH = 600
@@ -234,6 +301,8 @@ class Outcome:
     blockers: int = 0
     attempts: int = 0
     error: str | None = None
+    #: Rule cards in the message (`Message.rules`).
+    rules: int = 0
 
     @property
     def sent(self) -> bool:
@@ -392,6 +461,205 @@ def page_url(console_url: str | None, view: str) -> str | None:
     if not console_url:
         return None
     return f"{console_url.rstrip('/')}/{view}"
+
+
+# --- rules affecting a reader's projects ----------------------------------------
+
+
+@dataclass(frozen=True)
+class RuleCard:
+    """One rule that reached a reader's projects, at the status they are told of.
+
+    Built by :func:`rule_cards` from `tracker.conditions`; rendering reads only
+    this, so the template can be tested without a database.
+    """
+
+    condition_id: int
+    #: "Texas", "Piqua, OH", "ERCOT" (`conditions.where_words`).
+    where: str
+    title: str
+    status: str
+    summary: str
+    #: How many of this reader's projects it reaches now: 0 once cleared.
+    reach: int = 0
+    #: A few of them, "Company — Campus".
+    projects: tuple[str, ...] = ()
+    #: The newest article's sentence saying where the rule stands.
+    quote: str | None = None
+    source_url: str | None = None
+    publisher: str | None = None
+    #: The date of the newest article.
+    reported: dt.date | None = None
+    #: For a cleared rule, the last status this reader was sent.
+    was: str | None = None
+    #: :data:`RESTRICTS` or :data:`EASES` (`Condition.effect`).
+    effect: str = RESTRICTS
+
+    @property
+    def key(self) -> str:
+        """The ledger key: one per rule per status (`NotifySent.signal_key`)."""
+        return f"condition:{self.condition_id}:{self.status}"
+
+    @property
+    def cleared(self) -> bool:
+        return self.status in CLEARED
+
+    @property
+    def eases(self) -> bool:
+        return self.effect == EASES
+
+    @property
+    def settled(self) -> str:
+        """What a lifted or rejected rule is to its reader: a restriction lifted is
+        cleared; an easing lifted has ended, which is not good news."""
+        return "ended" if self.eases else "cleared"
+
+    @property
+    def chip(self) -> str:
+        """The status as the card's chip says it."""
+        return f"{self.settled} · {self.status_words}" if self.cleared else self.status_words
+
+    @property
+    def what(self) -> str:
+        """The rule without its place: "pause on new data center permits".
+
+        The reader's title usually leads with the place ("Texas pause on…"), which
+        the card already says.
+        """
+        title = self.title.strip()
+        if self.where and title.lower().startswith(self.where.lower()):
+            rest = title[len(self.where) :].lstrip(" ,:—-")
+            if rest:
+                return rest
+        return title
+
+    @property
+    def status_words(self) -> str:
+        return self.status.replace("_", " ")
+
+    def line(self) -> str:
+        """'Texas: pause on new data center permits — pledged — 31 of your projects'."""
+        head = f"{self.where}: {self.what}" if self.where else self.what
+        if self.cleared:
+            return f"{head} — {self.status_words}"
+        return f"{head} — {self.status_words} — {self.reach} of your projects"
+
+    def reach_words(self) -> str:
+        """Which of the reader's projects it is over, or that it no longer is."""
+        if self.cleared:
+            told = f" (you were told it was {self.was.replace('_', ' ')})" if self.was else ""
+            verb = "applies to" if self.eases else "holds over"
+            return f"No longer {verb} your projects{told}."
+        named = ", ".join(self.projects)
+        more = self.reach - len(self.projects)
+        tail = f" and {more} more" if more > 0 else ""
+        lead = f"{'Applies to' if self.eases else 'Reaches'} {self.reach} of your projects"
+        return f"{lead}: {named}{tail}." if named else f"{lead}."
+
+
+def _rules_words(rules: tuple[RuleCard, ...]) -> str:
+    """ "1 rule affecting your projects moved", for the intro and the text part."""
+    return f"{_plural(len(rules), 'rule')} affecting your projects moved"
+
+
+def rules_subject(rules: tuple[RuleCard, ...]) -> str:
+    """The subject on a day whose only news is a rule: the rule itself, by name.
+
+    Like :func:`subject_for`, a sentence somebody opens rather than a count.
+    """
+    if not rules:
+        return ""
+    head = rules[0].line()
+    if len(rules) > 1:
+        head += f" (+{_plural(len(rules) - 1, 'more rule')})"
+    return head[:150]
+
+
+def _rule_row(card: RuleCard) -> str:
+    """One rule as a card: where, its status, what it is, which projects it is over."""
+    edge, chip_bg, chip_fg = _RULE_COLOURS.get(
+        (EASES if card.eases else RESTRICTS, card.status), _SIGN_COLOURS["neutral"]
+    )
+    source = ""
+    if card.source_url:
+        source = (
+            f'<a href="{esc(card.source_url)}" '
+            f'style="color:{TOKENS["primary"]};text-decoration:none;font-weight:600;white-space:nowrap;">'
+            f"{esc(card.publisher or 'source')} →</a>"
+        )
+    quote = ""
+    if card.quote:
+        quote = (
+            f'<tr><td colspan="2" style="padding:8px 0 0 0;">'
+            f'<div style="border-left:3px solid {TOKENS["border"]};padding:2px 0 2px 12px;'
+            f"color:{TOKENS['muted_foreground']};font-size:13px;line-height:1.5;"
+            f'font-family:{FONT_SANS};font-style:italic;">“{esc(card.quote[:240])}”</div>'
+            f"</td></tr>"
+        )
+    when = f"reported {card.reported.isoformat()}" if card.reported else "undated"
+    what = card.what[:1].upper() + card.what[1:]
+    return f"""
+    <tr><td style="padding:0 0 12px 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+             style="background:{TOKENS["surface"]};border:1px solid {TOKENS["border"]};
+                    border-radius:14px;border-left:4px solid {edge};">
+        <tr><td style="padding:16px 18px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="font-family:{FONT_SANS};font-size:13px;font-weight:600;
+                         color:{TOKENS["muted_foreground"]};padding-bottom:4px;">
+                {esc(card.where)}
+              </td>
+              <td align="right" style="padding-bottom:4px;">
+                {_chip(card.chip, bg=chip_bg, fg=chip_fg)}
+              </td>
+            </tr>
+            <tr><td colspan="2" style="font-family:{FONT_DISPLAY};font-size:19px;
+                       line-height:1.3;color:{TOKENS["foreground"]};padding-bottom:6px;">
+              {esc(what)}
+            </td></tr>
+            <tr><td colspan="2" style="font-family:{FONT_SANS};font-size:14px;
+                       line-height:1.55;color:{TOKENS["foreground"]};">
+              {esc(card.summary)}
+            </td></tr>
+            <tr><td colspan="2" style="padding-top:8px;font-family:{FONT_SANS};font-size:14px;
+                       line-height:1.55;color:{TOKENS["accent_foreground"]};font-weight:600;">
+              {esc(card.reach_words())}
+            </td></tr>
+            {quote}
+            <tr><td colspan="2" style="padding-top:10px;font-family:{FONT_MONO};
+                       font-size:11px;color:{TOKENS["muted_foreground"]};">
+              {esc(when)} &nbsp; {source}
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>"""
+
+
+def _rules_section(rules: tuple[RuleCard, ...]) -> tuple[str, list[str]]:
+    """The rules, as HTML rows and as text lines: those that make building harder
+    under "Rules affecting your projects", those that make it easier under their own
+    heading, so a tax exemption never reads as a problem."""
+    rows: list[str] = []
+    text: list[str] = []
+    for heading, group in (
+        ("Rules affecting your projects", [c for c in rules if not c.eases]),
+        ("Rules easing your projects", [c for c in rules if c.eases]),
+    ):
+        if not group:
+            continue
+        rows.append(_heading(heading))
+        rows += [_rule_row(card) for card in group]
+        text += ["", heading.upper(), ""]
+        for card in group:
+            text.append(f"* {card.line()}" + (f" ({card.settled})" if card.cleared else ""))
+            text.append(f"  {card.summary}")
+            text.append(f"  {card.reach_words()}")
+            when = f"reported {card.reported.isoformat()}" if card.reported else "undated"
+            text.append(f"  ({when})" + (f" {card.source_url}" if card.source_url else ""))
+            text.append("")
+    return "".join(rows), text
 
 
 # --- rendering ----------------------------------------------------------------
@@ -738,15 +1006,26 @@ def render(
     console_url: str | None = None,
     watch: WatchReport | None = None,
     last_email: dt.datetime | None = None,
+    rules: tuple[RuleCard, ...] = (),
 ) -> str:
-    """The day's message when there is news, as one HTML string."""
+    """The day's message when there is news, as one HTML string.
+
+    The news is updates, rules affecting the reader's projects, or both. A day
+    whose only news is a rule carries the full watch list, as a quiet day would.
+    """
     greeting = f"Morning, {esc(name)}." if name else "Here is what moved."
+    since = _since_words(last_email)
     count = f"{len(signals)} new update{'s' if len(signals) != 1 else ''}"
-    rows = [_heading(f"{count} {_since_words(last_email)}")]
-    rows += [_signal_row(s) for s in signals]
+    lead = f"{count} {since}" if signals else f"{_rules_words(rules)} {since}"
+    extra = f" {_rules_words(rules)} as well." if signals and rules else ""
+    rows = []
+    if signals:
+        rows.append(_heading(f"{count} {since}"))
+        rows += [_signal_row(s) for s in signals]
+    rows.append(_rules_section(rules)[0])
     missed, _ = _missed_note(console_url)
     rows.append(missed)
-    watch_rows, _ = _watch_section(watch, full=False, console_url=console_url)
+    watch_rows, _ = _watch_section(watch, full=not signals, console_url=console_url)
     rows.append(watch_rows)
     link = page_url(console_url, "updates")
     if link:
@@ -755,8 +1034,8 @@ def render(
             f"{_button('Open this week in the console', link)}</td></tr>"
         )
     return _page(
-        preheader=f"{count} {_since_words(last_email)}",
-        intro=f"{greeting} {esc(count)} {esc(_since_words(last_email))}.",
+        preheader=lead,
+        intro=f"{greeting} {esc(lead)}.{esc(extra)}",
         body="".join(rows),
         footer=_FOOTER,
     )
@@ -769,10 +1048,14 @@ def render_text(
     console_url: str | None = None,
     watch: WatchReport | None = None,
     last_email: dt.datetime | None = None,
+    rules: tuple[RuleCard, ...] = (),
 ) -> str:
     """The plain-text part. Not a courtesy — a message without one is filtered
     more often, and it is what a screen reader actually reads."""
-    lines = [f"{len(signals)} new update(s) {_since_words(last_email)}", ""]
+    since = _since_words(last_email)
+    head = f"{len(signals)} new update(s) {since}" if signals else f"{_rules_words(rules)} {since}"
+    # The rules section opens with its own blank line.
+    lines = [head, ""] if signals else [head]
     for signal in signals:
         when = signal.happened.isoformat() if signal.happened else "undated"
         learned = _reported_words(signal, sep=", ")
@@ -782,8 +1065,9 @@ def render_text(
             f"  ({when}{learned})" + (f" {signal.source_url}" if signal.source_url else "")
         )
         lines.append("")
+    lines += _rules_section(rules)[1]
     lines += _missed_note(console_url)[1]
-    lines += _watch_section(watch, full=False, console_url=console_url)[1]
+    lines += _watch_section(watch, full=not signals, console_url=console_url)[1]
     return "\n".join(lines)
 
 
@@ -894,6 +1178,116 @@ def choose(
     return tuple(out)
 
 
+def watched_projects(entities: Iterable[Any]) -> set[int]:
+    """Every project a watchlist covers (`watchlist.Entity.matches`), as `watchfor` reads it."""
+    return {pid for entity in entities for pid in entity.matches}
+
+
+def _told(sent: set[str]) -> dict[int, list[str]]:
+    """condition id -> the statuses this reader was sent it at, from the ledger."""
+    out: dict[int, list[str]] = {}
+    for key in sent:
+        if not key.startswith("condition:"):
+            continue
+        _, cid, status = [*key.split(":", 2), "", ""][:3]
+        if cid.isdigit() and status:
+            out.setdefault(int(cid), []).append(status)
+    return out
+
+
+def rule_cards(
+    session: Session,
+    project_ids: Iterable[int],
+    *,
+    sent: set[str],
+    today: dt.date | None = None,
+) -> tuple[RuleCard, ...]:
+    """The rules owed to one reader today. See the module rules.
+
+    A rule standing over any of `project_ids` (an `Exposure`) at a status they have
+    not been sent; or one they were sent that is now lifted or voted down, once, as
+    cleared. Only rules whose newest article is inside the two-month window. Rules
+    that make building harder before those that ease it; within each, the rule
+    reaching most of their projects first, then the newest, cleared ones last.
+    """
+    from tracker import conditions
+    from tracker.sources import host_of
+
+    today = today or dt.date.today()
+    cutoff = today - dt.timedelta(days=REPORT_WINDOW_DAYS)
+    ids = sorted(set(project_ids))
+    reach: dict[int, list[int]] = {}
+    if ids:
+        for cid, pid in session.execute(
+            select(Exposure.condition_id, Exposure.project_id)
+            .where(Exposure.project_id.in_(ids))
+            .order_by(Exposure.project_id)
+        ):
+            reach.setdefault(cid, []).append(pid)
+    told = _told(sent)
+    wanted = set(reach) | set(told)
+    if not wanted:
+        return ()
+    owed: list[tuple[Condition, list[int]]] = []
+    for condition in session.scalars(select(Condition).where(Condition.id.in_(sorted(wanted)))):
+        if f"condition:{condition.id}:{condition.status}" in sent:
+            continue
+        reported = condition.last_reported or condition.updated_at.date()
+        if reported < cutoff:
+            continue
+        if condition.status in CLEARED:
+            if condition.id in told:
+                owed.append((condition, []))
+        elif condition.status in conditions.EXPOSING and reach.get(condition.id):
+            owed.append((condition, reach[condition.id]))
+    if not owed:
+        return ()
+    named = {
+        pid: f"{company} — {name}"
+        for pid, company, name in session.execute(
+            select(Project.id, Project.company, Project.name).where(
+                Project.id.in_(sorted({p for _, pids in owed for p in pids[:RULE_PROJECTS_NAMED]}))
+            )
+        )
+    }
+    cards = []
+    for condition, pids in owed:
+        newest = max(
+            condition.sources, key=lambda s: (s.published_at or s.read_at, s.id or 0), default=None
+        )
+        quotes = conditions.quotes_of(newest) if newest is not None else {}
+        earlier = [s for s in told.get(condition.id, []) if s != condition.status]
+        cards.append(
+            RuleCard(
+                condition_id=condition.id,
+                where=conditions.where_words(condition),
+                title=condition.title,
+                status=condition.status,
+                summary=condition.summary,
+                reach=len(pids),
+                projects=tuple(named[p] for p in pids[:RULE_PROJECTS_NAMED] if p in named),
+                quote=quotes.get("status") or quotes.get("rule"),
+                source_url=newest.url if newest is not None else None,
+                publisher=host_of(newest.url) if newest is not None else None,
+                reported=condition.last_reported,
+                # The ledger keeps which statuses they were sent, not in what order;
+                # the one furthest along the vocabulary's order is the latest.
+                was=max(earlier, key=lambda s: _STATUS_ORDER.get(s, -1), default=None),
+                effect=condition.effect or RESTRICTS,
+            )
+        )
+    cards.sort(
+        key=lambda c: (
+            c.eases,
+            c.cleared,
+            -c.reach,
+            -(c.reported or dt.date.min).toordinal(),
+            c.condition_id,
+        )
+    )
+    return tuple(cards)
+
+
 @dataclass(frozen=True)
 class Message:
     """One person's email for today, built and not yet sent."""
@@ -909,10 +1303,15 @@ class Message:
     blockers: int = 0
     #: Sent with `--force`, on purpose, to somebody already emailed today.
     forced: bool = False
+    #: Rules affecting the reader's projects (:func:`rule_cards`).
+    rules: tuple[RuleCard, ...] = ()
 
     @property
     def keys(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys(k for s in self.signals for k in s.all_keys))
+        """What the ledger records as sent: every fact behind a card, and each rule
+        at its status."""
+        signal_keys = (k for s in self.signals for k in s.all_keys)
+        return tuple(dict.fromkeys([*signal_keys, *(card.key for card in self.rules)]))
 
     def idempotency_key(self) -> str:
         """The same person, day and contents give the same key, so a retry — or a
@@ -973,20 +1372,19 @@ def compose(
         today=local_time(now).date(),
     )
     since = last or (now - FIRST_WINDOW)
-    owed = choose(
-        brief.signals,
-        since=since,
-        sent=sent_keys(session, account.id),
-        today=local_time(now).date(),
-    )
+    sent = sent_keys(session, account.id)
+    today = local_time(now).date()
+    owed = choose(brief.signals, since=since, sent=sent, today=today)
+    rules = rule_cards(session, watched_projects(entities), sent=sent, today=today)
     watch = watchfor.report(session, account_id=account.id, entities=entities, everything=False)
 
-    if owed:
+    if owed or rules:
         return Message(
             account_id=account.id,
             email=account.email,
             kind="updates",
-            subject=subject_for(brief, owed),
+            # The updates lead when there are any; a day of rules alone names the rule.
+            subject=subject_for(brief, owed) if owed else rules_subject(rules),
             html_body=render(
                 brief,
                 owed,
@@ -994,14 +1392,16 @@ def compose(
                 console_url=console_url,
                 watch=watch,
                 last_email=last,
+                rules=rules,
             ),
             text_body=render_text(
-                brief, owed, console_url=console_url, watch=watch, last_email=last
+                brief, owed, console_url=console_url, watch=watch, last_email=last, rules=rules
             ),
             prepared_at=now,
             signals=owed,
             blockers=watch.blockers,
             forced=force,
+            rules=rules,
         )
     return Message(
         account_id=account.id,
@@ -1087,7 +1487,8 @@ def _record(
         status=status,
         prepared_at=message.prepared_at,
         sent_at=utcnow() if status == "sent" else None,
-        updates=len(message.signals),
+        # Every card it carried: a rule's change is an update to its reader.
+        updates=len(message.signals) + len(message.rules),
         blockers=message.blockers,
         subject=message.subject,
         message_id=message_id,
@@ -1239,6 +1640,7 @@ def send_all(
                     blockers=plan.blockers,
                     attempts=attempts,
                     error=str(exc),
+                    rules=len(plan.rules),
                 )
             )
             continue
@@ -1260,6 +1662,7 @@ def send_all(
                 kind=plan.kind,
                 blockers=plan.blockers,
                 attempts=attempts,
+                rules=len(plan.rules),
             )
         )
 
@@ -1541,11 +1944,14 @@ __all__ = [
     "BACKOFF_SECONDS",
     "BOUNCE_LOOKBACK",
     "CATCH_UP_DAYS",
+    "CLEARED",
+    "EASES",
     "FIRST_WINDOW",
     "FONT_DISPLAY",
     "FONT_MONO",
     "FONT_SANS",
     "RESEND_ENDPOINT",
+    "RESTRICTS",
     "SEND_ATTEMPTS",
     "TOKENS",
     "WIDTH",
@@ -1554,6 +1960,7 @@ __all__ = [
     "Outcome",
     "Problem",
     "ResendTransport",
+    "RuleCard",
     "TransientEmailError",
     "Transport",
     "alert_admins",
@@ -1572,7 +1979,10 @@ __all__ = [
     "render_quiet",
     "render_quiet_text",
     "render_text",
+    "rule_cards",
+    "rules_subject",
     "send_all",
     "sent_keys",
     "subject_for",
+    "watched_projects",
 ]

@@ -1,6 +1,6 @@
 # API 入门
 
-API 让程序读取你在控制台中看到的内容：园区、园区的各项数字及其背后的来源、公司、按买方统计的资本支出，以及你关注列表中的新闻。API 只读：程序通过它做的任何操作都不会改动数据。它以 JSON 格式返回结果。
+API 让程序读取你在控制台中看到的内容：园区、园区的各项数字及其背后的来源、公司、按买方统计的资本支出、你关注列表中的新闻，以及适用于某个地方的规则（例如某个州暂停审批、某个镇的禁令）和每条规则波及的园区。API 只读：程序通过它做的任何操作都不会改动数据。它以 JSON 格式返回结果。
 
 | | |
 | --- | --- |
@@ -57,7 +57,7 @@ for campus in page["data"]:
 
 ## 分页
 
-`/v1/projects` 每次最多返回 200 个园区（默认 30 个）。每次返回都带有 `total`、`offset`、`limit` 和 `next_offset`；用 `offset=<next_offset>` 再次请求，直到 `next_offset` 为 `null`。
+`/v1/projects` 每次最多返回 200 个园区（默认 30 个），`/v1/conditions` 每次最多返回 200 条规则。每次返回都带有 `total`、`offset`、`limit` 和 `next_offset`；用 `offset=<next_offset>` 再次请求，直到 `next_offset` 为 `null`。
 
 ## 错误
 
@@ -72,7 +72,7 @@ for campus in page["data"]:
 | 400 | `bad_parameter`、`unknown_parameter`、`bad_id`、`bad_slug` | 请求的内容 API 无法理解。说明中会指出具体是什么。 |
 | 401 | `key_required`、`key_invalid` | 没有密钥，或者密钥错误、已撤销，或所属账户已被停用。 |
 | 403 | `api_access_off` | 密钥正确，但其所属账户的 API 权限已被关闭。请联系管理员。 |
-| 404 | `not_found` | 没有这个接口、园区或公司。 |
+| 404 | `not_found` | 没有这个接口、园区、公司或规则。 |
 | 405 | `read_only` | 使用了 GET 以外的方法。API 从不修改数据。 |
 | 429 | `rate_limited` | 一分钟内超过 60 次请求。请等待 `Retry-After` 中给出的秒数。 |
 | 500 | — | 我们这边出了故障。请稍后再试。 |

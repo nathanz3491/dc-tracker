@@ -1,6 +1,6 @@
 # The API
 
-The API lets a program read what you read in the console: campuses, their figures and the sources behind them, companies, capex by buyer, and the news on your watchlist. It is read-only — nothing a program does through it changes any data — and it answers in JSON.
+The API lets a program read what you read in the console: campuses, their figures and the sources behind them, companies, capex by buyer, the news on your watchlist, and the rules that apply to a place — a state's permit pause, a town's ban — with the campuses each one reaches. It is read-only — nothing a program does through it changes any data — and it answers in JSON.
 
 | | |
 | --- | --- |
@@ -57,7 +57,7 @@ for campus in page["data"]:
 
 ## Paging
 
-`/v1/projects` returns at most 200 campuses at a time (30 by default). Each answer carries `total`, `offset`, `limit` and `next_offset`; ask again with `offset=<next_offset>` until `next_offset` is `null`.
+`/v1/projects` returns at most 200 campuses at a time (30 by default), and `/v1/conditions` at most 200 rules. Each answer carries `total`, `offset`, `limit` and `next_offset`; ask again with `offset=<next_offset>` until `next_offset` is `null`.
 
 ## Errors
 
@@ -72,7 +72,7 @@ Every error is JSON with a stable code and a sentence:
 | 400 | `bad_parameter`, `unknown_parameter`, `bad_id`, `bad_slug` | The request asked for something the API does not understand. The message says what. |
 | 401 | `key_required`, `key_invalid` | No key, or a key that is wrong, revoked, or on an account that is disabled. |
 | 403 | `api_access_off` | The key is right, but API access is switched off for its account. Ask an administrator. |
-| 404 | `not_found` | No such endpoint, campus or company. |
+| 404 | `not_found` | No such endpoint, campus, company or rule. |
 | 405 | `read_only` | Something other than GET. The API never changes data. |
 | 429 | `rate_limited` | More than 60 requests in a minute. Wait the number of seconds in `Retry-After`. |
 | 500 | — | A fault on our side. Try again later. |

@@ -24,6 +24,15 @@ on a schedule:
   turned while full (:func:`group_queries`): a day of one town's news is under two
   results, and a search is a credit whatever it returns.
 
+* **A rule that is not settled yet** — proposed, pledged, passed but not in force, or
+  blocked in court (`tracker.conditions`) — is searched for by its place and kind
+  every :data:`CONDITION_CADENCE` since the last word of it, at most
+  :data:`CONDITIONS_PER_RUN` a night, out of the same search allowance
+  (:func:`run_conditions`). Its results are queued as `watch:condition:<id>`; the
+  crawl reads and saves them, and `tracker conditions read` reads the saved pages, so
+  a pledge that became an order reaches the projects it covers, and their readers'
+  email, without waiting for a campus story to mention it.
+
 A result is kept when its headline and snippet pass the discovery filter in
 `seed/feeds.toml`, or name this campus, and its date falls in the window. Kept results
 are queued (`ingest_url.feed` = `watch:#<id>`) for the nightly crawl, which reads them
@@ -1132,6 +1141,247 @@ def run_companies(
     return report
 
 
+# --- Rules not yet settled ------------------------------------------------------------
+#
+# A rule that applies to a place (`tracker.conditions`) is read from whatever pages the
+# news step fetched. One not yet settled -- a bill proposed, a candidate's pledge, an
+# ordinance passed but not in force, an order a judge blocked -- kept its last status
+# until some campus story mentioned it again, while every project in that place was
+# flagged, and every reader emailed, under the old word. So each is searched for by
+# its place and its kind every few days, and what is found is queued like the rest of
+# the watch's finds: the crawl reads it that night, saving the page, and `conditions
+# read` reads the saved page for the rule.
+
+#: Statuses a later article can still change: what is searched for. A rule in force
+#: is settled until something happens to it, which the news step hears of anyway;
+#: lifted and rejected ones are over.
+UNSETTLED: Final = frozenset({"proposed", "pledged", "passed", "blocked"})
+
+#: How long after the last word of a rule -- its newest article, or its last search,
+#: whichever is later -- it is searched again.
+CONDITION_CADENCE: Final = dt.timedelta(days=3)
+
+#: Rule searches a run may send, out of its search allowance: a night's handful of
+#: rules, most overdue first, never more than a sliver of the night's budget.
+CONDITIONS_PER_RUN: Final = 20
+
+#: Words each kind of rule is written in, for its search: the words a headline
+#: about where it stands would use.
+RULE_WORDS: Final[dict[str, tuple[str, ...]]] = {
+    "moratorium": ("moratorium", "pause"),
+    "ban": ("ban", "prohibit"),
+    "permit_pause": ("pause", "moratorium", "permits"),
+    "zoning": ("zoning", "ordinance"),
+    "law": ("bill", "law", "legislature"),
+    "executive_order": ("executive order",),
+    "ballot_measure": ("ballot", "referendum", "voters"),
+    "tax": ("tax", "tax break", "exemption"),
+    "tariff": ("tariff",),
+    "grid_rule": ("large load", "interconnection", "tariff"),
+    "pledge": ("moratorium", "pause", "ban"),
+    "other": ("moratorium", "ban", "ordinance"),
+}
+
+
+@dataclass
+class ConditionLook:
+    """What one rule's search found."""
+
+    condition_id: int
+    label: str
+    queries: int = 0
+    results: int = 0
+    kept: int = 0
+    queued: int = 0
+
+
+@dataclass
+class ConditionReport:
+    looks: list[ConditionLook] = field(default_factory=list)
+    due: int = 0
+    queries: int = 0
+    failures: int = 0
+    stopped: str | None = None
+
+    @property
+    def queued(self) -> int:
+        return sum(look.queued for look in self.looks)
+
+    def as_rows(self) -> list[tuple[str, int]]:
+        return [
+            ("rules not yet settled, due a search", self.due),
+            ("rules searched", len(self.looks)),
+            ("searches", self.queries),
+            ("results", sum(look.results for look in self.looks)),
+            ("kept by the filter", sum(look.kept for look in self.looks)),
+            ("queued", self.queued),
+            ("searches failed", self.failures),
+        ]
+
+
+def _last_word(condition: Any) -> dt.datetime:
+    """When the tracker last heard of a rule: its last search or its newest article."""
+    reported = (
+        dt.datetime.combine(condition.last_reported, dt.time.min)
+        if condition.last_reported
+        else condition.created_at
+    )
+    return max(reported, condition.checked_at) if condition.checked_at else reported
+
+
+def conditions_due(
+    session: Session, *, now: dt.datetime, condition_ids: list[int] | None = None
+) -> list[Any]:
+    """Rules not yet settled whose last word is :data:`CONDITION_CADENCE` old, those
+    heard of longest ago first, then the one reaching most projects."""
+    from tracker.conditions import reach_counts
+    from tracker.models import Condition
+
+    stmt = select(Condition).where(Condition.status.in_(sorted(UNSETTLED)))
+    if condition_ids:
+        stmt = stmt.where(Condition.id.in_(condition_ids))
+    reach = reach_counts(session)
+    due = [
+        c
+        for c in session.scalars(stmt)
+        if condition_ids or now - _last_word(c) >= CONDITION_CADENCE - EARLY
+    ]
+    due.sort(key=lambda c: (_last_word(c), -reach.get(c.id, 0), c.id))
+    return due
+
+
+def _rule_place(condition: Any) -> tuple[str, str | None]:
+    """(the place as a query writes it, the word a result must name to be about it).
+
+    A county or town is quoted with its state's name beside it, unquoted: Washington
+    County is in thirty states. A whole-industry input is quoted but not required in
+    the headline, which writes "transformers" for "large power transformers"; a
+    national rule has no place at all.
+    """
+    from tracker.normalize import state_name
+
+    state = state_name(condition.state) if condition.state else None
+    scope = condition.scope
+    if scope == "state" and state:
+        return f'"{state}"', state
+    if scope == "county" and condition.county:
+        bare = _ADMIN.sub("", condition.county).strip() or condition.county
+        county = condition.county if _ADMIN.search(condition.county) else f"{bare} County"
+        return f'"{county}"' + (f" {state}" if state else ""), bare
+    if scope == "place" and condition.place:
+        return f'"{condition.place}"' + (f" {state}" if state else ""), condition.place
+    if scope == "grid_region" and condition.region:
+        return f'"{condition.region}"', condition.region
+    if scope == "input" and condition.input:
+        return f'"{condition.input}"', None
+    return "federal", None
+
+
+def condition_query(condition: Any, *, now: dt.datetime) -> Query:
+    """`"Texas" data center ("pause" OR "moratorium" OR "permits")`, since the last word."""
+    place, _ = _rule_place(condition)
+    words = RULE_WORDS.get(condition.kind, RULE_WORDS["other"])
+    kinds = " OR ".join(f'"{w}"' for w in words)
+    since = _last_word(condition)
+    return Query(0, f"{place} data center ({kinds})", "news", window_for(since, now), since, False)
+
+
+def judge_condition(
+    hits: list[Any], query: Query, condition: Any, *, spec: Any, now: dt.datetime
+) -> list[Any]:
+    """The results worth reading, labelled `watch:condition:<id>`: past the discovery
+    filter, and naming the rule's place in the headline or snippet -- a rule's search
+    turns up every other place's moratorium too."""
+    from tracker.ingest.discover import Candidate
+
+    _, named = _rule_place(condition)
+    kept = []
+    for hit, text, stored in _screened(hits, query, now=now):
+        if named and named.lower() not in text.lower():
+            continue
+        if spec.matches(f"{text} {urlsplit(hit.url).path}")[0]:
+            kept.append(
+                Candidate(
+                    url=hit.url,
+                    title=hit.title or hit.url,
+                    feed=f"watch:condition:{condition.id}",
+                    published_at=stored,
+                    source_type="general_media",
+                )
+            )
+    return kept
+
+
+def run_conditions(
+    session: Session,
+    *,
+    provider: Any = None,
+    limit: int | None = CONDITIONS_PER_RUN,
+    max_queries: int | None = None,
+    condition_ids: list[int] | None = None,
+    now: dt.datetime | None = None,
+    run_id: str | None = None,
+    feeds_path: Any = None,
+) -> ConditionReport:
+    """Search for word of every rule not yet settled that is due. Commits after each.
+
+    One news search per rule, at most `limit` rules and `max_queries` searches. The
+    rule's `checked_at` moves only when its search went through, so a failed one is
+    first in line the next night.
+    """
+    from tracker.ingest.discover import DiscoverReport, load_config, queue_candidates
+    from tracker.ingest.search import QuotaExhausted, SearchError, SerperProvider
+
+    now = now or utcnow()
+    report = ConditionReport()
+    run_id = run_id or now.strftime("watch-conditions-%Y%m%dT%H%M%S")
+    plan = conditions_due(session, now=now, condition_ids=condition_ids)
+    report.due = len(plan)
+    plan = plan[:limit] if limit is not None else plan
+    if not plan:
+        return report
+    if provider is None:
+        try:
+            provider = SerperProvider()
+        except SearchError as exc:
+            report.stopped = f"no news search: {exc}"
+            return report
+    _, spec = load_config(feeds_path)
+    queue_report = DiscoverReport()
+    failures_running = 0
+    for condition in plan:
+        if max_queries is not None and report.queries + 1 > max_queries:
+            report.stopped = f"the run's search allowance is spent ({report.queries} sent)"
+            break
+        query = condition_query(condition, now=now)
+        result = ConditionLook(condition.id, f"#{condition.id} {condition.title}")
+        try:
+            hits = provider.news(query.text, window=query.window)
+        except QuotaExhausted as exc:
+            report.stopped = str(exc)
+            break
+        except SearchError as exc:
+            report.failures += 1
+            failures_running += 1
+            log.warning("rule search failed for #%s: %s", condition.id, exc)
+            if failures_running >= 5:
+                report.stopped = f"five searches failed in a row; the last: {exc}"
+                break
+            continue
+        failures_running = 0
+        report.queries += 1
+        result.queries, result.results = 1, len(hits)
+        candidates = judge_condition(hits, query, condition, spec=spec, now=now)
+        result.kept = len(candidates)
+        result.queued = len(
+            queue_candidates(session, candidates, run_id=run_id, report=queue_report)
+        )
+        condition.checked_at = now
+        session.commit()
+        report.looks.append(result)
+    return report
+
+
 # --- The run ------------------------------------------------------------------------
 
 
@@ -1412,13 +1662,19 @@ __all__ = [
     "COMPANY_CADENCE",
     "COMPANY_FIRST_DAYS",
     "COMPANY_MIN_CAMPUSES",
+    "CONDITIONS_PER_RUN",
+    "CONDITION_CADENCE",
     "NEXT_WORDS",
     "QUIET_AFTER",
     "QUIET_CADENCE",
+    "RULE_WORDS",
+    "UNSETTLED",
     "WATCHED_COMPANY_CADENCE",
     "CampusLook",
     "CompanyLook",
     "CompanyReport",
+    "ConditionLook",
+    "ConditionReport",
     "GroupQuery",
     "Query",
     "WatchReport",
@@ -1426,16 +1682,20 @@ __all__ = [
     "cadence",
     "companies_due",
     "company_query",
+    "condition_query",
+    "conditions_due",
     "due",
     "group_queries",
     "is_quiet",
     "judge",
     "judge_company",
+    "judge_condition",
     "judge_group",
     "plan_queries",
     "recently_cited",
     "run",
     "run_companies",
+    "run_conditions",
     "split_followups",
     "window_for",
 ]

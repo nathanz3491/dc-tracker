@@ -398,3 +398,167 @@ def test_key_routes_need_a_session(api, key):
     a key could belong to."""
     address, _ = api
     assert _console(address, "/api/account/keys", "dc_session=nobody")[0] == 401
+
+
+# --- rules that apply to a place ------------------------------------------------------
+#
+# Asked of the endpoint functions directly: the routes that reach them are the
+# console's, in `server.Handler._api_answer`.
+
+RULE_SENTENCES = {
+    "rule": "The governor wants a statewide pause on new data center permits.",
+    "status": "She pledged the pause during the campaign.",
+}
+
+
+def _rules(db) -> dict[str, int]:
+    """Four rules, one reported a day apart: Wisconsin's pledge (reaching the North
+    Campus), Piqua's ban, a Texas pause since lifted, and a transformer tariff."""
+    from tracker import conditions
+
+    base = {
+        "title": "Wisconsin pause on new data center permits",
+        "kind": "pledge",
+        "channel": "permitting",
+        "scope": "state",
+        "state": "WI",
+        "applies_to": "unbuilt",
+        "status": "pledged",
+        "summary": "The governor wants new data center permits paused.",
+        "quotes": {"rule": "x"},
+    }
+    rows = {
+        "wisconsin": (3, {}),
+        "piqua": (2, {"title": "Piqua, OH ban on large data centers", "kind": "ban",
+                      "scope": "place", "state": "OH", "place": "Piqua", "status": "passed",
+                      "min_mw": 25}),
+        "lifted": (1, {"title": "Texas pause on new data center permits", "state": "TX",
+                       "status": "lifted"}),
+        "tariff": (0, {"title": "Tariff on large power transformers", "kind": "tariff",
+                       "channel": "equipment_supply", "scope": "input", "state": None,
+                       "input": "large power transformers", "status": "in_force"}),
+    }  # fmt: skip
+    out: dict[str, int] = {}
+    with session_scope(open_db(db, readonly=False)) as session:
+        for name, (days, changes) in rows.items():
+            [rule], bad = conditions.offered({"rules": [{**base, **changes}]})
+            assert not bad, bad
+            when = T0 - dt.timedelta(days=days)
+            page = conditions.Page(f"https://news.example.com/{name}", name, when, "")
+            condition, _ = conditions.attach(session, rule, RULE_SENTENCES, page, now=T0)
+            out[name] = condition.id
+        conditions.rebuild(session, now=T0)
+    return out
+
+
+def _ask(db, fn, *args):
+    with session_scope(open_db(db), commit=False) as session:
+        return fn(session, *args)
+
+
+def _listed(db, **query):
+    req = publicapi.Request(
+        parts=(), query={k: [v] for k, v in query.items()}, caller=None, prefix="/v1"
+    )
+    return _ask(db, publicapi.conditions_list, req)
+
+
+def test_rules_are_listed_newest_first_filtered_and_paged(db):
+    ids = _rules(db)
+
+    every = _listed(db)
+    assert every["total"] == 4 and every["next_offset"] is None
+    assert [r["id"] for r in every["data"]] == [
+        ids["tariff"],
+        ids["lifted"],
+        ids["piqua"],
+        ids["wisconsin"],
+    ], "newest report first, a lifted rule included"
+
+    [wisconsin] = _listed(db, state="wi")["data"]
+    assert wisconsin["projects"] == 1 and wisconsin["where"] == "Wisconsin"
+    assert wisconsin["effect"] == "restricts" and wisconsin["market_context"] is False
+    assert wisconsin["links"] == {"self": f"/v1/conditions/{ids['wisconsin']}"}
+
+    standing = _listed(db, status="pledged, passed")
+    assert [r["id"] for r in standing["data"]] == [ids["piqua"], ids["wisconsin"]]
+    [tariff] = _listed(db, scope="input")["data"]
+    assert tariff["market_context"] is True and tariff["projects"] == 0
+
+    page = _listed(db, limit="1", offset="1")
+    assert (page["total"], page["limit"], page["next_offset"]) == (4, 1, 2)
+    assert [r["id"] for r in page["data"]] == [ids["lifted"]]
+
+
+def test_a_rule_summary_is_its_documented_shape_and_nothing_else(db):
+    """A v1 shape is a contract: a key the CLI's JSON gains must not leak into it,
+    and every key it has is in the reference, in both languages."""
+    from pathlib import Path
+
+    _rules(db)
+    [row] = _listed(db, state="WI")["data"]
+    documented = [*publicapi.CONDITION_FIELDS, "where", "market_context"]
+    assert list(row) == [*documented, "links"]
+    for lang in ("en", "zh"):
+        page = (Path(publicapi.__file__).parent / "docs" / lang / "api-reference.md").read_text(
+            encoding="utf-8"
+        )
+        section = page[page.index("## GET /v1/conditions") :]
+        missing = [k for k in documented if f"`{k}`" not in section]
+        assert not missing, f"the {lang} reference does not document {missing}"
+
+
+@pytest.mark.parametrize(
+    ("query", "code"),
+    [
+        ({"sort": "id"}, "unknown_parameter"),
+        ({"status": "rumoured"}, "bad_parameter"),
+        ({"scope": "planet"}, "bad_parameter"),
+        ({"state": "Texas"}, "bad_parameter"),
+        ({"limit": "0"}, "bad_parameter"),
+        ({"offset": "-1"}, "bad_parameter"),
+        ({"limit": "many"}, "bad_parameter"),
+    ],
+)
+def test_a_rule_filter_the_api_does_not_understand_is_a_400(db, query, code):
+    with pytest.raises(publicapi.ApiError) as raised:
+        _listed(db, **query)
+    assert raised.value.status == 400 and raised.value.code == code
+
+
+def test_a_rule_shows_its_sentences_and_each_campus_it_reaches_and_why(db):
+    ids = _rules(db)
+    detail = _ask(db, publicapi.condition_detail, str(ids["wisconsin"]), "/v1")
+
+    assert detail["status"] == "pledged" and detail["projects"] == 1
+    [article] = detail["articles"]
+    assert article["url"] == "https://news.example.com/wisconsin"
+    assert article["quotes"] == RULE_SENTENCES, "the article's own sentences, by what each says"
+    [campus] = detail["affected_projects"]
+    assert campus["name"] == "North Campus" and campus["state"] == "WI"
+    assert campus["fit"] == "exact" and campus["why"].startswith("WI · construction")
+    assert campus["links"] == {"self": f"/v1/projects/{campus['project_id']}"}
+
+    lifted = _ask(db, publicapi.condition_detail, str(ids["lifted"]), "/v1")
+    assert lifted["affected_projects"] == [] and lifted["projects"] == 0
+
+
+def test_a_missing_or_malformed_rule_id_says_so(db):
+    with pytest.raises(publicapi.ApiError) as raised:
+        _ask(db, publicapi.condition_detail, "twelve", "/v1")
+    assert (raised.value.status, raised.value.code) == (400, "bad_id")
+    with pytest.raises(publicapi.ApiError) as raised:
+        _ask(db, publicapi.condition_detail, "999", "/v1")
+    assert raised.value.status == 404 and "dropped" in raised.value.message
+
+
+def test_the_index_adds_the_rule_endpoints_and_keeps_every_other(api):
+    address, _ = api
+    _, _, body = call(address, "/v1", host=API_HOST)
+    endpoints = set(body["endpoints"])
+    assert {"GET /v1/conditions", "GET /v1/conditions/{id}"} <= endpoints
+    assert {
+        "GET /v1/health", "GET /v1/me", "GET /v1/projects", "GET /v1/projects/{id}",
+        "GET /v1/projects/{id}/sources", "GET /v1/projects/{id}/facts",
+        "GET /v1/companies/{slug}", "GET /v1/capex", "GET /v1/updates",
+    } <= endpoints  # fmt: skip

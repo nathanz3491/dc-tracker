@@ -1623,6 +1623,10 @@ class Condition(Base):
     effect: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'restricts'"), default="restricts"
     )
+    #: When the news watch last searched for word of where this rule stands
+    #: (migration 0053). Only a rule not yet settled is searched; NULL until the
+    #: first search (`tracker.ingest.watch.conditions_due`).
+    checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
 
     sources: Mapped[list[ConditionSource]] = relationship(
         back_populates="condition", cascade="all, delete-orphan", passive_deletes=True

@@ -16,6 +16,8 @@ Every endpoint of the API, version 1. All are `GET`, answer JSON, and live under
 | `GET /v1/companies/{slug}` | One company: what it is, its campuses and recent news. |
 | `GET /v1/capex` | Capacity and investment by buyer. |
 | `GET /v1/updates` | Recent news on your watchlist. |
+| `GET /v1/conditions` | Rules that apply to a place — a state's permit pause, a town's ban — filtered and paged. |
+| `GET /v1/conditions/{id}` | One rule: the articles that state it, and every campus it reaches. |
 
 ## GET /v1/projects
 
@@ -208,6 +210,119 @@ What was reported recently about your watchlist — the same as your [Updates](u
 | `days` | How far back, 1–60. Default 7. |
 
 `data` holds the confirmed updates, most material first; `unconfirmed` those nobody could quote. Each has `kind`, `sign` (`good`, `bad`, `neutral`), `project_id`, `company` (the operator's one name), `project`, `headline`, `detail`, `happened`, `reported`, `expected`, `quote`, `source_url` and `publisher`. `last_crawl` says when articles were last fetched. With an empty watchlist, `data` is empty.
+
+## GET /v1/conditions
+
+Rules that apply to a place rather than to one campus — a state's pause on new permits, a town's ban on large data centers, a grid operator's rule for large loads, a tariff — newest report first. A rule is kept only when the article's own sentences state it, name where it applies and say where it stands; which campuses it reaches is then worked out by the tracker from each campus's place, stage and size, never by a model.
+
+| Parameter | Meaning |
+| --- | --- |
+| `state` | Two-letter state, such as `TX`. |
+| `status` | One status, or several separated by commas: `proposed`, `pledged` (promised by an official or a candidate), `passed` (adopted, not yet in effect), `in_force`, `blocked` (held up by a court), `lifted`, `rejected` (voted or turned down). Every status by default, so a program keeping its own copy hears when a rule ends. |
+| `scope` | One scope, or several separated by commas: `state`, `county`, `place` (a city, town, village or township), `grid_region`, `national`, `input` (one input to every campus, such as large transformers). |
+| `limit` | Rows per page, 1–200. Default 30. |
+| `offset` | Rows to skip. Default 0. |
+
+Paging works as on `/v1/projects`. An unknown parameter or value is a `400`.
+
+| Key | Meaning |
+| --- | --- |
+| `id`, `title`, `summary` | The rule's number, a short name with its place, and one plain sentence. |
+| `kind` | `moratorium`, `ban`, `permit_pause`, `zoning`, `law`, `executive_order`, `ballot_measure`, `tax`, `tariff`, `grid_rule`, `pledge` or `other`. |
+| `need` | What it bears on, as an obstacle kind such as `permitting` or `grid_capacity`. |
+| `effect` | `restricts` when it makes building harder (a ban, a pause, a new cost) or `eases` when it makes building easier (a tax exemption, by-right zoning, a law letting a large load generate its own power). A rule that eases is never an obstacle. |
+| `scope`, `where` | Where it applies, and that place in words: `Texas`, `Piqua, OH`, `ERCOT`. `state`, `county`, `place`, `region` and `input` hold the parts; the ones the scope does not use are null. |
+| `applies_to` | `new` (campuses announced or permitting with no approved permit on record), `unbuilt` (not yet running) or `all`. |
+| `min_mw` | The size threshold in megawatts, or null when the rule has none. |
+| `status` | Where it stands, as its newest article says. |
+| `effective_on`, `ends_on` | When it takes effect and ends, where an article says. |
+| `first_reported`, `last_reported` | The dates of its oldest and newest article. |
+| `projects` | How many campuses it reaches now. A lifted or rejected rule reaches none. |
+| `market_context` | `true` for a national rule or one on an input to every campus. These reach no campus by design — flagging every row says nothing — so `projects` is 0. |
+
+```json
+{
+  "total": 14,
+  "offset": 0,
+  "limit": 30,
+  "next_offset": null,
+  "data": [
+    {
+      "id": 12,
+      "title": "Texas pause on new data center permits",
+      "kind": "pledge",
+      "need": "permitting",
+      "effect": "restricts",
+      "scope": "state",
+      "state": "TX",
+      "county": null,
+      "place": null,
+      "region": null,
+      "input": null,
+      "applies_to": "new",
+      "min_mw": null,
+      "status": "pledged",
+      "summary": "The governor-elect wants new data center permits paused until water and power rules are written.",
+      "effective_on": null,
+      "ends_on": null,
+      "first_reported": "2026-11-05",
+      "last_reported": "2026-11-08",
+      "projects": 31,
+      "where": "Texas",
+      "market_context": false,
+      "links": {"self": "/v1/conditions/12"}
+    }
+  ]
+}
+```
+
+The values above are invented, for illustration.
+
+A rule's reach is kept apart from a campus's own obstacles: it is not counted in `blocker`, `obstacles` or `confidence`, so every value on a campus still traces to an article about that campus.
+
+## GET /v1/conditions/{id}
+
+One rule: everything its summary has, plus:
+
+| Key | Meaning |
+| --- | --- |
+| `articles` | Each article that stated it, newest first: `url`, `title`, `published_at`, `status` (where that article said it stood), `summary`, and `quotes` — the article's own sentences, by what each is cited for: `rule`, `place`, `status` and, where there is one, `threshold`. |
+| `affected_projects` | Every campus it reaches: `project_id`, `name`, `company`, `city`, `county`, `state`, `phase`, `fit`, `why`, `first_seen` (when the campus first fell under it) and `links.self`. |
+
+`fit` is `exact` when the campus's place and stage are on record, and `likely` when part of the match is inferred: a town's rule is matched to the campuses filed under that town, because no campus has a surveyed site and so the town limits cannot be checked; a grid region's rule from the state, where the state is mostly in that operator's region; and a size threshold against a campus whose size no source states. `why` says which, in words — for example `TX · announced · no permit on record`.
+
+```json
+{
+  "data": {
+    "id": 12,
+    "title": "Texas pause on new data center permits",
+    "status": "pledged",
+    "articles": [
+      {
+        "url": "https://news.example.com/texas-pause",
+        "title": "Governor-elect calls for data center permit pause",
+        "published_at": "2026-11-08T00:00:00",
+        "status": "pledged",
+        "summary": "The governor-elect wants new data center permits paused.",
+        "quotes": {
+          "rule": "The governor-elect wants a statewide pause on new data center permits until the legislature writes water and power rules.",
+          "status": "She campaigned on freezing new data center construction across Texas."
+        }
+      }
+    ],
+    "affected_projects": [
+      {
+        "project_id": 42, "name": "North Campus", "company": "Acme Data Centers",
+        "city": "Abilene", "county": "Taylor County", "state": "TX", "phase": "announced",
+        "fit": "exact", "why": "TX · announced · no permit on record",
+        "first_seen": "2026-11-08T18:40:12", "links": {"self": "/v1/projects/42"}
+      }
+    ]
+  }
+}
+```
+
+The values above are invented, for illustration. A rule found to have been read wrongly is dropped, and its id then answers `404`.
 
 ## GET /v1/me
 
