@@ -305,11 +305,10 @@ export function RulesView({ api, onOpen }) {
 
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gap: 24, padding: "26px 26px 60px", maxWidth: 920 }}>
-      <${Heading} figure="fig. 01 — rules" title="Rules that apply to a place">
-        A state's permit pause, a town's ban, a grid operator's rule for large loads: rules read
-        from the news that apply to every project in a place rather than to one campus. Each is
-        matched by its place and the stages it covers to the projects it reaches. They are kept
-        apart from a project's own obstacles and change none of its figures.
+      <${Heading} figure="fig. 01 — rules" title="Policies and laws we track">
+        Each is a policy or law that affects many projects at once — a state's permit pause, a
+        town's ban, a grid operator's rule — with the projects it affects. They are not counted
+        as a project's obstacles.
       <//>
 
       ${failed && html`<${Alert} variant="warning"><div class="mrd-alert-desc">${failed}</div><//>`}

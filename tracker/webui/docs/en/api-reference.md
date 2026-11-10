@@ -16,7 +16,7 @@ Every endpoint of the API, version 1. All are `GET`, answer JSON, and live under
 | `GET /v1/companies/{slug}` | One company: what it is, its campuses and recent news. |
 | `GET /v1/capex` | Capacity and investment by buyer. |
 | `GET /v1/updates` | Recent news on your watchlist. |
-| `GET /v1/conditions` | Rules that apply to a place — a state's permit pause, a town's ban — filtered and paged. |
+| `GET /v1/conditions` | Policies and laws that affect many projects at once — a state's permit pause, a town's ban — filtered and paged. |
 | `GET /v1/conditions/{id}` | One rule: the articles that state it, and every campus it reaches. |
 
 ## GET /v1/projects
@@ -213,7 +213,7 @@ What was reported recently about your watchlist — the same as your [Updates](u
 
 ## GET /v1/conditions
 
-Rules that apply to a place rather than to one campus — a state's pause on new permits, a town's ban on large data centers, a grid operator's rule for large loads, a tariff — newest report first. A rule is kept only when the article's own sentences state it, name where it applies and say where it stands; which campuses it reaches is then worked out by the tracker from each campus's place, stage and size, never by a model.
+Policies and laws we track that affect many projects at once — a state's pause on new permits, a town's ban on large data centers, a grid operator's rule for large loads, a tariff — newest report first. Each comes with the sentences of the articles that state it, and `projects` says how many projects it affects.
 
 | Parameter | Meaning |
 | --- | --- |

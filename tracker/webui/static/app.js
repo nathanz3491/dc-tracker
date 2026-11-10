@@ -1721,7 +1721,7 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
           ${exposures.length > 0 && html`
             <button type="button" style=${{ ...chip("--foreground", true), cursor: "pointer" }}
                     onClick=${() => visit("rules")}
-                    title="Rules that apply to this campus's place. Not obstacles of the campus: they change no count, the biggest obstacle or the confidence.">
+                    title="Policies and laws that affect this project along with others nearby. Not counted as its obstacles.">
               ${restricting.length
                 ? `exposed to ${restricting.length} rule${restricting.length === 1 ? "" : "s"}`
                 : `helped by ${easing.length} rule${easing.length === 1 ? "" : "s"}`}</button>`}
@@ -1775,8 +1775,8 @@ function ProjectPage({ id, data, onBack, watch, onGoto, onOpenCompany, onAllSour
       ${at("rules") && html`
         <${Section} id="rules" title=${rulesTitle(exposures)}
           count=${restricting.length || easing.length}
-          hint="Rules that apply to this campus's place — a state's permit pause, a town's ban, a tax exemption — rather than to the campus."
-          blurb="Rules for a place, matched to this campus by where it is filed, its stage and its size. They are not obstacles reported about it, and nothing above counts them. Exact: the state or county matches. Likely: part of the match is inferred — the town's limits, the grid region or the size. Open a line for why it reaches the campus, what would clear a restriction, and the articles."
+          hint="Policies and laws we track that affect this project along with others — a state's permit pause, a town's ban, a tax exemption."
+          blurb="Policies and laws that affect many projects at once, this one among them. They are not counted as its obstacles. Exact: its state or county matches. Likely: matched by its town or grid region, or its size is unknown — worth checking. Open a line for why it applies, what would lift a restriction, and the articles."
           ...${at("rules")}>
           ${restricting.length > 0 && html`<${ExposureList} exposures=${restricting} />`}
           ${restricting.length > 0 && easing.length > 0 && html`

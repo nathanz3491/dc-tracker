@@ -396,11 +396,10 @@ export function MonitorView({ api, onOpen, onGoto, onOpenCompany, ListEditor, pr
                    aria-label="Rules for their places">
             <h2 class="dc-wf-h2">Rules for their places</h2>
             <p class="dc-wf-meta" style=${{ margin: 0, fontSize: 13, maxWidth: "78ch" }}>
-              Rules that apply to a place rather than to one campus — a state's permit pause, a
-              town's ban, a grid operator's rule — and which of your projects each reaches. None is
-              an obstacle reported about these campuses, so none makes a project blocked above.
-              <b> exact</b> means the state or county matches; <b>likely</b> means part of the match
-              is inferred — the town's limits, the grid region or the size.
+              Policies and laws that affect several of your projects at once, and which ones. They
+              are not counted as obstacles, so none makes a project blocked above.
+              <b> exact</b>: the project's state or county matches. <b>likely</b>: matched by its
+              town or grid region, or its size is unknown — worth checking.
             </p>
             ${!rules.length && html`<div class="dc-wf-meta">Nothing matches that filter.</div>`}
             <div style=${{ display: "grid", gap: 14 }}>
