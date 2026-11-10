@@ -275,8 +275,9 @@ exist.
 
 **Signing out goes to `/signin`**, which says "You're signed out." and carries no
 `next`, so the next person at that computer does not land where the last one was.
-**A session that ends mid-visit** (a deploy restarts the console, or its twelve
-hours are up) sends the tab to `/signin?next=<the page it was on>`.
+**A session that ends mid-visit** (its twelve hours are up, or it was signed out
+elsewhere) sends the tab to `/signin?next=<the page it was on>`. A deploy's restart
+no longer ends one: see below.
 
 **An address that is none of these** gets a small "Nothing here" page linking to
 the front page, answered as a 404 so a typo still reads as one. Signed in, an
@@ -399,7 +400,17 @@ and the account cannot disagree; if the send fails, the change is undone. The
 email then tells them to change it after signing in. It goes through the same
 Resend key and sender as the watchlist notifications.
 
-**A session lasts only as long as its account does.** Sessions live in the
+**A sign-in survives a restart.** The deployer restarts the console on every
+commit — eleven times on the night of 2026-11-09 — and each restart used to sign
+every reader out. Each session is now also written to `console_session` (the
+token's SHA-256, never the token, so a copy of the database signs nobody in), and
+a restarted console that does not know a cookie looks it up once, re-reads the
+account before opening anything, and carries on for the rest of the twelve hours.
+Signing out deletes the row. A write that cannot get the database at once (the
+nightly loop holding it) is skipped rather than waited on: that session works as
+before and would just not survive a restart that night.
+
+**A session lasts only as long as its account does.** Sessions are held in the
 console's memory and `tracker users` runs in another process, so each request
 re-checks its session against the account row, at most once every five seconds
 per session. `tracker users rm`, `passwd`, `disable` and `signout` therefore end

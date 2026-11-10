@@ -1580,6 +1580,26 @@ class NotifySent(Base):
         return f"<NotifySent {self.signal_key} to account {self.account_id}>"
 
 
+class ConsoleSession(Base):
+    """A console sign-in, kept so a restart does not sign the reader out (0054).
+
+    The token's SHA-256, never the token. See `tracker.webui.auth.Gate` and the
+    migration for why each column is there.
+    """
+
+    __tablename__ = "console_session"
+
+    token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE"), nullable=False
+    )
+    stamp: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (Index("ix_console_session_expires", "expires_at"),)
+
+
 class Condition(Base):
     """A rule that applies to a place or an input rather than one campus (0051).
 

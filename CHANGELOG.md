@@ -52,6 +52,14 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A deploy no longer signs readers out of the console.** The deployer restarts the
+  console on every commit — eleven times on the night of 2026-11-09 — and sessions
+  lived only in its memory, so each restart sent every reader back to the sign-in
+  page. Each session is now also kept in the database (`console_session`, migration
+  0054: the token's SHA-256, never the token), and a restarted console picks it up,
+  re-reads the account first, and carries on for the rest of its twelve hours.
+  Signing out, a password change, `tracker users signout` and a deleted account still
+  end it (`tracker/webui/sessions.py`, `tracker/webui/auth.py`).
 - **The administrators' alert says what went wrong and what to do, once.** The first
   alert of the Outlook refusals was four paragraphs, each the same SMTP reply with its
   server trace, and the cause — a missing DMARC record — was in none of them. Now

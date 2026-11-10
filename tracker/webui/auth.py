@@ -24,10 +24,15 @@ pair is right and then asks this one for a token. So a token is the only thing t
 gate can hand out, and the only thing it can be asked about is which account a
 token belongs to.
 
-**Sessions are in memory, so a restart signs everybody out.** That is not an
-oversight: the host's poller restarts this process whenever a commit lands, and a
-session that survived a restart would have to be persisted somewhere the console
-can write — which is the one thing a read-only console does not have.
+**Sessions outlive a restart.** They are held in memory, and the host's deployer
+restarts this process whenever a commit lands — eleven times on the night of
+2026-11-09, each one signing every reader out. So a gate may be handed a
+`SessionStore`: each session granted is also written there, and a cookie the gate
+does not recognise is looked up there once before it is refused. The store is given
+the token's SHA-256, never the token, so whatever it writes signs nobody in; the
+console's is a table in the database (`console_session`, migration 0054). A store
+that cannot write just now costs only that: the session works until the next
+restart, and a sign-in never waits on it.
 
 **A session is only as good as the account behind it**, and that has to be asked
 rather than assumed. `tracker users` runs in a *different process*, so it cannot
@@ -49,6 +54,7 @@ still touches no database itself: it is handed the question, not the connection.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import secrets
 import threading
@@ -56,6 +62,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +129,33 @@ GLOBAL_MAIL_MAX = 60
 #: collide with anything else on localhost.
 COOKIE = "dc_console_session"
 
+#: How long a cookie the store did not know is answered from memory. Every request
+#: carries the cookie, static files included, so an expired or forged one would
+#: otherwise be a database read per request for as long as the browser keeps it.
+UNKNOWN_FOR_S = 60.0
+
+
+def token_key(token: str) -> str:
+    """What a store is given for a token: its SHA-256, so the store signs nobody in."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+class SessionStore(Protocol):
+    """Where sessions are kept beyond this process, so a restart keeps them.
+
+    Keyed by `token_key`, never the token. `expires_at` is wall-clock seconds since
+    the epoch: the gate's own clock is monotonic, which starts again with the
+    process. Any method may raise; the gate logs it and carries on in memory.
+    """
+
+    def save(self, key: str, account_id: int, stamp: str, expires_at: float) -> None: ...
+
+    def load(self, key: str) -> tuple[int, str, float] | None: ...
+
+    def restamp(self, key: str, stamp: str) -> None: ...
+
+    def delete(self, key: str) -> None: ...
+
 
 @dataclass
 class _Attempts:
@@ -166,8 +200,14 @@ class Gate:
     #: Injectable so a test can move time rather than wait it out. Monotonic, so a
     #: wall-clock change on the host cannot extend a session or end a lockout.
     clock: Callable[[], float] = field(default=time.monotonic, repr=False)
+    #: Where sessions outlive this process; None keeps them in memory only.
+    store: SessionStore | None = field(default=None, repr=False)
+    #: The wall clock, for what the store keeps — only when a session expires.
+    wall: Callable[[], float] = field(default=time.time, repr=False)
 
     _sessions: dict[str, _Session] = field(default_factory=dict, repr=False)
+    #: Tokens the store did not know, and until when that answer is trusted.
+    _unknown: dict[str, float] = field(default_factory=dict, repr=False)
     _attempts: dict[str, _Attempts] = field(default_factory=dict, repr=False)
     #: When each failure inside the current global window happened, oldest first.
     _failures: deque[float] = field(default_factory=deque, repr=False)
@@ -290,7 +330,50 @@ class Gate:
             self._sessions[token] = _Session(
                 account_id, now + self.session_ttl, stamp=stamp, confirmed_at=now
             )
+        self._keep("save", token_key(token), account_id, stamp, self.wall() + self.session_ttl)
         return token
+
+    def _keep(self, what: str, *args: object) -> None:
+        """Pass one change to the store, if there is one. Never raises."""
+        if self.store is None:
+            return
+        try:
+            getattr(self.store, what)(*args)
+        except Exception as exc:  # the store is a convenience; the session is not
+            log.warning("console: could not %s a session in the store: %s", what, exc)
+
+    def _restore(self, token: str, now: float) -> _Session | None:
+        """A session the store kept from before a restart, or None.
+
+        Restored unconfirmed, so its account is read again before it opens anything:
+        the account may have been deleted, or its password changed, while the
+        console was down.
+        """
+        if self.store is None:
+            return None
+        key = token_key(token)
+        with self._lock:
+            if self._unknown.get(key, 0.0) > now:
+                return None
+        try:
+            kept = self.store.load(key)
+        except Exception as exc:
+            log.warning("console: could not read a session from the store: %s", exc)
+            return None
+        if kept is None:
+            with self._lock:
+                if len(self._unknown) > 1000:
+                    self._unknown = {k: t for k, t in self._unknown.items() if t > now}
+                self._unknown[key] = now + UNKNOWN_FOR_S
+            return None
+        account_id, stamp, expires_at = kept
+        left = expires_at - self.wall()
+        if left <= 0:
+            self._keep("delete", key)
+            return None
+        restored = _Session(account_id, now + left, stamp=stamp, confirmed_at=float("-inf"))
+        with self._lock:
+            return self._sessions.setdefault(token, restored)
 
     def session_for(
         self,
@@ -325,13 +408,23 @@ class Gate:
         now = self.clock()
         with self._lock:
             found = self._sessions.get(token)
+        if found is None:
+            found = self._restore(token, now)
             if found is None:
                 return None
+        with self._lock:
+            if self._sessions.get(token) is not found:
+                return None  # signed out meanwhile
             if found.expires < now:
                 del self._sessions[token]
-                return None
-            if confirm is None or now - found.confirmed_at < self.session_confirm_s:
-                return found.account_id
+                expired = True
+            else:
+                expired = False
+                if confirm is None or now - found.confirmed_at < self.session_confirm_s:
+                    return found.account_id
+        if expired:
+            self._keep("delete", token_key(token))
+            return None
 
         verdict = confirm(found.account_id, found.stamp)
         if verdict is None:
@@ -367,13 +460,15 @@ class Gate:
                 return False
             found.stamp = stamp
             found.confirmed_at = self.clock()
-            return True
+        self._keep("restamp", token_key(token), stamp)
+        return True
 
     def revoke(self, token: str | None) -> None:
         if not token:
             return
         with self._lock:
             self._sessions.pop(token, None)
+        self._keep("delete", token_key(token))
 
     def _prune(self, now: float) -> None:
         for token in [t for t, s in self._sessions.items() if s.expires < now]:
@@ -402,6 +497,9 @@ __all__ = [
     "MAX_FAILURES",
     "SESSION_CONFIRM_S",
     "SESSION_TTL_S",
+    "UNKNOWN_FOR_S",
     "Gate",
+    "SessionStore",
     "cookie_value",
+    "token_key",
 ]

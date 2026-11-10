@@ -2216,6 +2216,138 @@ def test_a_session_whose_account_cannot_be_checked_is_refused_but_kept():
     assert gate.session_for(token) is None, "dropped"
 
 
+class _Kept:
+    """A session store in a dict: what outlives one gate for the next."""
+
+    def __init__(self, *, failing: bool = False):
+        self.rows: dict[str, tuple[int, str, float]] = {}
+        self.loads = 0
+        self.failing = failing
+
+    def save(self, key, account_id, stamp, expires_at):
+        if self.failing:
+            raise RuntimeError("database is locked")
+        self.rows[key] = (account_id, stamp, expires_at)
+
+    def load(self, key):
+        self.loads += 1
+        return self.rows.get(key)
+
+    def restamp(self, key, stamp):
+        account_id, _, expires_at = self.rows[key]
+        self.rows[key] = (account_id, stamp, expires_at)
+
+    def delete(self, key):
+        self.rows.pop(key, None)
+
+
+def test_a_session_outlives_the_gate_that_granted_it_and_is_checked_first():
+    """Every deploy restarts the console: eleven on the night of 2026-11-09, each one
+    signing every reader out. A new gate on the same store restores the session, and
+    reads the account once before it opens anything."""
+    from tracker.webui.auth import Gate, token_key
+
+    kept = _Kept()
+    wall = [1_000_000.0]
+    first = Gate(clock=lambda: 50.0, store=kept, wall=lambda: wall[0])
+    token = first.grant(7, stamp="credential")
+    assert token not in str(kept.rows) and token_key(token) in kept.rows, "only the hash"
+
+    asked: list[int] = []
+    after = Gate(clock=lambda: 3.0, store=kept, wall=lambda: wall[0])
+    assert after.session_for(token, confirm=lambda a, s: asked.append(a) or True) == 7
+    assert asked == [7], "restored sessions are confirmed before they open anything"
+
+    gone = Gate(clock=lambda: 3.0, store=kept, wall=lambda: wall[0])
+    assert gone.session_for(token, confirm=lambda *_: False) is None
+    assert kept.rows == {}, "an account that no longer holds drops the kept row too"
+
+
+def test_a_signed_out_or_expired_session_is_not_restored():
+    from tracker.webui.auth import SESSION_TTL_S, Gate
+
+    kept = _Kept()
+    wall = [1_000_000.0]
+    gate = Gate(store=kept, wall=lambda: wall[0])
+    out = gate.grant(1, stamp="s")
+    old = gate.grant(2, stamp="s")
+    gate.revoke(out)
+
+    wall[0] += SESSION_TTL_S + 1
+    after = Gate(store=kept, wall=lambda: wall[0])
+    assert after.session_for(out, confirm=lambda *_: True) is None
+    assert after.session_for(old, confirm=lambda *_: True) is None
+    assert kept.rows == {}
+
+
+def test_an_unknown_cookie_is_asked_of_the_store_once_a_minute_not_every_request():
+    from tracker.webui.auth import UNKNOWN_FOR_S, Gate
+
+    kept = _Kept()
+    now = [0.0]
+    gate = Gate(clock=lambda: now[0], store=kept)
+    for _ in range(20):
+        assert gate.session_for("a" * 43) is None
+    assert kept.loads == 1
+    now[0] += UNKNOWN_FOR_S + 1
+    gate.session_for("a" * 43)
+    assert kept.loads == 2
+
+
+def test_a_store_that_cannot_write_costs_only_the_restart():
+    from tracker.webui.auth import Gate
+
+    gate = Gate(store=_Kept(failing=True))
+    token = gate.grant(4, stamp="s")
+    assert gate.session_for(token) == 4
+
+
+def test_a_restarted_console_keeps_its_readers_signed_in(seeded_db):
+    """End to end, on the database: sign in, start a new console on the same file —
+    what a deploy does — and the cookie still opens the console. Signing out, or a
+    password changed while it was down, does not survive the restart."""
+    from http.server import ThreadingHTTPServer
+
+    from tracker import accounts
+    from tracker.db import open_db, session_scope
+
+    _account(seeded_db)
+
+    def start():
+        console = Console(seeded_db)
+        handler = type("Bound", (Handler,), {"console": console})
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        httpd.daemon_threads = True
+        threading.Thread(target=httpd.serve_forever, kwargs=FAST_POLL, daemon=True).start()
+        return httpd, console
+
+    def stop(httpd, console):
+        httpd.shutdown()
+        httpd.server_close()
+        console.close()
+
+    httpd, console = start()
+    _, kept = sign_in(httpd.server_address)
+    _, leaving = sign_in(httpd.server_address)
+    assert raw(httpd.server_address, "/api/logout", "POST", {}, cookie=leaving)[0] == 200
+    stop(httpd, console)
+
+    httpd, console = start()
+    try:
+        assert raw(httpd.server_address, "/api/health", cookie=kept)[0] == 200
+        assert raw(httpd.server_address, "/api/health", cookie=leaving)[0] == 401
+    finally:
+        stop(httpd, console)
+
+    with session_scope(open_db(seeded_db, readonly=False)) as session:
+        accounts.set_password(session, EMAIL, "a new secret here")
+    httpd, console = start()
+    try:
+        assert raw(httpd.server_address, "/api/health", cookie=kept)[0] == 401
+    finally:
+        stop(httpd, console)
+
+
 @pytest.fixture
 def published(seeded_db):
     """A console started the way `tracker cloudflare` starts it: behind a tunnel."""

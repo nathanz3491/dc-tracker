@@ -393,9 +393,11 @@ the client let go. And every connection has a 30-second socket timeout, so one
 that opens and says nothing is closed rather than holding its thread.
 
 Sessions are random server-side tokens in an `HttpOnly; SameSite=Lax` cookie,
-holding no claim the server has to trust. They live in memory, so a restart signs
-everybody out; the deployer restarts this process on every commit, so that happens
-often and is not worth engineering around.
+holding no claim the server has to trust. They are held in memory and also written
+to `console_session` as the token's SHA-256 (migration 0054), so the restart the
+deployer makes on every commit no longer signs everybody out: a cookie the
+restarted console does not know is looked up there once, its account re-read, and
+the session carries on (`webui/sessions.py`).
 
 Living in memory also means `tracker users` — another process — cannot reach
 them. So a session remembers a digest of the credential it was granted on, and

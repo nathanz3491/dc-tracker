@@ -395,7 +395,11 @@ class Console:
         #: watchlist without an owner is the shared list that accounts exist to
         #: replace. See `Handler._watch`.
         self.allow_watch = allow_watch
-        self.gate = Gate()
+        #: Sessions are also kept in the database, so a deploy's restart does not
+        #: sign every reader out (`webui/sessions.py`).
+        from tracker.webui.sessions import DatabaseSessions
+
+        self.gate = Gate(store=DatabaseSessions(self))
         #: One engine, one version probe and one cache for the life of the process.
         #: See `webui/reads.py` for why each exists and what is never cached.
         self.reads = ReadSide(db_path)
