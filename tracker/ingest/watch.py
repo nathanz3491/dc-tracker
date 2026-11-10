@@ -22,7 +22,10 @@ on a schedule:
   reaches back to the last one. **The follow-ups of one company's campuses go out
   together**, one search for as many of their towns as a query holds, its pages
   turned while full (:func:`group_queries`): a day of one town's news is under two
-  results, and a search is a credit whatever it returns.
+  results, and a search is a credit whatever it returns. **A campus alone in its
+  company that night shares its state's search instead**, `"Texas" ("Abilene" OR
+  "Amarillo" OR ...) data center` (:data:`PLACE`): 263 such campuses on 2026-11-10,
+  which one search each made 263 credits and by state about 60.
 
 * **A rule that is not settled yet** — proposed, pledged, passed but not in force, or
   blocked in court (`tracker.conditions`) — is searched for by its place and kind
@@ -290,7 +293,7 @@ class WatchReport:
             ("campuses never looked at", self.due_baselines),
             ("campuses looked at", len(self.looks)),
             ("of them first looks", sum(1 for look in self.looks if look.baseline)),
-            ("of them in a company's search", sum(1 for look in self.looks if look.together > 1)),
+            ("of them in a shared search", sum(1 for look in self.looks if look.together > 1)),
             ("searches", self.queries),
             (
                 "results",
@@ -603,10 +606,20 @@ PAGE: Final = 10
 #: company's whole search to its own.
 GROUP_MAX_GAP: Final = dt.timedelta(days=14)
 
+#: The key of a search shared by one state's campuses whose companies have no other
+#: campus due: `place:TX`. On 2026-11-10, 263 of 964 follow-ups were alone in their
+#: company and went out one search each; packed by state, `"Texas" ("Abilene" OR
+#: "Amarillo" OR ...) data center`, they were 60 searches. A state rather than the
+#: whole country, because a town's name alone is not a place ("Aurora" is in
+#: Colorado, Illinois and Oregon); one search per state rather than per town, because
+#: a day of one town's news is nearly nothing.
+PLACE: Final = "place:"
+
 
 @dataclass(frozen=True)
 class GroupQuery:
-    """One search for the follow-ups of several campuses of one company."""
+    """One search for the follow-ups of several campuses: one company's, or one
+    state's campuses alone in their companies (`company_key` is then `place:<ST>`)."""
 
     company_key: str
     members: tuple[int, ...]
@@ -641,34 +654,48 @@ def _group_company_term(projects: list[Project]) -> str | None:
 def split_followups(
     later: list[tuple[Project, NewsWatch]], *, now: dt.datetime
 ) -> tuple[list[tuple[str, list[tuple[Project, NewsWatch]]]], list[tuple[Project, NewsWatch]]]:
-    """(companies whose follow-ups go out together, each with its campuses; the
+    """(the searches shared by several campuses, each with its key and campuses; the
     follow-ups sent one by one), both in `later`'s order of who is most overdue.
 
-    A campus goes alone when it is its company's only one due, has no company or
-    nothing to anchor on, or is more than :data:`GROUP_MAX_GAP` behind.
+    A company's campuses share its search. A campus that is its company's only one
+    due, or has no company, shares its state's (:data:`PLACE`) with the others like
+    it. A campus goes alone when it is the only one of those in its state, has no
+    town or county to search by, has nothing to anchor on, or is more than
+    :data:`GROUP_MAX_GAP` behind.
     """
     from tracker.dedup import company_key
 
     by_company: dict[str, list[tuple[Project, NewsWatch]]] = {}
+    loners: list[tuple[Project, NewsWatch]] = []
     alone: list[tuple[Project, NewsWatch]] = []
     for project, look in later:
-        key = company_key(project.company)
-        if (
-            not key
-            or anchor(project) is None
-            or _company_term(project) is None
-            or now - look.checked_at > GROUP_MAX_GAP
-        ):
+        if anchor(project) is None or now - look.checked_at > GROUP_MAX_GAP:
             alone.append((project, look))
+            continue
+        key = company_key(project.company)
+        if not key or _company_term(project) is None:
+            loners.append((project, look))
             continue
         by_company.setdefault(key, []).append((project, look))
     groups = []
     for key, members in by_company.items():
         if len(members) == 1:
-            alone.append(members[0])
+            loners.append(members[0])
         else:
             groups.append((key, members))
+    by_state: dict[str, list[tuple[Project, NewsWatch]]] = {}
+    for project, look in loners:
+        if project.state and _places(project):
+            by_state.setdefault(project.state, []).append((project, look))
+        else:
+            alone.append((project, look))
     order = {project.id: i for i, (project, _) in enumerate(later)}
+    for state, members in by_state.items():
+        if len(members) == 1:
+            alone.append(members[0])
+        else:
+            members.sort(key=lambda item: order[item[0].id])
+            groups.append((f"{PLACE}{state}", members))
     alone.sort(key=lambda item: order[item[0].id])
     return groups, alone
 
@@ -676,9 +703,18 @@ def split_followups(
 def group_queries(
     key: str, members: list[tuple[Project, NewsWatch]], *, now: dt.datetime
 ) -> list[GroupQuery]:
-    """The company's searches: as many campuses' places in each as fit in
-    :data:`GROUP_WORDS`, each reaching back to the earliest last look among them."""
-    term = _group_company_term([project for project, _ in members])
+    """The group's searches: as many campuses' places in each as fit in
+    :data:`GROUP_WORDS`, each reaching back to the earliest last look among them.
+
+    A company's search names the company; a state's (`place:TX`) names the state,
+    so "Aurora" means the one in it."""
+    if key.startswith(PLACE):
+        from tracker.normalize import state_name
+
+        state = key.removeprefix(PLACE)
+        term: str | None = f'"{state_name(state) or state}"'
+    else:
+        term = _group_company_term([project for project, _ in members])
     if term is None:
         return []
     fixed = _words(term) + 2  # "data center"
@@ -726,9 +762,10 @@ def judge_group(
     worth reading — the rule :func:`judge` applies to one campus's results.
 
     A result is labelled `watch:#<id>` for the campus it names (the identity match,
-    else the first whose town or name it prints), and `watch:company:<key>` when it
-    names none of them: the crawl's identity check decides either way, but the
-    go-live flag counts only a campus's own label (`discover.deciding`)."""
+    else the first whose town or name it prints), and `watch:company:<key>` — or
+    `watch:place:<ST>` for a state's search — when it names none of them: the crawl's
+    identity check decides either way, but the go-live flag counts only a campus's
+    own label (`discover.deciding`)."""
     from tracker.ingest import screen
     from tracker.ingest.discover import (
         Candidate,
@@ -740,6 +777,11 @@ def judge_group(
     ids = [identities[p.id] for p in members if p.id in identities]
     terms = {p.id: [t.strip('"').lower() for t in _terms(p)] for p in members}
     probe = Query(0, query.text, "news", query.window, query.since, False)
+    unowned = (
+        f"watch:{query.company_key}"
+        if query.company_key.startswith(PLACE)
+        else f"watch:company:{query.company_key}"
+    )
     out: list[tuple[int | None, Any]] = []
     for hit, text, stored in _screened(hits, probe, now=now):
         haystack = f"{text} {urlsplit(hit.url).path}"
@@ -761,7 +803,7 @@ def judge_group(
                 Candidate(
                     url=hit.url,
                     title=hit.title or hit.url,
-                    feed=f"watch:#{owner}" if owner else f"watch:company:{query.company_key}",
+                    feed=f"watch:#{owner}" if owner else unowned,
                     published_at=stored,
                     source_type="general_media",
                 ),
@@ -1402,8 +1444,9 @@ def run(
 
     The go-live searches come first (`golive_query`): a campus past its online date
     is not shown as a suspected delay until one has run, so they are the searches a
-    reader is waiting on. Then the follow-ups that share a company, a search for
-    several at once (:func:`group_queries`), then the rest one by one, then first
+    reader is waiting on. Then the follow-ups that share a company or, alone in theirs,
+    a state, a search for several at once (:func:`group_queries`), then the rest one
+    by one, then first
     looks. `golive`, `followups` and `baselines` cap how many campuses of each kind (None: all of them); `max_queries` caps the searches. Commits after
     every campus, so a run cut short keeps what it did and the next run carries on.
     """

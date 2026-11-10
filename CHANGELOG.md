@@ -52,6 +52,14 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The news watch spends about 200 fewer searches a night.** Searches are now the
+  night's tightest limit. A campus whose company had no other campus due went out as a
+  search of its own — 263 of 964 follow-ups on 2026-11-10. Those now share their
+  state's search, `"Texas" ("Abilene" OR "Amarillo" OR ...) data center`, as many towns
+  as Google reads, which made them about 60 searches; the night's campus searches go
+  from about 500 to about 300. The state keeps a town's name to its own place
+  ("Aurora" is in three states); a result naming none of the search's campuses is
+  queued as `watch:place:<ST>` for the crawl to place (`tracker/ingest/watch.py`).
 - **A deploy no longer signs readers out of the console.** The deployer restarts the
   console on every commit — eleven times on the night of 2026-11-09 — and sessions
   lived only in its memory, so each restart sent every reader back to the sign-in

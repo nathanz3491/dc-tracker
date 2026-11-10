@@ -823,7 +823,7 @@ def test_a_companys_follow_ups_go_out_as_one_search_and_each_result_to_its_campu
         "https://news.test/lea": "watch:company:meta",
     }
     assert report.queries == 1 and report.queued == 3
-    assert dict(report.as_rows())["of them in a company's search"] == 2
+    assert dict(report.as_rows())["of them in a shared search"] == 2
     for campus in (kuna, rayville):
         assert session.get(NewsWatch, campus.id).checked_at == NOW + dt.timedelta(days=1)
 
@@ -866,6 +866,55 @@ def test_a_campus_far_behind_or_alone_in_its_company_is_searched_on_its_own():
     groups, alone = watch.split_followups(list(zip([*meta, foo], looks, strict=True)), now=now)
     assert [(key, [p.id for p, _ in members]) for key, members in groups] == [("meta", [1, 2])]
     assert [p.id for p, _ in alone] == [3, 4]
+
+
+def test_campuses_alone_in_their_companies_share_their_states_search():
+    """2026-11-10: 263 of 964 follow-ups were their company's only one due, a search
+    each. By state they are about 60."""
+    now = NOW + dt.timedelta(days=1)
+    texas = [
+        Project(id=1, name="Abilene campus", company="Crusoe", city="Abilene", state="TX"),
+        Project(id=2, name="Amarillo site", company="Fermi America", city="Amarillo", state="TX"),
+        Project(id=3, name="Lone site", company="NoCorp", city=None, county=None, state="TX"),
+    ]
+    ohio = Project(id=4, name="Lima campus", company="Acme", city="Lima", state="OH")
+    projects = [*texas, ohio]
+    looks = [NewsWatch(project_id=p.id, baseline_at=NOW, checked_at=NOW) for p in projects]
+    groups, alone = watch.split_followups(list(zip(projects, looks, strict=True)), now=now)
+    assert [(key, [p.id for p, _ in members]) for key, members in groups] == [("place:TX", [1, 2])]
+    assert [p.id for p, _ in alone] == [3, 4], "no town to search by; alone in its state"
+
+    [query] = watch.group_queries("place:TX", groups[0][1], now=now)
+    assert query.text.startswith('"Texas" (') and '"Abilene"' in query.text
+    assert '"Amarillo"' in query.text and "Crusoe" not in query.text
+
+
+def test_a_states_search_labels_a_result_naming_none_of_its_campuses_by_the_state(session):
+    abilene = _campus(
+        session, 230, name="Abilene campus", company="Crusoe", state="TX", city="Abilene",
+        county="Taylor County",
+    )  # fmt: skip
+    amarillo = _campus(
+        session, 231, name="Amarillo site", company="Fermi America", state="TX",
+        city="Amarillo", county="Potter County",
+    )  # fmt: skip
+    _looked(session, abilene, amarillo)
+    provider = FakePages(
+        [
+            [
+                _hit("https://news.test/abilene", "Abilene data center campus doubles"),
+                _hit("https://news.test/odessa", "Odessa approves a new data center campus"),
+            ]
+        ]
+    )
+    report = watch.run(
+        session, provider=provider, now=NOW + dt.timedelta(days=1), feeds_path=_feeds(session)
+    )
+    assert len(provider.calls) == 1 and provider.calls[0][1].startswith('"Texas" (')
+    queued = {row.url: row.feed for row in session.scalars(select(IngestUrl))}
+    assert queued["https://news.test/abilene"] == f"watch:#{abilene.id}"
+    assert queued["https://news.test/odessa"] == "watch:place:TX"
+    assert report.queries == 1
 
 
 def test_a_company_with_many_campuses_is_split_into_searches_google_reads_whole():
