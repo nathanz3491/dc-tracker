@@ -66,6 +66,18 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A figure for more than the campus is never the campus's value.** "A $22.3
+  billion energy infrastructure campus", a power station converted into "an energy and
+  data center campus", two campuses summed into "Madison County investment", "an 800
+  megawatt power plant": each was stored as one campus's investment or planned
+  capacity, with the reader's own scope label saying "this site". The sentence beside
+  an investment or planned-megawatt figure is now read for several campuses, a
+  county's total or a power plant built with the campus, and such a figure leaves the
+  merge with its citation kept as evidence. Narrow on purpose — a ten-year pledge, a
+  total across phases and a plant that only powers the campus are its own figure. On
+  the answer key it fixed 2 investment figures and lost none (39 → 41 of 45 right); 6
+  stored values move (`crawl.wider_kind`, `vocab.READING_REFUSALS`, `tracker answers
+  try covers`).
 - **A price paid, a loan or somebody else's estimate is never a campus's
   investment.** 35 of 593 stored investment figures were another kind of money: 19
   land and building purchases ("acquired a 1,385-acre megasite for $26.8 million"), 7
@@ -76,7 +88,7 @@ initial build of the v1 PRD.
   the 45 verified investment answers it fixed 2 and lost none (37 → 39 right). The
   sentences stay on the campus as evidence with their reason. `tracker answers try
   kind` measures it (`crawl.money_kind`, `vocab.MONEY_REFUSALS`,
-  `upsert._not_this_money`).
+  `upsert._not_this_figure`).
 - **The news watch spends about 200 fewer searches a night.** Searches are now the
   night's tightest limit. A campus whose company had no other campus due went out as a
   search of its own — 263 of 964 follow-ups on 2026-11-10. Those now share their

@@ -55,22 +55,31 @@ WIDE: Final = re.compile(
 )
 
 
-def _kind(quote: str, value: Any) -> bool:
+def _kind(quote: str, value: Any, field_name: str) -> bool:
     from tracker.ingest.crawl import money_kind
 
-    return money_kind(quote, value) is not None
+    return field_name == "investment_usd" and money_kind(quote, value) is not None
 
 
-#: The checks `tracker answers try` knows, by name: a test on a sentence and the
-#: value it states that says whether it may set the value. `kind` is the one that
-#: went live (`crawl.money_kind`): on 2026-11-11 it fixed 2 of the 8 wrong investment
-#: figures, lost none of the 37 right, and moved 35 of 593 stored figures, every one
-#: of them a purchase price, a loan, a contract's value or somebody else's estimate.
-CHECKS: Final[dict[str, Callable[[str, Any], bool]]] = {
-    "hedge": lambda q, v: bool(HEDGE.search(q)),
-    "wide": lambda q, v: bool(WIDE.search(q)),
-    "either": lambda q, v: bool(HEDGE.search(q) or WIDE.search(q)),
+def _covers(quote: str, value: Any, field_name: str) -> bool:
+    from tracker.ingest.crawl import wider_kind
+
+    return wider_kind(quote, value, field_name) is not None
+
+
+#: The checks `tracker answers try` knows, by name: a test on a sentence, the value it
+#: states and the field, that says whether it may set the value. Two went live:
+#: `kind` (`crawl.money_kind`) on 2026-11-11 fixed 2 of the 8 wrong investment
+#: figures, lost none of the 37 right, and moved 35 of 593 stored figures, every one a
+#: purchase price, a loan, a contract's value or somebody else's estimate; `covers`
+#: (`crawl.wider_kind`) fixed 2 more, lost none, and moved 4 investment figures and 2
+#: planned capacities, each a figure for more than the campus.
+CHECKS: Final[dict[str, Callable[[str, Any, str], bool]]] = {
+    "hedge": lambda q, v, f: bool(HEDGE.search(q)),
+    "wide": lambda q, v, f: bool(WIDE.search(q)),
+    "either": lambda q, v, f: bool(HEDGE.search(q) or WIDE.search(q)),
     "kind": _kind,
+    "covers": _covers,
 }
 
 
@@ -296,7 +305,11 @@ def trial(session: Session, check: str, *, field_name: str = "investment_usd") -
     to another standing statement if one survives ("changed" — the merge decides
     which, so it is listed for a person to read, not scored).
     """
-    refuse = CHECKS[check]
+    test = CHECKS[check]
+
+    def refuse(quote: str, value: Any) -> bool:
+        return test(quote, value, field_name)
+
     out = Trial(check, field_name)
     keyed = {
         (a.project_id): a

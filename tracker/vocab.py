@@ -479,6 +479,11 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: `investment_usd` only. Quoted and verified, and money around the site rather
     #: than spent building it: a tax incentive, tax revenue, an economic-impact figure.
     "not_spending",
+    #: `investment_usd` and `mw_planned`. Quoted and verified, and a figure for more
+    #: than this campus: several campuses or a county's total, or a power plant with
+    #: the campus — "a $22.3 billion energy infrastructure campus", "an 800 megawatt
+    #: power plant" (`crawl.wider_kind`).
+    "covers_more",
 )
 
 #: The `investment_usd` refusals that keep a figure out of the campus's investment
@@ -489,6 +494,15 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
 MONEY_REFUSALS: Final[frozenset[str]] = frozenset(
     {"speculative", "contract_value", "purchase_price", "financing", "not_spending"}
 )
+
+#: Per field, the refusals read out of a figure's own sentence that keep it out of
+#: the merge (`upsert.claims_by_field`): another kind of money, or a figure for more
+#: than the campus. Each is re-read nightly from the stored sentence
+#: (`backfill scope`), which may add or take back only these.
+READING_REFUSALS: Final[dict[str, frozenset[str]]] = {
+    "investment_usd": MONEY_REFUSALS | {"covers_more"},
+    "mw_planned": frozenset({"covers_more"}),
+}
 
 # --- the claim envelope ----------------------------------------------------
 #

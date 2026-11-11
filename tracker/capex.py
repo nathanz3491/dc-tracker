@@ -955,14 +955,15 @@ def _demoted_investment(session: Session) -> tuple[set[int], set[int]]:
         # reason added to `DECIDED_REASONS` has to be classified here on purpose.
         # Left as an else-branch it would join the excluded pile silently, and the
         # silence is the danger, not the destination.
-        # The `vocab.MONEY_REFUSALS` (`crawl.money_kind`) are excluded on purpose: a
-        # figure somebody extrapolated, a price paid, a loan, what a customer will pay
-        # over years — quoted and still not this site's capital spending. Since
-        # 2026-11-11 the merge never stores one (`upsert._not_this_money`), so this
-        # only meets them on a row not re-derived since.
+        # The `vocab.READING_REFUSALS` (`crawl.money_kind`, `crawl.wider_kind`) are
+        # excluded on purpose: a figure somebody extrapolated, a price paid, a loan,
+        # what a customer will pay over years, a figure for more than the campus —
+        # quoted and still not this site's capital spending. Since 2026-11-11 the merge
+        # never stores one (`upsert._not_this_figure`), so this only meets them on a
+        # row not re-derived since.
         if why in {"no_quote", "quote_unverified", "quote_off_target"}:
             unquoted.add(pid)
-        else:  # out_of_scale, MONEY_REFUSALS, misread, superseded, pre-0013
+        else:  # out_of_scale, READING_REFUSALS, misread, superseded, pre-0013
             out_of_scale.add(pid)
     return out_of_scale - confirmed, unquoted - confirmed - out_of_scale
 

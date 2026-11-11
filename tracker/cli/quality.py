@@ -1322,8 +1322,10 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
     nightly loop runs straight after this.
 
     It also reads every quoted investment sentence for money that is not spending on
-    the site — an extrapolation, a customer contract's value (`crawl.money_kind`) —
-    and marks it 待确认 with that reason, which keeps it out of Capex.
+    the site — an extrapolation, a price paid, a loan, a contract's value
+    (`crawl.money_kind`) — and every investment and planned-megawatt sentence for a
+    figure that covers more than the campus (`crawl.wider_kind`), and marks it 待确认
+    with that reason, which keeps it out of the merge at the next `backfill derive`.
     """
     from tracker.backfill import regate_scope
 
@@ -1352,9 +1354,9 @@ def _backfill_scope(*, apply: bool, dry_run: bool) -> None:
     table.add_row("claims re-gated", f"{report.claims:,}")
     table.add_row("relabelled", f"{report.changed:,}")
     for reason, count in sorted(report.money_marked.items()):
-        table.add_row(f"investment marked {reason}", f"{count:,}")
+        table.add_row(f"figures marked {reason}", f"{count:,}")
     if report.money_restored:
-        table.add_row("investment restored to quoted", f"{report.money_restored:,}")
+        table.add_row("figures restored to quoted", f"{report.money_restored:,}")
     console.print(table)
 
     for was, went in sorted(report.moved.items()):

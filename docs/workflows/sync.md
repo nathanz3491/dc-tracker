@@ -761,13 +761,27 @@ the claimed figure and marks it 待确认 with what it is: `speculative` (an
 extrapolation, a projection, somebody else's estimate, a figure the sentence only
 assumes), `contract_value`, `purchase_price`, `financing` or `not_spending` (a tax
 incentive, revenue, an economic impact). Each stays on the campus as evidence and
-leaves the merge (`upsert._not_this_money`), so it is not even the fallback when
+leaves the merge (`upsert._not_this_figure`), so it is not even the fallback when
 nothing else states a figure — the field is left empty instead. "Could reach", "would
 cost" and the developer's own "estimated cost" are not enough — that is how ordinary
 planned budgets are reported — the hedge must be on the figure claimed, and bonds are
 never financing here, because a county's revenue bonds are usually issued for a
 project's whole cost. The same rule re-runs over stored claims every night in
 `backfill scope`; a stored value moves when its row is next re-derived.
+
+**A figure for more than the campus is never the campus's value either.** "A $22.3
+billion energy infrastructure campus", a power station converted into "an energy and
+data center campus", two campuses summed into "Madison County investment", "an 800
+megawatt power plant": the reader's own scope label said "this site" for each.
+`crawl.wider_kind` reads the sentence beside an investment or planned-megawatt figure
+and marks it 待确认 `covers_more` when it names several campuses or a county's total,
+or makes a power plant part of the object, and the merge leaves it out the same way.
+It reads only the clause around the claimed figure, stopping at the next figure, and
+it is narrow on purpose: "over the next ten years", "across all phases" and
+"combined investment" all describe one campus's total, a plant that powers or
+neighbours the campus is not part of its figure, and a megawatt figure counts as a
+plant's only when the plant is its own noun ("an 800 megawatt power plant"), because
+a data center's demand is described beside a plant in most sentences about it.
 
 **A month, quarter or half written as 1 January takes the sentence's period.** The
 prompt asks for a bare year as `YYYY-01-01`, and the model does that for narrower
@@ -1027,7 +1041,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties`, `split_names`, `same_company_names`, `known_keys` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
-| Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FINANCING_MONEY`, `_OTHER_MONEY`; `tracker/vocab.py` — `MONEY_REFUSALS`; `tracker/upsert.py` — `_not_this_money`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
+| Money that is not spending on the site, and figures for more than the campus | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FINANCING_MONEY`, `_OTHER_MONEY`, `wider_kind`, `_clause_figures`; `tracker/vocab.py` — `MONEY_REFUSALS`, `READING_REFUSALS`; `tracker/upsert.py` — `_not_this_figure`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
 | A filing's date: SEC's record, never its page | `tracker/ingest/edgar.py` — `parse_filing_url`, `FilingDates`, `dates_of`; `tracker/ingest/crawl.py` — `run` (`filing_dates=`), `_filing_dates`, `_dated`; `tracker/upsert.py` — `upsert_record` (`read_dates=`); `tracker/dates.py` — `_ask_sec`, `_undated_filings`; `tracker/cli/quality.py` — `_backfill_dates` |
 | A month, quarter or half written as 1 January; a season or hedge read as its year | `tracker/normalize.py` — `period_named_in_quote`, `_named_before`, `_MONTH_THEN_YEAR`, `_QUARTER_THEN_YEAR`, `_HALF_THEN_YEAR`, `_HEDGE_THEN_YEAR`, `precision_in_quote`; `tracker/delays.py` — `period_end`; `tracker/gapfill.py` — `_fact_axes`; `tracker/ingest/crawl.py` — `build_records`, after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |

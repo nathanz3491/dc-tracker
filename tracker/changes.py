@@ -59,6 +59,7 @@ _NO_SENTENCE: dict[str, str] = {
     "purchase_price": "a purchase price, not spending on the site",
     "financing": "a loan or financing round, not the cost of the site",
     "not_spending": "a tax incentive, revenue or economic impact, not spending on the site",
+    "covers_more": "a figure for more than this campus",
 }
 
 

@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.models import Project, Source
-from tracker.vocab import MONEY_REFUSALS
+from tracker.vocab import READING_REFUSALS
 
 log = logging.getLogger(__name__)
 
@@ -480,8 +480,9 @@ class ScopeReport:
     changed: int = 0
     #: old scope -> new scope -> count, for the only summary that matters.
     moved: dict[str, dict[str, int]] = field(default_factory=dict)
-    #: Investment claims `crawl.money_kind` now reads as not capital spending, by
-    #: reason, and ones it no longer does (its rule changed) restored to quoted.
+    #: Investment and planned-megawatt claims whose sentence now reads as not this
+    #: campus's figure (`crawl.money_kind`, `crawl.wider_kind`), by reason, and ones
+    #: that no longer do (a rule changed) restored to quoted.
     money_marked: dict[str, int] = field(default_factory=dict)
     money_restored: int = 0
 
@@ -592,53 +593,58 @@ def _ordered_fields(names: set[str]) -> str | None:
     return ",".join(f for f in WRITABLE_FIELDS if f in names) or None
 
 
-#: The reasons `_regate_money` owns: it adds them, and it may take them back.
-_MONEY_REASONS: frozenset[str] = MONEY_REFUSALS
+def _reading(name: str, quote: str, value: Any) -> str | None:
+    """What a stored figure's sentence says it is, when that is not this campus's."""
+    from tracker.ingest.crawl import money_kind, wider_kind
+
+    if name == "investment_usd":
+        return money_kind(quote, value) or wider_kind(quote, value, name)
+    return wider_kind(quote, value, name)
 
 
 def _regate_money(
     source: Any, claims: dict, quotes: dict, report: ScopeReport, *, apply: bool
 ) -> None:
-    """Mark a quoted investment figure that is an extrapolation or a contract's value.
+    """Mark a quoted figure whose sentence says it is not this campus's.
 
-    The ingest gate's `crawl.money_kind`, re-run over a stored claim the way the
-    scope gate is: free, from the sentence on disk, so citations read before the rule
-    existed are held to it the same night. Only a quoted claim is marked, and only a
-    mark this rule made is ever taken back — a figure refused for another reason
-    stays refused.
+    The ingest gate's `crawl.money_kind` and `crawl.wider_kind`, re-run over stored
+    claims the way the scope gate is: free, from the sentence on disk, so citations
+    read before a rule existed are held to it the same night. Only a quoted claim is
+    marked, and only a mark these rules made (`vocab.READING_REFUSALS`) is ever
+    changed or taken back — a figure refused for another reason stays refused.
     """
     import json
 
-    from tracker.ingest.crawl import money_kind
-
-    name = "investment_usd"
-    value, quote = claims.get(name), quotes.get(name)
-    if value is None or not quote:
-        return
-    unconfirmed = [f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()]
-    try:
-        reasons = json.loads(source.unconfirmed_reasons or "{}")
-    except (TypeError, ValueError):
-        return
-    if not isinstance(reasons, dict):
-        return
-    kind = money_kind(quote, value)
-    held = reasons.get(name)
-    fields = [f.strip() for f in (source.fields or "").split(",") if f.strip()]
-    if kind and (name not in unconfirmed or (held in _MONEY_REASONS and held != kind)):
-        report.money_marked[kind] = report.money_marked.get(kind, 0) + 1
-        if apply:
-            reasons[name] = kind
-            source.unconfirmed_fields = ",".join(sorted({*unconfirmed, name}))
-            source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True)
-            source.fields = ",".join(f for f in fields if f != name) or None
-    elif not kind and held in _MONEY_REASONS:
-        report.money_restored += 1
-        if apply:
-            reasons.pop(name, None)
-            source.unconfirmed_fields = ",".join(f for f in unconfirmed if f != name) or None
-            source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True) if reasons else None
-            source.fields = _ordered_fields({*fields, name})
+    for name, owned in READING_REFUSALS.items():
+        value, quote = claims.get(name), quotes.get(name)
+        if value is None or not quote:
+            continue
+        unconfirmed = [f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()]
+        try:
+            reasons = json.loads(source.unconfirmed_reasons or "{}")
+        except (TypeError, ValueError):
+            return
+        if not isinstance(reasons, dict):
+            return
+        kind = _reading(name, quote, value)
+        held = reasons.get(name)
+        fields = [f.strip() for f in (source.fields or "").split(",") if f.strip()]
+        if kind and (name not in unconfirmed or (held in owned and held != kind)):
+            report.money_marked[kind] = report.money_marked.get(kind, 0) + 1
+            if apply:
+                reasons[name] = kind
+                source.unconfirmed_fields = ",".join(sorted({*unconfirmed, name}))
+                source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True)
+                source.fields = ",".join(f for f in fields if f != name) or None
+        elif not kind and held in owned:
+            report.money_restored += 1
+            if apply:
+                reasons.pop(name, None)
+                source.unconfirmed_fields = ",".join(f for f in unconfirmed if f != name) or None
+                source.unconfirmed_reasons = (
+                    json.dumps(reasons, sort_keys=True) if reasons else None
+                )
+                source.fields = _ordered_fields({*fields, name})
 
 
 # --- deriving the basis axis ------------------------------------------------

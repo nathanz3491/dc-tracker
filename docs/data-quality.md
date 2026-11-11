@@ -437,7 +437,7 @@ tracker answers                              # how the database scores, per fiel
 tracker answers --against <snapshot.db>      # both scored; every answer a change moved
 tracker answers show --project 597           # each answer beside what the row holds
 tracker answers why --field investment_usd   # why each wrong one is wrong; who wrote it
-tracker answers try kind --list              # what a sentence check would change (hedge, wide, either, kind)
+tracker answers try kind --list              # what a sentence check would change (hedge, wide, either, kind, covers)
 ```
 
 **`why` says what a score cannot.** For each stored value the key judges not right
@@ -463,7 +463,14 @@ paid, a loan, a tax incentive. On 2026-11-11 it fixed 2 of the 8 wrong investmen
 figures left after the agent's were withdrawn, lost none of the 37 right, and moved
 35 of 593 stored figures (22 emptied, 13 to another sentence), every one read by hand
 as a figure that was not the campus's construction cost — 7 of them financing, which
-is the borrowed share of a cost rather than the cost.
+is the borrowed share of a cost rather than the cost. `try covers`
+(`crawl.wider_kind`) followed for figures that cover more than the campus — several
+campuses, a county's total, a power plant built with it — on investment and planned
+megawatts: 2 more investment answers fixed, none lost (41 of 45 right), and 6 stored
+values moved, all read by hand. It stays narrow because the obvious markers misfire:
+"over the next ten years", "across all phases" and "combined investment" describe
+one campus's own total, and a data center's demand is described beside a power plant
+in most sentences about it.
 
 **Nothing else here says whether a stored value is true.** The quote check says a
 sentence exists, the tiers count open questions, and every merge rule was justified

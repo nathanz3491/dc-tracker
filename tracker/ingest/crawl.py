@@ -2097,6 +2097,138 @@ def money_kind(quote: str | None, value: Any = None) -> str | None:
     return None
 
 
+#: A megawatt figure as the sentence writes it: "1.4 GW", "800 megawatt", "192MW".
+_MW_FIGURE = re.compile(r"\b(\d[\d,]*(?:\.\d+)?)\s*-?\s*(gw|mw|gigawatts?|megawatts?)\b")
+
+#: A figure for more than one campus. "Two" only with "campuses": "the two sites"
+#: is how a corridor or a split campus is described too.
+_MANY_SITES = re.compile(
+    r"\b(?:multiple|several|both|three|four|five|six|\d+) "
+    r"(?:new |separate |data[- ]cent(?:er|re) )*(?:campuses|sites|locations)\b"
+    r"|\btwo (?:new |separate |data[- ]cent(?:er|re) )*campuses\b"
+    r"|\b\w+ county investment\b"
+)
+
+#: The object is an energy project with a data center in it, whatever else the
+#: clause says: "a $22.3 billion energy infrastructure campus", "a natural
+#: gas-powered energy and data center campus".
+_ENERGY_OBJECT = re.compile(
+    r"\b(?:energy|power) infrastructure\b|\b(?:energy|power) (?:and|&) (?:data[- ]cent|ai\b)"
+    r"|\bdata[- ]cent(?:er|re) (?:and|&) (?:power|energy) campus\b"
+    r"|\b(?:clean|nuclear) energy campus\b"
+)
+
+#: For megawatts only the last of those: a sentence about a data center's demand says
+#: "with direct access to energy infrastructure" as often as not.
+_MW_ENERGY_OBJECT = re.compile(r"\b(?:clean|nuclear) energy campus\b")
+
+#: A power plant in the clause. For money it counts only when the clause does not
+#: make the plant the supplier or the neighbour (`_SUPPLIER`): "powered by the
+#: Freestone Energy Center", "the data center proposed at the Cayuga Power Plant".
+_PLANT = re.compile(
+    r"\b(?:power plants?|power stations?|generating stations?|gas turbines|power generation|"
+    r"generation capacity|generating capacity)\b"
+)
+_SUPPLIER = re.compile(
+    r"\b(?:powered by|supplied by|served by|fed by|adjacent|next to|near|beside|colocated|"
+    r"co-located|former|draw\w*|consum\w*|use|uses|using|demand\w*|enough)\b"
+)
+
+#: A megawatt figure whose own noun is a plant: "an 800 megawatt power plant",
+#: "2.16 GW of natural-gas generation". A data center's demand is described beside a
+#: plant constantly ("1.8 gigawatts, nearly the generation capacity of the Hoover
+#: Dam"), so for megawatts only the figure's own noun decides.
+_MW_IS_PLANT = re.compile(
+    r"^(?:\s+(?:of|in))?(?:\s+(?:new|natural|natural-gas|gas|gas-fired|nuclear|on-site|onsite|"
+    r"combined-cycle|solar|wind|operational|behind-the-meter))*\s+"
+    r"(?:power plant|power station|generating station|generation|generating capacity|turbines?)\b"
+)
+
+#: The figure belongs to one named campus: "a 192MW campus in Culpeper". A list of
+#: campuses with their own figures is not a figure for the list.
+_OWN_OBJECT = re.compile(
+    r"^\s+(?!of\b)(?:[\w-]+\s+)?(?:campus|data cent(?:er|re)|facility)\b(?!s)"
+    r"(?!\s+(?:and|&)\s+(?:power|energy))"
+)
+
+_CLAUSE_END = re.compile(r";|\.(?=\s|$)")
+_CLAUSE_REACH = 160
+
+
+def _clause_figures(text: str, field: str) -> list[tuple[float, str, str]]:
+    """(amount, words before, words after) for each figure of `field` in `text`.
+
+    Before and after stop at the clause's end and at the neighbouring figures of the
+    same kind, so "$2 billion in the campus, part of $80 billion across multiple
+    sites" gives the multiple sites to the $80 billion only.
+    """
+    out = []
+    if field == "investment_usd":
+        found = [(m, _dollars(m.group(0))) for m in re.finditer(_MONEY, text)]
+    else:
+        found = []
+        for m in _MW_FIGURE.finditer(text):
+            number = float(m.group(1).replace(",", ""))
+            found.append((m, number * 1000 if m.group(2).startswith("g") else number))
+    for i, (m, amount) in enumerate(found):
+        if amount is None:
+            continue
+        floor = found[i - 1][0].end() if i else 0
+        ceiling = found[i + 1][0].start() if i + 1 < len(found) else len(text)
+        before = text[max(floor, m.start() - _CLAUSE_REACH) : m.start()]
+        after = text[m.end() : min(ceiling, m.end() + _CLAUSE_REACH)]
+        out.append((amount, _CLAUSE_END.split(before)[-1], _CLAUSE_END.split(after)[0]))
+    return out
+
+
+def wider_kind(quote: str | None, value: Any, field: str) -> str | None:
+    """`covers_more` when the claimed figure is for more than this campus, or None.
+
+    Stage 3 of the investment-accuracy work. On 2026-11-11 three of the six wrong
+    investment figures left in the answer key were real figures for a bigger object:
+    "a $22.3 billion energy infrastructure campus" (Project Star), a $10 billion plan
+    to turn a generating station into "a natural gas-powered energy and data center
+    campus" (Homer City), and two campuses summed into "Madison County investment".
+    The reader's own scope label had said "this site" for all of them.
+
+    Read from the verified sentence like `money_kind`, for `investment_usd` and
+    `mw_planned`, and only for the figure claimed (within 5%). Kept narrow on
+    purpose: drafts that read "over the next ten years", "across all phases" or
+    "combined investment" as wider refused a campus's own total every time, and
+    megawatts sit beside a power plant in most sentences about a data center's demand.
+    """
+    if not quote or value is None or isinstance(value, bool):
+        return None
+    try:
+        claimed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if claimed <= 0:
+        return None
+    text = " ".join(str(quote).lower().split())
+    figures = [
+        (before, after)
+        for amount, before, after in _clause_figures(text, field)
+        if abs(amount - claimed) <= 0.05 * claimed
+    ]
+    # A sentence that gives the figure to one campus of its own anywhere — "a 10 GW
+    # data center campus powered by 10 GW of new generation" — is that campus's.
+    if any(_OWN_OBJECT.match(after) for _, after in figures):
+        return None
+    for before, after in figures:
+        clause = f"{before} {after}"
+        if _MANY_SITES.search(clause):
+            return "covers_more"
+        if field == "investment_usd":
+            if _ENERGY_OBJECT.search(clause) or (
+                _PLANT.search(clause) and not _SUPPLIER.search(clause)
+            ):
+                return "covers_more"
+        elif _MW_IS_PLANT.match(after) or _MW_ENERGY_OBJECT.search(clause):
+            return "covers_more"
+    return None
+
+
 def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecord]:
     """Milestones from one extracted project, each verified against the article.
 
@@ -3037,13 +3169,19 @@ def build_records(
         scale_note = _implausible_investment(claims)
         if scale_note:
             reasons["investment_usd"] = "out_of_scale"
-        # Quoted, and still not money spent building the site: an extrapolation, or a
-        # customer contract's value. Same treatment as `out_of_scale` — kept, shown,
-        # and left out of Capex.
+        # Quoted, and still not money spent building this site: another kind of money
+        # (`money_kind`), or a figure for more than the campus (`wider_kind`). Kept
+        # and shown with the reason, and never the campus's value
+        # (`vocab.READING_REFUSALS`).
         elif "investment_usd" in kept and (
             kind := money_kind(quotes.get("investment_usd"), kept["investment_usd"])
+            or wider_kind(quotes.get("investment_usd"), kept["investment_usd"], "investment_usd")
         ):
             reasons["investment_usd"] = kind
+        if "mw_planned" in kept and (
+            kind := wider_kind(quotes.get("mw_planned"), kept["mw_planned"], "mw_planned")
+        ):
+            reasons["mw_planned"] = kind
         unconfirmed = set(reasons)
 
         risks, risk_notes = _risks(raw, result.markdown, result.url)

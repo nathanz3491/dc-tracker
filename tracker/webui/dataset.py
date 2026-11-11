@@ -109,6 +109,8 @@ _REASON_NOTES: dict[str, str] = {
     "not the cost — never the campus's investment",
     "not_spending": "quoted, but a tax incentive, revenue or an economic-impact figure, not "
     "money spent building the site — never the campus's investment",
+    "covers_more": "quoted, but a figure for more than this campus — several campuses, a "
+    "county's total, or a power plant with it — never the campus's value",
 }
 
 
