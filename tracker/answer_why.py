@@ -26,7 +26,7 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -54,12 +54,23 @@ WIDE: Final = re.compile(
     re.I,
 )
 
-#: The checks `tracker answers try` knows, by name: a test on a sentence that says
-#: whether it may set the value.
-CHECKS: Final[dict[str, Callable[[str], bool]]] = {
-    "hedge": lambda q: bool(HEDGE.search(q)),
-    "wide": lambda q: bool(WIDE.search(q)),
-    "either": lambda q: bool(HEDGE.search(q) or WIDE.search(q)),
+
+def _kind(quote: str, value: Any) -> bool:
+    from tracker.ingest.crawl import money_kind
+
+    return money_kind(quote, value) is not None
+
+
+#: The checks `tracker answers try` knows, by name: a test on a sentence and the
+#: value it states that says whether it may set the value. `kind` is the one that
+#: went live (`crawl.money_kind`): on 2026-11-11 it fixed 2 of the 8 wrong investment
+#: figures, lost none of the 37 right, and moved 35 of 593 stored figures, every one
+#: of them a purchase price, a loan, a contract's value or somebody else's estimate.
+CHECKS: Final[dict[str, Callable[[str, Any], bool]]] = {
+    "hedge": lambda q, v: bool(HEDGE.search(q)),
+    "wide": lambda q, v: bool(WIDE.search(q)),
+    "either": lambda q, v: bool(HEDGE.search(q) or WIDE.search(q)),
+    "kind": _kind,
 }
 
 
@@ -269,11 +280,11 @@ class Trial:
     changed: list[tuple[int, str, str]] = field(default_factory=list)
 
 
-def _after(standing: list[Fact], others: list[Fact], refuse: Callable[[str], bool]) -> str:
+def _after(standing: list[Fact], others: list[Fact], refuse: Callable[[str, Any], bool]) -> str:
     """'same', 'empty' or 'other': where a value would land with the check applied."""
-    if any(not refuse(f.quote or "") for f in standing):
+    if any(not refuse(f.quote or "", f.value) for f in standing):
         return "same"
-    if any(not refuse(f.quote or "") for f in others):
+    if any(not refuse(f.quote or "", f.value) for f in others):
         return "other"
     return "empty"
 

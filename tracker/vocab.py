@@ -456,18 +456,38 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: evidences this role", and no sentence does; the citation is on `source_id`
     #: for a reader who wants to see where the name came from.
     "role_inferred",
-    #: `investment_usd` only. Quoted, verified, and an extrapolation or a projection
-    #: rather than a figure anybody committed to: "an extrapolated total capital
-    #: expenditure ... potentially ranging from $8.3 billion" (an analyst on Riot's
-    #: Corsicana), "we project it ... at a capital cost of $8.1 B" (a directory's own
-    #: model). Kept and shown, and left out of Capex like `out_of_scale`.
+    #: `investment_usd` only. Quoted, verified, and an extrapolation, a projection or
+    #: somebody else's estimate rather than a figure the builder or a filing committed
+    #: to: "an extrapolated total capital expenditure ... potentially ranging from $8.3
+    #: billion" (an analyst on Riot's Corsicana), "we project it ... at a capital cost
+    #: of $8.1 B" (a directory's own model), "Epoch AI estimates ...", "a commissioned
+    #: EY model uses $69.2 billion", "Assuming an $11B investment, ...". Never the
+    #: campus's figure (`MONEY_REFUSALS`).
     "speculative",
     #: `investment_usd` only. Quoted and verified, and the value of a customer
     #: contract — what a tenant will pay — not money spent building the site:
-    #: "IREN's $9.7 billion AI cloud agreement with Microsoft" (Childress). Left out
-    #: of Capex like `out_of_scale`; it belongs to the buyer's position, not the
-    #: campus's cost.
+    #: "IREN's $9.7 billion AI cloud agreement with Microsoft" (Childress).
     "contract_value",
+    #: `investment_usd` only. Quoted and verified, and what somebody paid for land, a
+    #: building or a company — "bought roughly 850 acres ... for $17 million" — not
+    #: what building the site costs.
+    "purchase_price",
+    #: `investment_usd` only. Quoted and verified, and a loan or a financing round —
+    #: "$2.0B in construction financing to develop the first three data centers" —
+    #: which is the borrowed share of a cost, not the cost.
+    "financing",
+    #: `investment_usd` only. Quoted and verified, and money around the site rather
+    #: than spent building it: a tax incentive, tax revenue, an economic-impact figure.
+    "not_spending",
+)
+
+#: The `investment_usd` refusals that keep a figure out of the campus's investment
+#: altogether (`upsert.claims_by_field`), not merely out of Capex. Each is a real
+#: sentence about a different kind of number, so a 待确认 fallback would store the
+#: wrong thing: measured 2026-11-11, a missing investment is better than a wrong one,
+#: because a wrong one goes straight into every total a reader sees.
+MONEY_REFUSALS: Final[frozenset[str]] = frozenset(
+    {"speculative", "contract_value", "purchase_price", "financing", "not_spending"}
 )
 
 # --- the claim envelope ----------------------------------------------------

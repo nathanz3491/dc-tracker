@@ -305,6 +305,27 @@ def _withheld(row: Source) -> frozenset[str]:
     return frozenset()
 
 
+def _not_this_money(row: Source) -> frozenset[str]:
+    """`investment_usd`, when its sentence states another kind of money.
+
+    A purchase price, a loan, a contract's value or somebody else's estimate
+    (`crawl.money_kind`, `vocab.MONEY_REFUSALS`). Such a claim used to stand as a
+    待确认 fallback whenever nothing else stated the figure, and a fallback is still
+    the stored value: on 2026-11-11 that put 19 land and building prices and 7
+    financing rounds into campus investment. It now leaves the merge as a ruled-out
+    claim does, and stays on the row as evidence with its reason.
+    """
+    from tracker.vocab import MONEY_REFUSALS
+
+    try:
+        reasons = json.loads(row.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return frozenset()
+    if isinstance(reasons, dict) and reasons.get("investment_usd") in MONEY_REFUSALS:
+        return frozenset({"investment_usd"})
+    return frozenset()
+
+
 def _part_fields(row: Source) -> frozenset[str]:
     """Fields this citation's sentence gives to one building or phase, not the site.
 
@@ -489,7 +510,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         if not isinstance(claims, dict):
             continue
         unconfirmed = {f.strip() for f in (s.unconfirmed_fields or "").split(",") if f.strip()}
-        decided = _decided_against(s) | _withheld(s)
+        decided = _decided_against(s) | _withheld(s) | _not_this_money(s)
         # Parsed once per source rather than once per claim and axis: it was 770,000
         # `json.loads` of the same few hundred envelopes per nightly count.
         meta = _claim_meta(s)

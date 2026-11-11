@@ -32,7 +32,7 @@ A 待确认 value is unconfirmed for one of two very different reasons, and they
 
 - **Nothing backs it.** The model offered no sentence, or the sentence was not in the article, or did not state the value. The figure may be right; the tracker could not show it. Look for another source.
 - **It belongs to something else.** The sentence is real, but the figure is too large to be this campus's — usually a company's whole programme quoted in an article about one site, such as "a $500 billion buildout". These are marked in red **not this site's figure**. The figure is real; it is the wrong thing.
-- **It is not money spent on the site.** The sentence is real, but the investment it quotes is somebody's extrapolation or projection ("an extrapolated total capital expenditure … potentially ranging from $8.3 billion"), or what a customer contract is worth ("a $9.7 billion AI cloud agreement"). Kept and shown with that reason, and left out of [Capex](capex). A budget reported as "could reach $900 million" is an ordinary plan and is not marked.
+- **It is not money spent on the site.** The sentence is real, but the investment it quotes is another kind of money: somebody's extrapolation or estimate ("an extrapolated total capital expenditure … potentially ranging from $8.3 billion", "Epoch AI estimates …"), what a customer contract is worth ("a $9.7 billion AI cloud agreement"), what was paid for the land or a building, a loan or financing round, or a tax incentive. Kept and shown with that reason, and never used as the campus's investment — if nothing else states a figure, the field stays empty. A budget reported as "could reach $900 million", or the developer's own estimated cost, is an ordinary plan and is not marked.
 
 ## What the popover shows
 

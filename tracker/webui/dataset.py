@@ -99,10 +99,16 @@ _REASON_NOTES: dict[str, str] = {
     "programme-wide total quoted in an article about one campus",
     "listing_date": "the only date given is a directory's own — when it listed, "
     "updated or first reported the site — not when the project was announced",
-    "speculative": "quoted, but an extrapolation or a projection, not a figure anybody "
-    "committed to — left out of Capex",
+    "speculative": "quoted, but an extrapolation, a projection or somebody else's estimate, "
+    "not a figure the builder committed to — never the campus's investment",
     "contract_value": "quoted, but the value of a customer contract, not money spent "
-    "building the site — left out of Capex",
+    "building the site — never the campus's investment",
+    "purchase_price": "quoted, but what was paid for land, a building or a company, not "
+    "money spent building the site — never the campus's investment",
+    "financing": "quoted, but a loan or a financing round — the borrowed share of a cost, "
+    "not the cost — never the campus's investment",
+    "not_spending": "quoted, but a tax incentive, revenue or an economic-impact figure, not "
+    "money spent building the site — never the campus's investment",
 }
 
 

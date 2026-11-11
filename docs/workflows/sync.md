@@ -750,16 +750,24 @@ not written, so the next read after the fix writes it. On production on 2026-10-
 no campus broke any held relationship, so nothing a crawl wrote that night would
 have been refused.
 
-**Quoted money that is not spending on the site is marked, not stored as fact.** An
-analyst's extrapolation ("an extrapolated total capital expenditure … potentially
+**Quoted money that is not spending on the site is never the campus's investment.**
+An analyst's extrapolation ("an extrapolated total capital expenditure … potentially
 ranging from $8.3 billion"), a directory's own projection ("we project … a capital
 cost of $8.1 B") and a customer contract's value ("a $9.7 billion AI cloud agreement
 with Microsoft") all passed the quote check on 2026-10-21 and became campus
-investment. `crawl.money_kind` reads the verified sentence for the claimed figure and
-marks it 待确认 `speculative` or `contract_value`; Capex leaves both out, like a
-programme total. "Could reach" and "could top" are not enough — that is how ordinary
-planned budgets are reported — and the hedge must be on the figure claimed. The same
-rule re-runs over stored claims every night in `backfill scope`.
+investment; on 2026-11-11 so had 19 land and building prices, 7 financing rounds and
+8 extrapolations or other people's estimates. `crawl.money_kind` reads the verified sentence for
+the claimed figure and marks it 待确认 with what it is: `speculative` (an
+extrapolation, a projection, somebody else's estimate, a figure the sentence only
+assumes), `contract_value`, `purchase_price`, `financing` or `not_spending` (a tax
+incentive, revenue, an economic impact). Each stays on the campus as evidence and
+leaves the merge (`upsert._not_this_money`), so it is not even the fallback when
+nothing else states a figure — the field is left empty instead. "Could reach", "would
+cost" and the developer's own "estimated cost" are not enough — that is how ordinary
+planned budgets are reported — the hedge must be on the figure claimed, and bonds are
+never financing here, because a county's revenue bonds are usually issued for a
+project's whole cost. The same rule re-runs over stored claims every night in
+`backfill scope`; a stored value moves when its row is next re-derived.
 
 **A month, quarter or half written as 1 January takes the sentence's period.** The
 prompt asks for a bare year as `YYYY-01-01`, and the model does that for narrower
@@ -1019,7 +1027,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties`, `split_names`, `same_company_names`, `known_keys` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
-| Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
+| Money that is not spending on the site | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FINANCING_MONEY`, `_OTHER_MONEY`; `tracker/vocab.py` — `MONEY_REFUSALS`; `tracker/upsert.py` — `_not_this_money`; `tracker/backfill.py` — `regate_scope`, `_regate_money`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
 | A filing's date: SEC's record, never its page | `tracker/ingest/edgar.py` — `parse_filing_url`, `FilingDates`, `dates_of`; `tracker/ingest/crawl.py` — `run` (`filing_dates=`), `_filing_dates`, `_dated`; `tracker/upsert.py` — `upsert_record` (`read_dates=`); `tracker/dates.py` — `_ask_sec`, `_undated_filings`; `tracker/cli/quality.py` — `_backfill_dates` |
 | A month, quarter or half written as 1 January; a season or hedge read as its year | `tracker/normalize.py` — `period_named_in_quote`, `_named_before`, `_MONTH_THEN_YEAR`, `_QUARTER_THEN_YEAR`, `_HALF_THEN_YEAR`, `_HEDGE_THEN_YEAR`, `precision_in_quote`; `tracker/delays.py` — `period_end`; `tracker/gapfill.py` — `_fact_axes`; `tracker/ingest/crawl.py` — `build_records`, after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |

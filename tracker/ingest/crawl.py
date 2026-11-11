@@ -1945,9 +1945,70 @@ _MONEY = r"\$\s?\d[\d.,]*\s*(?:billion|million|bn|mn|b|m)?\b"
 #: of AI compute, supported by 214 MW of IT power at a capital cost of $8.1 B" puts 120
 #: characters between the two — and `money_kind` checks the figure it reaches is the
 #: one claimed, so a long reach cannot attach the hedge to another number.
+#:
+#: Somebody else's arithmetic counts the same, and so does a figure the sentence only
+#: assumes: on 2026-11-11, 5 of the 13 wrong investment figures in the answer key were
+#: one of "Epoch AI estimates ...", "a commissioned EY model uses $69.2 billion",
+#: "Industrial Info estimates ...", "local media has reported ... could reach $20
+#: billion", "Assuming an $11B investment, ...". The developer's own "estimated cost"
+#: and a filing's "estimated construction value" are the figures this field wants,
+#: so "estimate" alone is never enough — the estimator must be somebody else.
 _SPECULATIVE_MONEY = re.compile(
     r"\b(?:extrapolat\w*|potentially|we (?:estimate|project)|"
-    r"analysts? (?:estimate|project|expect)\w*)\b[^.;$]{0,160}?" + _MONEY
+    r"analysts? (?:estimate|project|expect|say|believe)\w*|"
+    r"epoch ai|industrial info\w*|"
+    r"(?:\w+ )?model (?:uses|estimates?|puts|projects?|assumes?)|"
+    r"(?:local )?(?:media|news outlets?) (?:has |have )?(?:reported|suggest\w*)|"
+    r"(?:research|consulting|consultancy|analytics) firm|"
+    r"economic impact (?:study|analysis|report)|"
+    r"rumou?r\w*|assuming)\b[^.;$]{0,160}?" + _MONEY
+)
+
+#: "about", "roughly", "more than": the words a reporter puts between a verb and its
+#: dollar figure.
+_ABOUT = (
+    r"(?:about |approximately |roughly |nearly |almost |around |some |more than |over |up to )?"
+)
+
+#: What somebody paid for land, a building or a company. "Acquired ... for $X",
+#: "paid $X", "a $X acquisition". "For a $10 billion data center project" is not
+#: matched: the article between them is what separates a price from a project.
+_PURCHASE_MONEY = re.compile(
+    r"\b(?:acquired|acquires|bought|buys|purchased|purchases|sold|sells)\b[^.;$]{0,100}?"
+    r"\bfor\s+"
+    + _ABOUT
+    + _MONEY
+    + r"|\b(?:paid|pays|purchase price of|sale price of)\s+"
+    + _ABOUT
+    + _MONEY
+    + r"|"
+    + _MONEY
+    + r"(?:\s+[\w-]+){0,2}?\s+(?:acquisition|purchase|buyout)\b"
+)
+
+#: A loan or a financing round: the borrowed share of a cost, not the cost. Bonds are
+#: deliberately not here — a county's industrial revenue bonds are usually issued for
+#: the project's whole capital cost, as the vehicle for its tax abatement.
+_FINANCING_MONEY = re.compile(
+    _MONEY
+    + r"(?:\s+(?:in|of))?(?:\s+[\w-]+){0,2}?\s+(?:financing|loans?|credit facility|debt)\b"
+    + r"|\b(?:loan|financing|credit facility) (?:of|worth|totaling|totalling)\s+"
+    + _ABOUT
+    + _MONEY
+    + r"|\b(?:secured|raised|raises|obtained)\s+"
+    + _ABOUT
+    + _MONEY
+)
+
+#: Money around the site rather than spent building it. "Revenue bonds" are excluded
+#: for the reason bonds are excluded from `_FINANCING_MONEY`.
+_OTHER_MONEY = re.compile(
+    _MONEY + r"(?:\s+(?:in|of))?(?:\s+[\w-]+){0,2}?\s+(?:tax (?:breaks?|abatements?|incentives?|"
+    r"exemptions?|credits?|savings)|incentives|(?:tax )?revenues?(?! bonds?)|"
+    r"economic (?:impact|output|activity|benefits?))\b"
+    r"|\b(?:tax (?:breaks?|abatements?|incentives?|exemptions?|credits?)|incentive package|"
+    r"economic (?:impact|output|activity)|(?:tax )?revenues?) "
+    r"(?:of|worth|valued at|totaling|totalling)\s+" + _ABOUT + _MONEY
 )
 
 #: The value of a contract to provide a service — compute, cloud, hosting, a lease —
@@ -1991,11 +2052,18 @@ def _dollars(fragment: str) -> float | None:
 def money_kind(quote: str | None, value: Any = None) -> str | None:
     """Why a quoted investment figure is not this site's capital spending, or None.
 
-    `speculative` for an extrapolation or a projection, `contract_value` for what a
-    customer contract is worth (`vocab.UNCONFIRMED_REASONS`). Both were stored as
-    campus investment on 2026-10-21: Riot Corsicana's "extrapolated total capital
-    expenditure ... potentially ranging from $8.3 billion" replaced a quoted $333M,
-    and IREN Childress took "IREN's $9.7 billion AI cloud agreement with Microsoft".
+    `speculative` for an extrapolation, a projection or somebody else's estimate,
+    `contract_value` for what a customer contract is worth, `purchase_price` for what
+    was paid for land, a building or a company, `financing` for a loan or a financing
+    round, `not_spending` for a tax incentive, revenue or economic impact
+    (`vocab.UNCONFIRMED_REASONS`). The first two were stored as campus investment on
+    2026-10-21: Riot Corsicana's "extrapolated total capital expenditure ...
+    potentially ranging from $8.3 billion" replaced a quoted $333M, and IREN
+    Childress took "IREN's $9.7 billion AI cloud agreement with Microsoft". On
+    2026-11-11, 19 stored figures were land and building purchases and 7 were
+    financing. Every one is left out of the campus's investment
+    (`vocab.MONEY_REFUSALS`), kept and shown as evidence.
+
     Read from the verified sentence alone, the way the scope gate reads one building's
     figure, so it costs nothing and re-runs over stored claims (`backfill scope`).
 
@@ -2017,10 +2085,15 @@ def money_kind(quote: str | None, value: Any = None) -> str | None:
         amount = _dollars(match.group(0))
         return amount is not None and abs(amount - claimed) <= 0.05 * claimed
 
-    if any(about_the_claim(m) for m in _CONTRACT_MONEY.finditer(text)):
-        return "contract_value"
-    if any(about_the_claim(m) for m in _SPECULATIVE_MONEY.finditer(text)):
-        return "speculative"
+    for kind, pattern in (
+        ("contract_value", _CONTRACT_MONEY),
+        ("purchase_price", _PURCHASE_MONEY),
+        ("not_spending", _OTHER_MONEY),
+        ("financing", _FINANCING_MONEY),
+        ("speculative", _SPECULATIVE_MONEY),
+    ):
+        if any(about_the_claim(m) for m in pattern.finditer(text)):
+            return kind
     return None
 
 

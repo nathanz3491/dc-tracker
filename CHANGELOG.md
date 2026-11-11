@@ -66,6 +66,17 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A price paid, a loan or somebody else's estimate is never a campus's
+  investment.** 35 of 593 stored investment figures were another kind of money: 19
+  land and building purchases ("acquired a 1,385-acre megasite for $26.8 million"), 7
+  financing rounds, a cloud contract, and 8 extrapolations or other people's estimates
+  (Epoch AI, Industrial Info, an EY model, a rumour). The check that already caught extrapolations now names each
+  kind, and a figure it catches leaves the merge instead of standing as the fallback
+  when nothing else states one — 22 figures go empty, 13 fall to another sentence. On
+  the 45 verified investment answers it fixed 2 and lost none (37 → 39 right). The
+  sentences stay on the campus as evidence with their reason. `tracker answers try
+  kind` measures it (`crawl.money_kind`, `vocab.MONEY_REFUSALS`,
+  `upsert._not_this_money`).
 - **The news watch spends about 200 fewer searches a night.** Searches are now the
   night's tightest limit. A campus whose company had no other campus due went out as a
   search of its own — 263 of 964 follow-ups on 2026-11-10. Those now share their

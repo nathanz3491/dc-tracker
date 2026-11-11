@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tracker.models import Project, Source
+from tracker.vocab import MONEY_REFUSALS
 
 log = logging.getLogger(__name__)
 
@@ -592,7 +593,7 @@ def _ordered_fields(names: set[str]) -> str | None:
 
 
 #: The reasons `_regate_money` owns: it adds them, and it may take them back.
-_MONEY_REASONS: frozenset[str] = frozenset({"speculative", "contract_value"})
+_MONEY_REASONS: frozenset[str] = MONEY_REFUSALS
 
 
 def _regate_money(
@@ -624,7 +625,7 @@ def _regate_money(
     kind = money_kind(quote, value)
     held = reasons.get(name)
     fields = [f.strip() for f in (source.fields or "").split(",") if f.strip()]
-    if kind and name not in unconfirmed:
+    if kind and (name not in unconfirmed or (held in _MONEY_REASONS and held != kind)):
         report.money_marked[kind] = report.money_marked.get(kind, 0) + 1
         if apply:
             reasons[name] = kind

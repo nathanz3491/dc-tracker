@@ -54,8 +54,11 @@ _NO_SENTENCE: dict[str, str] = {
     "quote_off_target": "the one offered does not state it",
     "forecast": "the article only expects it",
     "out_of_scale": "judged too large for one campus",
-    "speculative": "an extrapolation, not a committed figure",
+    "speculative": "an extrapolation or somebody else's estimate, not a committed figure",
     "contract_value": "a contract's value, not spending on the site",
+    "purchase_price": "a purchase price, not spending on the site",
+    "financing": "a loan or financing round, not the cost of the site",
+    "not_spending": "a tax incentive, revenue or economic impact, not spending on the site",
 }
 
 

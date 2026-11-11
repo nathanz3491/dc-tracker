@@ -32,7 +32,7 @@
 
 - **没有依据支持它。** 模型没有给出原句，或者原句不在文章中，或者原句没有陈述这个值。这个数字可能是对的，只是追踪系统无法证明。请寻找其他来源。
 - **它属于别的东西。** 原句是真实的，但这个数字太大，不可能只属于这个园区。通常是一篇讲单个园区的文章引用了公司的整体计划，比如"a $500 billion buildout"（5000 亿美元的扩建计划）。这类数值会用红色标注 **not this site's figure**（不是本园区的数字）。数字本身是真的，只是对应错了对象。
-- **它不是花在这个场地上的钱。** 原句是真实的，但其中的投资额是某人的外推或预测（"an extrapolated total capital expenditure … potentially ranging from $8.3 billion"），或者是一份客户合同的金额（"a $9.7 billion AI cloud agreement"）。这类数值会保留并注明原因，但不计入 [Capex](capex)。像"could reach $900 million"这样报道的预算属于普通计划，不会被标注。
+- **它不是花在这个场地上的钱。** 原句是真实的，但其中的金额是另一种钱：某人的外推或估算（"an extrapolated total capital expenditure … potentially ranging from $8.3 billion"、"Epoch AI estimates …"），一份客户合同的金额（"a $9.7 billion AI cloud agreement"），购买土地或建筑所付的价格，一笔贷款或融资，或者一项税收优惠。这类数值会保留并注明原因，但永远不会用作园区的投资额——如果没有其他来源给出数字，该字段就留空。像"could reach $900 million"这样报道的预算，或开发商自己估算的成本，属于普通计划，不会被标注。
 
 ## 弹出卡片显示什么
 

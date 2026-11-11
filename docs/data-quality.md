@@ -437,7 +437,7 @@ tracker answers                              # how the database scores, per fiel
 tracker answers --against <snapshot.db>      # both scored; every answer a change moved
 tracker answers show --project 597           # each answer beside what the row holds
 tracker answers why --field investment_usd   # why each wrong one is wrong; who wrote it
-tracker answers try hedge --list             # what a proposed sentence check would change
+tracker answers try kind --list              # what a sentence check would change (hedge, wide, either, kind)
 ```
 
 **`why` says what a score cannot.** For each stored value the key judges not right
@@ -456,7 +456,14 @@ of the merge (`upsert.WITHHELD`); its citations stay as evidence.
 The key alone is not enough: refusing any sentence with a hedge word fixed 7 of 13
 wrong investment figures and lost none of the 32 right, and would have emptied 86 of
 628 across the database, half of them good — permit-filing construction values, the
-developer's own estimates.
+developer's own estimates. The check that went live instead, `try kind`
+(`crawl.money_kind`), asks what kind of money the sentence states rather than how
+it is hedged: somebody else's estimate or an assumption, a contract's value, a price
+paid, a loan, a tax incentive. On 2026-11-11 it fixed 2 of the 8 wrong investment
+figures left after the agent's were withdrawn, lost none of the 37 right, and moved
+35 of 593 stored figures (22 emptied, 13 to another sentence), every one read by hand
+as a figure that was not the campus's construction cost — 7 of them financing, which
+is the borrowed share of a cost rather than the cost.
 
 **Nothing else here says whether a stored value is true.** The quote check says a
 sentence exists, the tiers count open questions, and every merge rule was justified
