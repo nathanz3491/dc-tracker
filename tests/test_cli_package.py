@@ -34,6 +34,8 @@ COMMANDS = {
     "answers apply",
     "answers load",
     "answers show",
+    "answers try",
+    "answers why",
     "audit",
     "audit check",
     "audit resolve",

@@ -305,3 +305,125 @@ def _print_score(found, *, title: str, drafts: bool) -> None:
     console.print(table)
     if found.absent:
         console.print(f"  {len(found.absent)} answer(s) name a campus not in this database")
+
+
+@answers_app.command("why")
+def why_cmd(
+    field: Annotated[
+        str | None,
+        typer.Option("--field", help="One field only, e.g. investment_usd.", show_default=False),
+    ] = None,
+) -> None:
+    """Why each verified answer the database gets wrong is wrong, and which step wrote it.
+
+    For every stored value the answer key judges not right: the cause — a figure
+    whose sentence is a guess or covers more than the campus, the right value read
+    and ruled out or read and passed over, nothing found, a date stored too roughly,
+    no citation at all — and the step that wrote the citations the value rests on
+    (the article reader, the research agent). Then, by step, how often the values it
+    alone wrote are right. Reads only.
+    """
+    from tracker import answer_why
+
+    fields = (field,) if field else None
+    with session_scope(_read_engine(), commit=False) as session:
+        found = answer_why.diagnose(session, fields=fields)
+        steps = answer_why.by_step(session)
+    if json_mode():
+        emit(
+            {
+                "cases": [answer_why.as_json(d) for d in found],
+                "by_step": {k: {"right": v.right, "judged": v.judged} for k, v in steps.items()},
+            }
+        )
+        return
+    causes = answer_why.summary(found)
+    table = Table(title="why", title_justify="left", box=TABLE_BOX, header_style="bold")
+    table.add_column("cause")
+    names = sorted(causes)
+    for name in names:
+        table.add_column(name.replace("_usd", "").replace("_", " "), justify="right")
+    for cause in answer_why.CAUSES:
+        counts = [causes[name][cause] for name in names]
+        if any(counts):
+            table.add_row(cause, *[str(n) if n else "" for n in counts])
+    console.print(table)
+    console.print(
+        f"  {sum(1 for d in found if d.should_be_empty)} of {len(found)} should be empty: "
+        "the answer says nothing states this campus's figure"
+    )
+    table = Table(title="by step", title_justify="left", box=TABLE_BOX, header_style="bold")
+    for column in ("step", "right", "judged", "share right"):
+        table.add_column(column, justify="left" if column == "step" else "right")
+    for name, score in sorted(steps.items(), key=lambda kv: -kv[1].judged):
+        table.add_row(
+            name, str(score.right), str(score.judged), f"{score.right / score.judged:.0%}"
+        )
+    console.print(table)
+    for d in found:
+        console.print(
+            f"  #{d.project_id} [bold]{d.field}[/bold] {escape(d.name[:50])}: "
+            f"{escape(str(d.stored))} against {escape(str(d.answer))} — {d.cause}"
+            + (f" [dim]({', '.join(d.steps)})[/dim]" if d.steps else "")
+        )
+        if d.quote:
+            console.print(f"      [dim]“{escape(d.quote[:200])}”[/dim]")
+
+
+@answers_app.command("try")
+def try_cmd(
+    check: Annotated[
+        str, typer.Argument(help="A check on a value's sentence: hedge, wide, either.")
+    ],
+    field: Annotated[
+        str, typer.Option("--field", help="The field it would guard.")
+    ] = "investment_usd",
+    show: Annotated[
+        bool,
+        typer.Option("--list", help="Every value it would empty or change, with its sentence."),
+    ] = False,
+) -> None:
+    """What refusing the sentences a check names would do, before it is built.
+
+    On the answer key: the wrong values it would fix, the right ones it would lose,
+    the wrong ones it would leave. Across the database: how many stored values it
+    would empty, and how many would fall to another statement. The second count is
+    the one that stopped the first check tried: it fixed 7 of 13 wrong investment
+    figures and lost none of the right, and would have emptied 86 of 628, half of them
+    good. Reads only.
+    """
+    from tracker import answer_why
+
+    if check not in answer_why.CHECKS:
+        _fail(f"no check {check!r}; choose from {', '.join(answer_why.CHECKS)}")
+    with session_scope(_read_engine(), commit=False) as session:
+        got = answer_why.trial(session, check, field_name=field)
+    if json_mode():
+        emit(
+            {
+                "check": got.check,
+                "field": got.field,
+                "answer_key": {
+                    "fixed": got.fixed,
+                    "lost": got.lost,
+                    "still_wrong": got.still_wrong,
+                },
+                "held": got.held,
+                "emptied": [{"project_id": p, "value": v, "quote": q} for p, v, q in got.emptied],
+                "changed": [{"project_id": p, "value": v, "quote": q} for p, v, q in got.changed],
+            }
+        )
+        return
+    console.print(
+        f"[bold]{got.check}[/bold] on {got.field}: on the answer key it fixes "
+        f"[green]{got.fixed}[/green] wrong, loses [red]{got.lost}[/red] right, leaves "
+        f"{got.still_wrong} wrong."
+    )
+    console.print(
+        f"Across the database it would empty {len(got.emptied)} and change "
+        f"{len(got.changed)} of {got.held} stored values."
+    )
+    if show:
+        for label, rows in (("empty", got.emptied), ("change", got.changed)):
+            for pid, value, quote in rows:
+                console.print(f"  {label:6} #{pid} {escape(value)}  [dim]“{escape(quote)}”[/dim]")

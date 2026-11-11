@@ -436,7 +436,27 @@ tracker answers load answers.json            # store a batch (on the host)
 tracker answers                              # how the database scores, per field
 tracker answers --against <snapshot.db>      # both scored; every answer a change moved
 tracker answers show --project 597           # each answer beside what the row holds
+tracker answers why --field investment_usd   # why each wrong one is wrong; who wrote it
+tracker answers try hedge --list             # what a proposed sentence check would change
 ```
+
+**`why` says what a score cannot.** For each stored value the key judges not right
+it names the cause — a figure whose sentence is a guess or covers more than the
+campus, the right value read and ruled out or passed over, nothing found, a date
+stored too roughly, no citation at all — and the step that wrote the citations the
+value rests on, then how often each step's values are right. Its first run, on
+2026-11-11: 10 of the 13 wrong investment figures should have been empty (two
+campuses, a power plant, a company's pledge to a state, an estimate), the right
+figure was never read for 12, and the research agent's investment figures were 0 of
+5 right against the article reader's 18 of 25. So the agent no longer looks for or
+sets investment (`gapfill.AGENT_WITHHELD`), and the figures it had set are left out
+of the merge (`upsert.WITHHELD`); its citations stay as evidence.
+
+**`try` weighs a check before it is built**, on the key and on the whole database.
+The key alone is not enough: refusing any sentence with a hedge word fixed 7 of 13
+wrong investment figures and lost none of the 32 right, and would have emptied 86 of
+628 across the database, half of them good — permit-filing construction values, the
+developer's own estimates.
 
 **Nothing else here says whether a stored value is true.** The quote check says a
 sentence exists, the tiers count open questions, and every merge rule was justified

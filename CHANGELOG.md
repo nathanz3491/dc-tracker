@@ -12,6 +12,20 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Why a stored value is wrong, measured, and the research agent kept off
+  investment.** Against the 229 verified answers, 10 of the 13 wrong investment
+  figures should have been empty: real figures for two campuses, a power plant, a
+  company's pledge to a state, or an estimate. The right figure was never read for 12,
+  and the research agent's investment figures were 0 of 5 right where the article
+  reader's were 18 of 25. `tracker answers why` names each wrong value's cause and the
+  step that wrote it; `tracker answers try <check>` says what a check on a value's
+  sentence would fix, lose and empty across the database before it is built — the
+  first one tried looked harmless on the key and would have emptied 86 investment
+  figures, half of them good. The research agent no longer looks for or sets
+  investment, and the figures it set are left out of the merge with their citations
+  kept as evidence (`tracker/answer_why.py`, `gapfill.AGENT_WITHHELD`,
+  `upsert.WITHHELD`). Its other figures now keep whether they are a plan, a contract
+  or a guess, as the article reader's always have.
 - **Rules that apply to a place, not one campus.** A state's permit pause, a town's
   ban, a grid operator's rule: the reader dropped every article that named no campus,
   so in the week after the 2026-11-03 elections 72 articles about the vote went

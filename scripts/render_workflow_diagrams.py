@@ -435,7 +435,7 @@ def enrich() -> Canvas:
 
     agent = c.box(
         802, 706, 208, 104, "8 · agent pass",
-        ["a model picks its own searches", "for what the query templates", "could not reach, and cites it.", "~77,000 tokens a row, so it is last"],
+        ["a model picks its own searches", "for what the templates could not", "reach, and cites it; no investment.", "~77,000 tokens a row, so it is last"],
         role="orange",
     )
     c.arrow([supersede.right(), (802, 758)])

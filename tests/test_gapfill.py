@@ -140,10 +140,10 @@ def test_the_fact_is_stored_as_a_quote_backed_citation(session, thin, cached):
     `capex` does not sum `inferred`."""
     model = _Model(
         {
-            "field": "investment_usd",
-            "value": 2500000000,
+            "field": "mw_planned",
+            "value": 1400,
             "url": _URL,
-            "quote": "representing a total investment of $2.5 billion across the site",
+            "quote": "Port Washington campus in Ozaukee County will reach 1,400 MW at full",
         }
     )
 
@@ -151,8 +151,51 @@ def test_the_fact_is_stored_as_a_quote_backed_citation(session, thin, cached):
     assert out.verdict == "filled", (out.note, out.refused)
 
     added = next(s for s in thin.sources if s.url == _URL)
-    assert json.loads(added.claims)["investment_usd"] == 2500000000
-    assert "investment_usd" in (added.fields or ""), "not counted as a quote-backed field"
+    assert json.loads(added.claims)["mw_planned"] == 1400
+    assert "mw_planned" in (added.fields or ""), "not counted as a quote-backed field"
+
+
+def test_the_agent_is_not_asked_for_investment_and_may_not_report_it(session, thin, cached):
+    """Against the verified answers every investment figure this path had set was
+    wrong, 0 of 5, on 2026-11-11: a real figure that was not the campus's
+    data-center investment. The harvest still looks for it; the agent does not."""
+    asked = gapfill.question(thin)
+    assert "investment_usd" not in asked.wanted
+
+    model = _Model(
+        {
+            "field": "investment_usd",
+            "value": 2500000000,
+            "url": _URL,
+            "quote": "representing a total investment of $2.5 billion across the site",
+        }
+    )
+    out = gapfill.fill(session, thin, extractor=model, gaps=["investment_usd"])
+    assert thin.investment_usd is None
+    assert out.verdict == "nothing"
+
+
+def test_an_investment_figure_the_agent_set_before_is_left_out_of_the_merge(session, thin):
+    """Its citation stays as evidence; its figure no longer sets the field."""
+    from tracker.models import Source
+    from tracker.upsert import recompute_from_sources
+
+    session.add(
+        Source(
+            project_id=thin.id,
+            url="https://example.test/agent-estimate",
+            source_type="trade_press",
+            claims=json.dumps({"investment_usd": 25_000_000_000}),
+            fields="investment_usd",
+            quotes=json.dumps(
+                {"investment_usd": "Total investment is estimated to exceed $25 billion."}
+            ),
+            extractor="gapfill-agent-v1",
+        )
+    )
+    session.flush()
+    recompute_from_sources(session, thin)
+    assert thin.investment_usd is None
 
 
 def test_a_year_the_agent_found_is_stored_as_a_year(session, thin, cached):
@@ -186,10 +229,10 @@ def test_several_facts_from_one_article_become_one_citation(session, thin, cache
             "quote": "Port Washington campus in Ozaukee County will reach 1,400 MW at full",
         },
         {
-            "field": "investment_usd",
-            "value": 2500000000,
+            "field": "expected_online",
+            "value": "2027-01-01",
             "url": _URL,
-            "quote": "representing a total investment of $2.5 billion across the site",
+            "quote": "The first hall is expected online in 2027.",
         },
         {
             "field": "customer",
@@ -334,7 +377,7 @@ def test_a_field_that_is_not_a_gap_is_not_overwritten(session, thin, cached):
         }
     )
 
-    out = gapfill.fill(session, thin, extractor=model, gaps=["investment_usd"])
+    out = gapfill.fill(session, thin, extractor=model, gaps=["expected_online"])
 
     assert out.verdict == "unusable"
     assert thin.mw_planned == 500.0

@@ -1889,16 +1889,16 @@ def test_a_failed_settle_call_is_held_for_the_night_only(session):
 def test_the_t2_agent_asks_only_about_the_gaps_that_hold_a_row_below_t2(session, monkeypatch):
     """A self-built Meta campus got Meta written in as its own customer: the row was
     chosen for one T2 gap and the agent was asked about every empty field besides."""
-    row = _full_but_blocker(session, company="Self Co", customer=None, investment_usd=None)
+    row = _full_but_blocker(session, company="Self Co", customer=None, first_announced=None)
     fake = CountingGapfill()
     cli_enrich = _agent_ready(monkeypatch, fake)
 
     cli_enrich._gapfill_batch(session, [row.id], max_attempts=0, t2_only=True)
-    assert fake.calls == [(row.id, ["investment_usd"])], "customer is not a T2 gap"
+    assert fake.calls == [(row.id, ["first_announced"])], "customer is not a T2 gap"
 
     fake.calls.clear()
     cli_enrich._gapfill_batch(session, [row.id], max_attempts=0)
-    assert fake.calls == [(row.id, ["customer", "investment_usd"])], "without --t2, every gap"
+    assert fake.calls == [(row.id, ["customer", "first_announced"])], "without --t2, every gap"
 
 
 class StruckFact(CountingGapfill):
@@ -1910,7 +1910,7 @@ class StruckFact(CountingGapfill):
         self.calls.append((project.id, list(gaps or ())))
         return Filled(
             verdict="filled",
-            stored=["investment_usd = 150000000 (https://example.test/struck)"],
+            stored=["first_announced = 2024-01-01 (https://example.test/struck)"],
             prompt_tokens=self.tokens,
         )
 
@@ -1920,7 +1920,7 @@ def test_a_fact_an_earlier_ruling_struck_is_not_reported_as_gained(session, monk
     times; the field stayed empty and was asked about again the next night."""
     from tracker import attempts
 
-    row = _full_but_blocker(session, company="Col Co", investment_usd=None)
+    row = _full_but_blocker(session, company="Col Co", first_announced=None)
     fake = StruckFact()
     cli_enrich = _agent_ready(monkeypatch, fake)
 
@@ -1928,7 +1928,7 @@ def test_a_fact_an_earlier_ruling_struck_is_not_reported_as_gained(session, monk
     out = capsys.readouterr().out
     assert "0 row(s) gained a cited fact" in out
     assert "earlier ruling struck that claim" in out
-    assert "investment_usd" in attempts.attempts(row), "recorded, so it is not re-asked forever"
+    assert "first_announced" in attempts.attempts(row), "recorded, so it is not re-asked forever"
 
 
 class ElsewhereLLM(FakeLLM):
@@ -2021,27 +2021,27 @@ def test_the_batch_table_counts_what_the_agent_pass_found(session, monkeypatch):
 
     found = add_project(session, city="Lordstown", company="SoftBank", state="OH")
     empty = add_project(session, city="Mesa", company="Op Mesa")
-    cli_enrich = _agent_ready(monkeypatch, FillingGapfill(found.id, "investment_usd", 3e9))
+    cli_enrich = _agent_ready(monkeypatch, FillingGapfill(found.id, "mw_planned", 300.0))
 
     reports = [
         enrich.EnrichReport(p.id, label=p.name, before=for_project(p), after=for_project(p))
         for p in (found, empty)
     ]
     landed = cli_enrich._gapfill_batch(session, [found.id, empty.id], max_attempts=0)
-    assert landed == {found.id: ("investment_usd",)}
+    assert landed == {found.id: ("mw_planned",)}
 
     for report in reports:
         project = session.get(Project, report.project_id)
         report.remeasure(session, project, landed.get(report.project_id, ()))
-    assert reports[0].agent_gained == ("investment_usd",)
-    assert "investment_usd" in reports[0].gained
+    assert reports[0].agent_gained == ("mw_planned",)
+    assert "mw_planned" in reports[0].gained
     assert reports[0].harvested == (), "the harvest found nothing; the agent did"
 
     shown = io.StringIO()
     monkeypatch.setattr(cli_enrich, "console", Console(file=shown, width=220))
     cli_enrich._render_batch(enrich.BatchReport(reports=reports), target=9, dry_run=False)
     text = shown.getvalue()
-    assert "agent found" in text and "investment_usd" in text
+    assert "agent found" in text and "mw_planned" in text
     assert "the agent pass filled 1 field(s) on 1 row(s)" in text
 
 

@@ -45,7 +45,9 @@ log = logging.getLogger(__name__)
 #: Fields this path may fill. The identity fields are absent deliberately: they are
 #: never overwritten once set, so a citation claiming them changes nothing and
 #: would only look like it had. `blocker` is absent because it is derived from the
-#: risk rows rather than merged from claims.
+#: risk rows rather than merged from claims. Also what `enrich`'s harvest pursues
+#: (`enrich.pursuable`), which is why a field the agent alone may not fill is in
+#: :data:`AGENT_WITHHELD` rather than missing from here.
 FILLABLE_FIELDS: frozenset[str] = frozenset(
     {
         "mw_planned",
@@ -58,6 +60,16 @@ FILLABLE_FIELDS: frozenset[str] = frozenset(
         "county",
     }
 )
+
+#: Fields the agent is not asked for and may not fill, though the harvest still is.
+#: Since 2026-11-11 `investment_usd`: against the verified answers every investment
+#: figure this path had set was wrong — 0 of 5 — each a real figure that was not
+#: the campus's data-center investment ("estimated to exceed $25 billion", "a
+#: pricetag between $70 billion to $90 billion" across all phases, a company's
+#: pledge to a state over twenty years), where the article reader's were 18 of 25
+#: right. Its earlier ones are kept out of the merge too (`upsert.WITHHELD`). It
+#: comes back once a check on what kind of number a sentence states applies here.
+AGENT_WITHHELD: frozenset[str] = frozenset({"investment_usd"})
 
 #: A quote shorter than this is not evidence. "250 MW" appears in every article
 #: about a 250 MW site and ties the figure to nothing; the gate downstream would
@@ -257,8 +269,13 @@ def _coerce(field_name: str, raw: Any) -> Any:
 def _fact_axes(
     facts: dict[str, tuple[Any, str]], site_names: frozenset[str] = frozenset()
 ) -> dict[str, dict[str, Any]]:
-    """The claim envelope for the facts one citation carries: `basis`, `scope` and
-    `date_precision`.
+    """The claim envelope for the facts one citation carries: `basis`, `scope`,
+    `bound`, `modality` and `date_precision`.
+
+    `bound` and `modality` were read and dropped until 2026-11-11, so whether the
+    agent's figure was a plan, a contract or someone's guess ("expected to see a
+    pricetag between…") was the one thing nobody could tell afterwards — the
+    article reader has always kept them.
 
     A thin adapter onto the same gate the crawl path uses, rather than a second
     reading of the same wording: `axis_gate` owns which phrases license which
@@ -289,7 +306,7 @@ def _fact_axes(
         axes = axis_gate({}, quote, site_names=site_names, field=name, value=value)
         kept = {
             axis: axes[axis]
-            for axis in ("basis", "scope")
+            for axis in ("basis", "scope", "bound", "modality")
             if axis in axes and axes[axis] != CLAIM_AXIS_DEFAULTS[axis]
         }
         if kept:
@@ -338,7 +355,7 @@ def apply_facts(
         quote = str(raw.get("quote") or "").strip()
         label = f"{name} from {url or '(no url)'}"
 
-        if name not in FILLABLE_FIELDS:
+        if name not in FILLABLE_FIELDS or name in AGENT_WITHHELD:
             refused.append(f"{label}: not a field this path may fill")
             continue
         if name not in gaps:
@@ -468,7 +485,7 @@ def question(project: Any, gaps: list[str] | None = None) -> Question | Filled:
         wanted = set(gaps)
     else:
         wanted = {f for f in FILLABLE_FIELDS if getattr(project, f, None) is None}
-    wanted &= FILLABLE_FIELDS
+    wanted &= FILLABLE_FIELDS - AGENT_WITHHELD
     if not wanted:
         return Filled(verdict="nothing", note="no fillable field is empty on this row")
 
@@ -609,7 +626,7 @@ def fill_rows(
     spent = {"tokens": 0, "called": 0}
 
     def askable(project: Any) -> list[str]:
-        empty = {f for f in FILLABLE_FIELDS if getattr(project, f, None) is None}
+        empty = {f for f in FILLABLE_FIELDS - AGENT_WITHHELD if getattr(project, f, None) is None}
         if only_fields is not None:
             empty &= set(only_fields)
         if t2_only:
@@ -686,6 +703,7 @@ def fill_rows(
 
 
 __all__ = [
+    "AGENT_WITHHELD",
     "FILLABLE_FIELDS",
     "MIN_QUOTE_CHARS",
     "SYSTEM",

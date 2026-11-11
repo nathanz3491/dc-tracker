@@ -288,6 +288,23 @@ def _decided_against(row: Source) -> frozenset[str]:
     return frozenset(k for k, v in reasons.items() if v in DECIDED_REASONS)
 
 
+#: Fields a citation may not set, by the step that wrote it (`source.extractor`
+#: prefix). The research agent's investment figures were 0 of 5 right against the
+#: verified answers on 2026-11-11, each a real figure that was not the campus's
+#: data-center investment; its citations stay on the row as evidence, and its
+#: investment claim is left out of the merge as a ruled-out one is.
+WITHHELD: dict[str, frozenset[str]] = {"gapfill-agent": frozenset({"investment_usd"})}
+
+
+def _withheld(row: Source) -> frozenset[str]:
+    """Fields this citation's writer is not trusted to set (:data:`WITHHELD`)."""
+    extractor = row.extractor or ""
+    for prefix, fields in WITHHELD.items():
+        if extractor.startswith(prefix):
+            return fields
+    return frozenset()
+
+
 def _part_fields(row: Source) -> frozenset[str]:
     """Fields this citation's sentence gives to one building or phase, not the site.
 
@@ -472,7 +489,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         if not isinstance(claims, dict):
             continue
         unconfirmed = {f.strip() for f in (s.unconfirmed_fields or "").split(",") if f.strip()}
-        decided = _decided_against(s)
+        decided = _decided_against(s) | _withheld(s)
         # Parsed once per source rather than once per claim and axis: it was 770,000
         # `json.loads` of the same few hundred envelopes per nightly count.
         meta = _claim_meta(s)

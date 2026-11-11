@@ -320,6 +320,17 @@ reach. Rows with nothing left to fill return before making a call. Refusals are
 printed as loudly as fills: a refusal is the evidence gate working, and a run that
 quietly dropped four facts of five should not look like one that stored all five.
 
+**The agent is not asked for investment, and the figures it set are left out of the
+merge** (`gapfill.AGENT_WITHHELD`, `upsert.WITHHELD`). Against the verified answers on
+2026-11-11 every investment figure it had set was wrong — 0 of 5, where the article
+reader's were 18 of 25 — each a real figure that was not the campus's data-center
+investment: "estimated to exceed $25 billion", a price "between $70 billion to $90
+billion" across all phases, a company's pledge to a state over twenty years. The
+harvest still looks for investment and the article reader still reads it; the
+agent's citations stay on the row as evidence. 38 stored figures rested on the agent
+alone when this went live. Its other figures now keep whether the sentence states a
+plan, a contract or a guess (`_fact_axes`), as the article reader's always have.
+
 A fact from an article the row already cites is **added to** that citation, not
 written over it. The agent reports only the gaps it came for, so treating its
 answer as a re-read of the whole article would erase every other claim the
@@ -423,7 +434,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |
 | Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py`; `tracker/judged.py` — `run` |
-| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)` and the fields it returns per row; `tracker/gapfill.py` — `fill_rows` (its landed/unlanded check, `room`), `question`, `investigate`, `conclude`, `apply_facts`, `_fact_axes`, `Filled.missed`, `TYPICAL_ROW_TOKENS`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
+| Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)` and the fields it returns per row; `tracker/gapfill.py` — `fill_rows` (its landed/unlanded check, `room`), `question`, `investigate`, `conclude`, `apply_facts`, `_fact_axes`, `AGENT_WITHHELD`, `Filled.missed`, `TYPICAL_ROW_TOKENS`; `tracker/upsert.py` — `WITHHELD`, `_withheld`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
 | The money ceiling, between projects and between waves | `tracker/spend.py` — `ceiling_reached`; `tracker/ingest/enrich.py` — `run_many`, `BatchReport.ceiling`; `tracker/judged.py` — `run` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
