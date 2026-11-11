@@ -355,6 +355,14 @@ Findings something can be *done* about sort first. The list was ordered by proje
 id, so `--limit 30` handed over thirty questions whose only answers were "verify"
 and "skip", while the ones with a real edit behind them sat at position 190.
 
+**Then the ones about values likeliest to be wrong.** Within each group the order is
+the suspicion score's (`tracker suspect`): the round is capped — 60 findings a night
+— and reads in this order, so the cap falls on the least suspect findings rather than
+wherever the project ids happen to fall. Across the nights to 2026-11-11 the round
+read about 590 findings and changed a value in roughly 45%; the score is how the
+next 60 are chosen from the many more that are open. Nothing is skipped: a finding
+whose field the score does not rank sorts as 0 (`cli/logic._suspicion_of`).
+
 ### Why an agent, not the menu
 
 The menu could only answer with a key from `ACTIONS[code]`, and 16 of the 22 codes
@@ -493,6 +501,36 @@ ranking. The agent re-reads the sources and keeps the value or rules out the cla
 behind it, exactly as for a finding, and the decline memory holds a value it could
 not settle until its citations change.
 
+**Every slot buys a question not already answered** (2026-11-11). Over the first ten
+nights the round re-read about 240 values and changed 23, and 30 rows took 172 of the
+reads — Madison County seven times — because the question was remembered by its
+wording, and its wording carries the night's rank and probability. A suspect is now
+remembered by the value and the citations that claim it (`declines.value_evidence`):
+a value left alone, ruled unusable or struck without moving is not offered again until
+a citation claiming that field changes, or a month passes. The selection
+(`suspect.suspects`) walks past those, past a value the row's notes record as
+answered, a field with no live claim and a field now empty, and takes the next one, so
+all 25 slots go to fresh questions; the random fifth is drawn the same way from the
+shuffled rest.
+
+**The agent is told where the value comes from.** 28 of those re-reads ended "cannot
+identify the citation that carries the figure": the citation list was cut off at
+8,000 characters, and one row's ran to 16,762. Each suspect now names the citations
+whose live claim is the held value, and `list_sources` takes a `field` — only the
+citations claiming it, each with its sentence, its standing and whether it states the
+value the row holds — and comes in pages that end on a whole citation and give the
+next `offset`, so nothing is cut silently (`agent._list_sources`, `PAGE_CHARS`).
+
+**A call the provider fails is asked once more.** 17 re-reads were lost to "overloaded"
+(HTTP 429). A finding whose run never reached an answer goes to the back of the round
+and is asked again after the rest, a minute later (`judged.run(retry_errors=True)`,
+`judged.RETRY_WAIT`); only a second failure is reported and held for the night.
+
+The rest were mostly the agent's own hesitation: of about 50 rulings refused for
+confidence below 0.75, 21 sat at 0.70-0.72. Eleven more ruled at 0.10-0.30, which reads
+as the model scoring how right the row is rather than how wrong the claims are; the
+`rule_out_claims` schema now says which it means. The bar itself is unchanged.
+
 The nightly loop scores every stored MW, investment and online date before round 1
 (free), runs `logic resolve --suspects 25` once in round 1, and retrains the score at
 the end of the night from what the night's passes decided (`data/runs/verdicts.jsonl`).
@@ -543,8 +581,9 @@ one night (`declines.TONIGHT_HOURS`), however the citations moved in between;
 * `unusable` — a ruling the rails refused. On the first overnight run it was 8 and
   then 12 of each round's 40 findings, re-paid every round at the full agent price.
 * `ruling changed nothing` — see above.
-* `error` (`declines.ERROR`) — the run never reached an answer: held for the night
-  only, and asked again the next. It used to be asked again in the very next round.
+* `error` (`declines.ERROR`) — the run never reached an answer: asked once more at the
+  end of the round, then held for the night only, and asked again the next. It used to
+  be asked again in the very next round.
 
 The drift repairs and the free answers are committed before the first model call.
 They used to share the agent loop's transaction, so the first refused or failed
@@ -619,12 +658,12 @@ Touching any of these means the poster is in scope. Re-render with
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `lift_ruling`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD`; `tracker/answer_apply.py` — `plan`, `apply` |
 | The agent path | `tracker/triage.py` — `triage_findings`, `triage`, `investigate`, `conclude`, `finding_question`, `finding_subject`, `finding_evidence`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
-| One loop for every paid pass: per-item commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |
+| One loop for every paid pass: per-item commit, failures, waves, the money ceiling | `tracker/judged.py` — `run` (`retry_errors`), `waves`, `Done`, `RETRY_WAIT`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |
-| What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_claims_line` |
+| What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_field_lines`, `_claims_line`, `PAGE_CHARS` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
-| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`); `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
+| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `_still_open`, `_carriers`, `ranked`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/declines.py` — `value_evidence`, `field_citations`; `tracker/triage.py` — `finding_evidence`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`), `_suspicion_by_field`, `_suspicion_of`; `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons`, `_same_claim` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

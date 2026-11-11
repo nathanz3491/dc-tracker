@@ -98,6 +98,53 @@ def citations(project: Project) -> list[tuple[Any, ...]]:
     )
 
 
+def field_citations(project: Project, field: str) -> list[tuple[Any, ...]]:
+    """The citations that claim one field, as the parts a fingerprint needs.
+
+    Each citation's claim, sentence and ruling for `field` only — not the rest of the
+    citation, which `citations` hashes whole. A question about one value is the same
+    question until the evidence *for that value* changes; a new milestone or a party
+    named on the row is not a reason to pay for it again.
+    """
+    out = []
+    for s in project.sources or ():
+        claims = _json_object(s.claims)
+        if claims.get(field) is None:
+            continue
+        out.append(
+            (
+                s.url,
+                claims.get(field),
+                _json_object(s.quotes).get(field) or "",
+                _json_object(s.unconfirmed_reasons).get(field) or "",
+            )
+        )
+    return sorted(out, key=lambda part: json.dumps(part, sort_keys=True, default=str))
+
+
+def value_evidence(project: Project, field: str) -> str:
+    """Fingerprint of a question about the value `field` holds: the value and its claims.
+
+    For the suspicion score's re-reads (`suspect.suspects`). Their question used to be
+    hashed with its wording, which carries the night's rank and probability, so a
+    value the agent left alone was a new question the next night: on 2026-11-11, 30
+    rows had taken 172 of 241 re-reads, one of them seven times. Keyed on the
+    evidence instead, a value left alone is offered again when a citation claiming it
+    changes, or after :data:`COOLDOWN_DAYS`.
+    """
+    return fingerprint(
+        "value", field, getattr(project, field, None), field_citations(project, field)
+    )
+
+
+def _json_object(raw: Any) -> dict[str, Any]:
+    try:
+        got = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
 def _fresh(row: ModelDecline, *, now: dt.datetime, cooldown_days: int) -> bool:
     return row.decided_at is not None and now - row.decided_at < dt.timedelta(days=cooldown_days)
 
@@ -244,6 +291,7 @@ __all__ = [
     "KINDS",
     "TONIGHT_HOURS",
     "citations",
+    "field_citations",
     "fingerprint",
     "forget",
     "holds",
@@ -251,4 +299,5 @@ __all__ = [
     "pick",
     "record",
     "split",
+    "value_evidence",
 ]

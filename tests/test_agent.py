@@ -742,6 +742,76 @@ def test_the_citation_list_says_what_each_claims_and_what_is_already_ruled_out(s
     assert listed.count("ruled out") == 1
 
 
+def _many_citations(session, n: int):
+    from tracker.models import Project, Source
+
+    project = Project(
+        name="Big Campus",
+        company="Acme",
+        state="WI",
+        city="Racine",
+        dedup_key="acme|city:racine|WI|big",
+        phase="announced",
+        investment_usd=3_300_000_000,
+    )
+    session.add(project)
+    session.flush()
+    for i in range(n):
+        claims = {"phase": "announced"}
+        quotes = {}
+        if i % 4 == 0:
+            claims["investment_usd"] = 3_300_000_000 if i % 8 == 0 else 7_300_000_000
+            quotes["investment_usd"] = (
+                f"Article {i} says the campus costs ${3.3 if i % 8 == 0 else 7.3} billion."
+            )
+        session.add(
+            Source(
+                project_id=project.id,
+                url=f"https://news.example/{i}",
+                source_type="general_media",
+                claims=json.dumps(claims),
+                quotes=json.dumps(quotes),
+                excerpt="x" * 290,
+            )
+        )
+    session.flush()
+    session.refresh(project)
+    return project
+
+
+def test_a_field_lists_only_the_citations_that_claim_it_with_their_sentences(session):
+    """28 suspect re-reads in ten nights could not find the citation behind a figure
+    in a list cut off at 8,000 characters, and left the figure alone."""
+    project = _many_citations(session, 40)
+
+    listed = agent._list_sources(session, project.id, field="investment_usd")
+
+    assert listed.startswith("10 citation(s) on")
+    assert listed.count("- [") == 10, "only the ten that claim it"
+    assert listed.count("THE VALUE THE ROW HOLDS") == 5
+    assert "Article 0 says the campus costs $3.3 billion." in listed
+    assert "truncated" not in listed
+    assert "unknown field" in agent._list_sources(session, project.id, field="nonsense")
+
+
+def test_a_long_list_comes_in_pages_and_none_is_cut(session):
+    project = _many_citations(session, 40)
+
+    seen: list[str] = []
+    offset, pages = 0, 0
+    while True:
+        page = agent._list_sources(session, project.id, offset=offset)
+        pages += 1
+        assert len(page) <= agent.MAX_RESULT_CHARS, "the run's own clip never fires"
+        seen += [line for line in page.splitlines() if line.startswith("- [")]
+        last = page.splitlines()[-1]
+        if "offset=" not in last:
+            break
+        offset = int(last.split("offset=")[1].split()[0])
+    assert pages > 1
+    assert len(seen) == 40 and len(set(seen)) == 40, "every citation once, none lost"
+
+
 # --- what a run costs --------------------------------------------------------------
 
 

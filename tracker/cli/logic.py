@@ -566,7 +566,7 @@ def logic_resolve(
             # what it did lands in the verdict log the score is retrained from.
             from tracker import suspect as suspect_mod
 
-            findings = suspect_mod.suspects(path, suspects)
+            findings = suspect_mod.suspects(path, suspects, session=session, again=again)
         else:
             report = logic_mod.review(session)
             findings = [f for f in report.findings if not code or f.code == code]
@@ -601,7 +601,19 @@ def logic_resolve(
         # project id, so `--limit 30` handed a person — or a model — thirty
         # questions whose only answers were "verify" and "skip", and the ones with
         # a real edit behind them sat at position 190.
-        findings.sort(key=lambda f: (not logic_mod.resolvable(f), f.project_id))
+        #
+        # Then by the suspicion score (`suspect.ranked`): a round is capped (60 a
+        # night) and reads in this order, so the findings about values likeliest to be
+        # wrong are read before the cap, not wherever their project id falls. Pure
+        # ordering — nothing is skipped, and an unscored field sorts as 0.
+        suspicion = _suspicion_by_field(path)
+        findings.sort(
+            key=lambda f: (
+                not logic_mod.resolvable(f),
+                -_suspicion_of(f, suspicion),
+                f.project_id,
+            )
+        )
 
         if json_mode():
             emit(
@@ -732,6 +744,27 @@ def logic_resolve(
         _triage(session, findings[:limit], logic_mod)
 
 
+def _suspicion_by_field(path) -> dict[tuple[int, str], float]:
+    """Tonight's suspicion score, `(project id, field) -> p_wrong`, read once per run."""
+    from tracker import suspect as suspect_mod
+
+    out: dict[tuple[int, str], float] = {}
+    for row in suspect_mod.ranked(path):
+        try:
+            out[(int(row["project_id"]), str(row["field"]))] = float(row["p_wrong"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _suspicion_of(finding, suspicion: dict[tuple[int, str], float]) -> float:
+    """The likeliest-wrong of a finding's fields on its row, or 0 when none is scored."""
+    return max(
+        (suspicion.get((finding.project_id, name), 0.0) for name in finding.fields or ()),
+        default=0.0,
+    )
+
+
 def _triage_by_agent(
     session,
     findings: list,
@@ -854,6 +887,11 @@ def _triage_by_agent(
     if not got.results and not got.ceiling:
         return
     _print_ceiling(got)
+    if got.retried:
+        console.print(
+            f"[dim]{got.retried} finding(s) whose call failed were asked once more after "
+            "the rest[/dim]"
+        )
     _print_tally(
         [
             (tally["ruled"], "ruled", "bold"),

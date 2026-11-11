@@ -418,25 +418,58 @@ def ranked(db_path: Path | str) -> list[dict[str, Any]]:
     ]
 
 
-def suspects(db_path: Path | str, n: int, *, seed: str = "") -> list[Any]:
+def suspects(
+    db_path: Path | str,
+    n: int,
+    *,
+    seed: str = "",
+    session: Any = None,
+    again: bool = False,
+) -> list[Any]:
     """Tonight's suspects as logic findings: the top of the ranking plus a random fifth.
 
     The random share is drawn from the rest of the list with a seed of the night, so a
     rerun the same night offers the same values and the decline memory holds.
+
+    **With a `session`, every slot buys a fresh question.** A value already put to the
+    agent on the same evidence (`declines.value_evidence`), one the row's notes record
+    as answered, one no live claim states any more, or a field now empty is passed over
+    and the next one taken — from the top for the top share, from the shuffled rest for
+    the random share. On 2026-11-11 the selection did none of this: 30 rows had taken
+    172 of 241 re-reads, because a value the agent left alone came back the next night
+    as a new question. Each finding also names the citations that state the held value,
+    so the agent starts from them instead of looking for them in a long list.
     """
     from tracker.logic import Finding
 
     rows = ranked(db_path)
     if not rows or n <= 0:
         return []
+    open_ = _still_open(session, again)
     top = max(n - round(n * RANDOM_SHARE), 0)
-    chosen = rows[:top]
-    rest = rows[top:]
+    chosen: list[dict[str, Any]] = []
+    walked = 0
+    while walked < len(rows) and len(chosen) < top:
+        if open_(rows[walked]):
+            chosen.append(rows[walked])
+        walked += 1
+    rest = rows[walked:]
     rng = random.Random(seed or rows[0].get("night", ""))
-    chosen += rng.sample(rest, min(n - len(chosen), len(rest)))
+    for r in rng.sample(rest, len(rest)):
+        if len(chosen) >= n:
+            break
+        if open_(r):
+            chosen.append(r)
     out = []
     for r in chosen:
         drivers = ", ".join(r.get("why") or []) or "no single signal"
+        carriers = _carriers(session, r) if session is not None else []
+        stated_by = (
+            f" The citation(s) stating it: {', '.join(str(i) for i in carriers)} — "
+            f"`list_sources` with field={r['field']} shows each one's sentence."
+            if carriers
+            else ""
+        )
         out.append(
             Finding(
                 project_id=int(r["project_id"]),
@@ -447,7 +480,7 @@ def suspects(db_path: Path | str, n: int, *, seed: str = "") -> list[Any]:
                     f"{r['p_wrong']:.0%} likely wrong (rank {r['rank']} of {len(rows)}; "
                     f"driven by {drivers}). Re-read what the figure is of: this campus or "
                     f"another, the whole plan or one phase, the data center or its power plant, "
-                    f"a stated plan or a potential."
+                    f"a stated plan or a potential.{stated_by}"
                 ),
                 fields=(r["field"],),
                 remedy="keep it if the sources state it for this campus; otherwise rule out the "
@@ -455,6 +488,79 @@ def suspects(db_path: Path | str, n: int, *, seed: str = "") -> list[Any]:
             )
         )
     return out
+
+
+def _still_open(session: Any, again: bool) -> Any:
+    """`row -> bool`: whether a ranked value is still worth a re-read tonight.
+
+    Without a session every value is (the ranking alone, as a dry listing reads it).
+    """
+    if session is None or again:
+        return lambda r: True
+
+    from tracker import declines
+    from tracker.audit import settled_codes
+    from tracker.models import Project
+    from tracker.triage import has_live_claim
+
+    known = declines.load(session, "logic")
+    settled: dict[int, set[str]] = {}
+
+    def open_(r: dict[str, Any]) -> bool:
+        project = session.get(Project, int(r["project_id"]))
+        field = str(r["field"])
+        if project is None or getattr(project, field, None) is None:
+            return False
+        code = CODE_PREFIX + field
+        if project.id not in settled:
+            settled[project.id] = settled_codes(project)
+        if code in settled[project.id]:
+            return False
+        probe = _Probe(project.id, code, (field,))
+        if not has_live_claim(project, probe):
+            return False
+        return not declines.holds(
+            known,
+            f"{project.id}:{code}",
+            lambda: declines.value_evidence(project, field),
+        )
+
+    return open_
+
+
+@dataclass(frozen=True)
+class _Probe:
+    """The parts of a finding the selection's checks read, before the finding exists."""
+
+    project_id: int
+    code: str
+    fields: tuple[str, ...]
+
+
+def _carriers(session: Any, r: dict[str, Any]) -> list[int]:
+    """Ids of the citations whose live claim is the value the row holds."""
+    from tracker.models import Project
+    from tracker.upsert import DECIDED_REASONS, _same, claim_value
+
+    project = session.get(Project, int(r["project_id"]))
+    field = str(r["field"])
+    held = getattr(project, field, None) if project is not None else None
+    if held is None:
+        return []
+    out = []
+    for source in project.sources or ():
+        try:
+            claims = json.loads(source.claims or "{}")
+            reasons = json.loads(source.unconfirmed_reasons or "{}") or {}
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(claims, dict) or claims.get(field) is None:
+            continue
+        if isinstance(reasons, dict) and reasons.get(field) in DECIDED_REASONS:
+            continue
+        if _same(claims[field], claim_value(held)):
+            out.append(source.id)
+    return sorted(out)
 
 
 def check_row(session: Any, db_path: Path, project_id: int) -> dict[str, Any]:

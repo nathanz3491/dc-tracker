@@ -153,6 +153,157 @@ def test_a_refit_with_too_few_labels_keeps_the_old_model(session, db_path):
     assert not (db_path.parent / "models" / suspect.MODEL).exists()
 
 
+def _row(session, n: int, mw: float, *, quote: str = "a 300 MW campus") -> Project:
+    from tracker.models import Source
+
+    project = Project(
+        name=f"Campus {n}",
+        company="Compass Datacenters",
+        state="AZ",
+        city="Mesa",
+        phase="announced",
+        dedup_key=f"suspect-sel-{n}",
+        mw_planned=mw,
+    )
+    session.add(project)
+    session.flush()
+    session.add(
+        Source(
+            project_id=project.id,
+            url=f"https://e.test/{n}",
+            source_type="trade_press",
+            claims=json.dumps({"mw_planned": mw, "investment_usd": 1_000_000_000}),
+            quotes=json.dumps({"mw_planned": quote, "investment_usd": "a $1 billion campus"}),
+            fields="mw_planned,investment_usd",
+        )
+    )
+    session.commit()
+    session.refresh(project)
+    return project
+
+
+def _rank(db_path, projects):
+    runs = db_path.parent / "runs"
+    runs.mkdir(exist_ok=True)
+    rows = [
+        {
+            "night": "2026-11-11",
+            "rank": i + 1,
+            "project_id": p.id,
+            "field": "mw_planned",
+            "held": p.mw_planned,
+            "p_wrong": round(0.9 - i / 100, 3),
+            "why": ["rival_claims"],
+        }
+        for i, p in enumerate(projects)
+    ]
+    (runs / suspect.RANKED).write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
+    )
+
+
+def _left_alone(session, project, *, days_ago: int = 2):
+    """A suspect re-read the agent left alone, recorded as `triage` records it."""
+    import datetime as dt
+
+    from tracker import declines
+    from tracker.models import ModelDecline, utcnow
+
+    declines.record(
+        session,
+        "logic",
+        f"{project.id}:suspect_mw_planned",
+        declines.value_evidence(project, "mw_planned"),
+        outcome="left alone",
+    )
+    row = session.query(ModelDecline).filter_by(subject=f"{project.id}:suspect_mw_planned").one()
+    row.decided_at = utcnow() - dt.timedelta(days=days_ago)
+    session.commit()
+
+
+def test_a_value_left_alone_is_not_offered_again_until_its_evidence_changes(session, db_path):
+    """On 2026-11-11, 30 rows had taken 172 of 241 re-reads: the question was keyed on
+    its wording, which carries the night's rank, so it was new every night."""
+    first, second = _row(session, 1, 300.0), _row(session, 2, 400.0, quote="a 400 MW campus")
+    _rank(db_path, [first, second])
+    _left_alone(session, first)
+
+    offered = [f.project_id for f in suspect.suspects(db_path, 1, session=session)]
+    assert offered == [second.id], "the slot goes to the next value, not to a repeat"
+
+    # Another field's evidence changing is not new evidence about this value.
+    source = first.sources[0]
+    source.quotes = json.dumps(
+        {"mw_planned": "a 300 MW campus", "investment_usd": "now a $2 billion campus"}
+    )
+    session.commit()
+    assert [f.project_id for f in suspect.suspects(db_path, 1, session=session)] == [second.id]
+
+    # The sentence behind this value changing is.
+    source.quotes = json.dumps(
+        {"mw_planned": "a 300 MW first phase", "investment_usd": "now a $2 billion campus"}
+    )
+    session.commit()
+    assert [f.project_id for f in suspect.suspects(db_path, 1, session=session)] == [first.id]
+
+    assert suspect.suspects(db_path, 1, session=session, again=True)[0].project_id == first.id
+
+
+def test_every_slot_is_filled_past_values_already_judged(session, db_path):
+    rows = [_row(session, n, 100.0 + n, quote=f"a {100 + n} MW campus") for n in range(10)]
+    _rank(db_path, rows)
+    for held in rows[:3]:
+        _left_alone(session, held)
+
+    got = suspect.suspects(db_path, 5, session=session)
+
+    ids = [f.project_id for f in got]
+    assert len(ids) == 5, "every slot used"
+    assert not {r.id for r in rows[:3]} & set(ids), "nothing already judged"
+    assert ids[:4] == [r.id for r in rows[3:7]], "the top share from the top of what is open"
+
+
+def test_a_suspect_names_the_citations_stating_its_value(session, db_path):
+    row = _row(session, 1, 300.0)
+    _rank(db_path, [row])
+
+    (got,) = suspect.suspects(db_path, 1, session=session)
+
+    assert f"The citation(s) stating it: {row.sources[0].id}" in got.summary
+    assert "field=mw_planned" in got.summary
+
+
+def test_a_logic_round_reads_the_likeliest_wrong_findings_first(engine, db_path, monkeypatch):
+    """The round is capped (60 a night): ordered by project id, the cap fell wherever
+    the ids fell. Ordered by the suspicion score, it falls on the least suspect."""
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from tracker import logic
+    from tracker.cli import app
+
+    findings = [
+        logic.Finding(project_id=pid, code="built_exceeds_planned", severity="warning",
+                      summary=f"row {pid}", fields=("mw_planned",))
+        for pid in (1, 2, 3)
+    ]  # fmt: skip
+    monkeypatch.setattr(logic, "review", lambda session: SimpleNamespace(findings=findings))
+    runs = db_path.parent / "runs"
+    runs.mkdir(exist_ok=True)
+    (runs / suspect.RANKED).write_text(
+        json.dumps({"rank": 1, "project_id": 2, "field": "mw_planned", "p_wrong": 0.9}) + "\n"
+        + json.dumps({"rank": 2, "project_id": 1, "field": "mw_planned", "p_wrong": 0.2}) + "\n",
+        encoding="utf-8",
+    )  # fmt: skip
+
+    result = CliRunner().invoke(app, ["--db", str(db_path), "--json", "logic", "resolve", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    order = [f["project_id"] for f in json.loads(result.output)["left_for_a_person"]]
+    assert order == [2, 1, 3], "most suspect first; an unscored field last; nothing skipped"
+
+
 @pytest.mark.parametrize("project_id", [999])
 def test_an_agent_asking_about_a_missing_row_is_told_so(session, project_id):
     from tracker.agent import _check_suspicion

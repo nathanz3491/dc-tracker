@@ -451,6 +451,15 @@ def _clear_the_overview_cache():
 
 
 @pytest.fixture(autouse=True)
+def _no_wait_before_a_retry(monkeypatch):
+    """`judged.run(retry_errors=True)` pauses a minute before asking failed calls again,
+    for an overloaded provider to recover. Against a fake model it is dead time."""
+    from tracker import judged
+
+    monkeypatch.setattr(judged, "RETRY_WAIT", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _forget_a_persons_company_aliases():
     """`dedup.company_key` reads the aliases a person recorded in the database opened.
 

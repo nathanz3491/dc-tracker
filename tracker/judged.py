@@ -112,11 +112,20 @@ class Tokens:
         self.calls += 1
 
 
+#: Seconds to wait before a pass asks its failed calls again (`run(retry_errors=True)`).
+#: A provider answering "overloaded" (HTTP 429) usually recovers within a minute; 17
+#: of 241 suspect re-reads in ten nights were lost to it, each a slot the night had
+#: chosen and then spent on nothing.
+RETRY_WAIT: float = 60.0
+
+
 @dataclass
 class Run:
     """What a pass did."""
 
     results: list[Any] = field(default_factory=list)
+    #: Items whose call failed and were asked once more at the end of the pass.
+    retried: int = 0
     #: Items already put to the model on the same evidence, passed over to fill the
     #: limit. See `declines.pick` for why a lazy walk counts only what it passed.
     held: int = 0
@@ -188,6 +197,8 @@ def run(
     on_start: Callable[[Run, list[Any]], None] | None = None,
     label: str = "judge",
     fields: Callable[[Any], Iterable[tuple[int, str]]] | None = None,
+    retry_errors: bool = False,
+    retry_wait: float | None = None,
 ) -> Run:
     """Put `items` to a model, in order, keeping each answer as it lands.
 
@@ -220,7 +231,17 @@ def run(
         fields: the (project, field) pairs an item is about, when the pass knows. Every
             committed answer's effect on its rows is written to the verdict log
             (`tracker.labels`); with this, the fields it left standing are too.
+        retry_errors: an item whose call raised, or whose answer came back as a failed
+            look (`declines.ERROR`), goes to the back of the queue and is asked once
+            more after every other item, `retry_wait` seconds (default
+            :data:`RETRY_WAIT`) after the first pass ends. Only its second failure is
+            reported and held for the night.
     """
+    import time
+
+    from tracker import declines as _declines
+
+    wait = RETRY_WAIT if retry_wait is None else retry_wait
     from tracker import declines
     from tracker.spend import ceiling_reached
 
@@ -332,59 +353,100 @@ def run(
             declined=bool(done.decline),
         )
 
+    # Failed looks put back for one more try: (item, key, the failure as it came).
+    # `second` holds the items already on their second try.
+    put_back: list[tuple[Any, tuple[str, str], Any]] = []
+    second: list[Any] = []
+
+    def retrying(item: Any) -> bool:
+        return any(other is item for other in second)
+
+    def settle_put_back() -> None:
+        """Report what was put back and never retried, as the first pass would have."""
+        for item, key, failure in put_back:
+            if isinstance(failure, _Raised):
+                fail(item, key, failure.error, "ask")
+            else:
+                finish(key, failure)
+        put_back.clear()
+
     queue = chosen
-    while queue:
-        why = ceiling_reached()
-        if why:
-            out.ceiling, out.unreached = why, list(queue)
-            break
-        cap = max(1, workers)
-        if room is not None:
-            left = room()
-            if left is not None and left <= 0:
-                out.stopped, out.unreached = "no room left", list(queue)
+    while True:
+        stop = False
+        while queue:
+            why = ceiling_reached()
+            if why:
+                out.ceiling, out.unreached = why, list(queue)
+                stop = True
                 break
-            if left is not None:
-                cap = min(cap, left)
-        wave, queue = waves(queue, projects, cap)
+            cap = max(1, workers)
+            if room is not None:
+                left = room()
+                if left is not None and left <= 0:
+                    out.stopped, out.unreached = "no room left", list(queue)
+                    stop = True
+                    break
+                if left is not None:
+                    cap = min(cap, left)
+            wave, queue = waves(queue, projects, cap)
 
-        ready: list[tuple[Any, tuple[str, str], Any]] = []
-        for item in wave:
-            # The key is taken here, after every earlier item was applied, so a
-            # decline names the question as it was asked and the evidence it was
-            # shown — a merge earlier in the run may have moved a pair to other rows.
-            key = ("", "")
-            try:
-                if kind is not None:
-                    key = (subject(item), "")
-                    key = (key[0], fingerprint(item))
-                prepared = prepare(item)
-            except Exception as exc:
-                fail(item, key, exc, "prepare")
-                continue
-            if isinstance(prepared, Done):
-                finish(key, prepared)
-                continue
-            ready.append((item, key, prepared))
-
-        if not ready:
-            continue
-        with spend_stage(stage) if stage else contextlib.nullcontext():
-            for (item, key, prepared), answer in map_ordered(
-                ready, lambda entry: asked(entry[2]), limit=min(workers, len(ready)), label=label
-            ):
-                if isinstance(answer, _Raised):
-                    fail(item, key, answer.error, "ask")
-                    continue
-                before = labels.held(session, projects(item)) if commit else {}
+            ready: list[tuple[Any, tuple[str, str], Any]] = []
+            for item in wave:
+                # The key is taken here, after every earlier item was applied, so a
+                # decline names the question as it was asked and the evidence it was
+                # shown — a merge earlier in the run may have moved a pair to other rows.
+                key = ("", "")
                 try:
-                    done = apply(item, prepared, answer)
+                    if kind is not None:
+                        key = (subject(item), "")
+                        key = (key[0], fingerprint(item))
+                    prepared = prepare(item)
                 except Exception as exc:
-                    fail(item, key, exc, "apply")
+                    fail(item, key, exc, "prepare")
                     continue
-                finish(key, done)
-                if commit:
-                    record(item, before, done)
+                if isinstance(prepared, Done):
+                    finish(key, prepared)
+                    continue
+                ready.append((item, key, prepared))
+
+            if not ready:
+                continue
+            with spend_stage(stage) if stage else contextlib.nullcontext():
+                for (item, key, prepared), answer in map_ordered(
+                    ready,
+                    lambda entry: asked(entry[2]),
+                    limit=min(workers, len(ready)),
+                    label=label,
+                ):
+                    if isinstance(answer, _Raised):
+                        if retry_errors and not retrying(item):
+                            put_back.append((item, key, answer))
+                            continue
+                        fail(item, key, answer.error, "ask")
+                        continue
+                    before = labels.held(session, projects(item)) if commit else {}
+                    try:
+                        done = apply(item, prepared, answer)
+                    except Exception as exc:
+                        fail(item, key, exc, "apply")
+                        continue
+                    if retry_errors and done.decline == _declines.ERROR and not retrying(item):
+                        put_back.append((item, key, done))
+                        continue
+                    finish(key, done)
+                    if commit:
+                        record(item, before, done)
+        if stop or not put_back:
+            settle_put_back()
+            break
+        # Every other item has been asked; the ones whose call failed get one more
+        # try, after a pause long enough for an overloaded provider to recover.
+        out.retried += len(put_back)
+        second.extend(item for item, _key, _failure in put_back)
+        queue = [item for item, _key, _failure in put_back]
+        put_back.clear()
+        if wait > 0:
+            time.sleep(wait)
     return out
 
 

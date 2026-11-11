@@ -212,7 +212,14 @@ def rule_out_tool() -> Any:
                         "shows which campus the figure belongs to."
                     ),
                 },
-                "confidence": {"type": "number", "description": "0 to 1."},
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "How sure you are that these claims are WRONG, 0 to 1 — not how "
+                        "sure you are that the row is right. If you are not sure they are "
+                        "wrong, call leave_alone instead and say what you found."
+                    ),
+                },
             },
             "required": ["field", "source_ids", "reason", "confidence"],
         },
@@ -445,7 +452,10 @@ it, and rule those claims out. The database then re-derives the field from the
 claims that survive.
 
 How to work:
-1. `show_project` to see the row, then `list_sources` for its citations.
+1. `show_project` to see the row, then `list_sources` for its citations. Give it the
+   `field` in question to list only the citations that claim that field, each with
+   the sentence it was quoted from and which of them states the value the row holds.
+   A long list comes in pages; read the next with the `offset` its last line gives.
 2. `read_article` the ones that matter. The stored excerpt is a fragment; the
    article is where the answer is. Read more than one.
 3. `search_web` only if the stored sources genuinely cannot settle it, then
@@ -621,9 +631,19 @@ def finding_subject(finding: Any) -> str:
 
 
 def finding_evidence(finding: Any, project: Any) -> str:
-    """Fingerprint of a finding as the agent is shown it: the question and the row."""
-    from tracker import declines
+    """Fingerprint of a finding as the agent is shown it: the question and the row.
 
+    A suspicion-score re-read (`suspect.suspects`) is the exception: its wording
+    carries the night's rank and probability, and the question it asks is about one
+    value, so it is keyed on that value and the citations claiming it
+    (`declines.value_evidence`) — or a value left alone came back every night.
+    """
+    from tracker import declines
+    from tracker.suspect import CODE_PREFIX
+
+    code = str(getattr(finding, "code", ""))
+    if code.startswith(CODE_PREFIX) and finding.fields:
+        return declines.value_evidence(project, finding.fields[0])
     return declines.fingerprint(
         finding.code,
         finding.summary,
@@ -682,7 +702,8 @@ def triage_findings(
       answer; held the same way, for the same reason. It too used to be written
       into the notes as "left alone".
     * **unusable** — a ruling the rails refused: held until the evidence changes.
-    * **error** — the run never reached an answer: held for the night only.
+    * **error** — the run never reached an answer: asked once more after the rest of
+      the round (`judged.run(retry_errors=True)`), then held for the night only.
     """
     from tracker import declines, judged
     from tracker.audit import left_as_it_was
@@ -749,6 +770,9 @@ def triage_findings(
         on_start=on_start,
         label="logic",
         fields=lambda f: [(f.project_id, name) for name in f.fields],
+        # A provider error ("overloaded", HTTP 429) cost 17 suspect re-reads in ten
+        # nights; one more try after the rest of the round usually lands.
+        retry_errors=True,
     )
 
 

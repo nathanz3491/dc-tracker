@@ -445,15 +445,32 @@ def evidence_toolkit(
         Tool(
             name="list_sources",
             description=(
-                "The citations attached to a project: id, publisher, date, url, and the "
-                "stored excerpt. Start here — it tells you which articles are worth reading."
+                "The citations attached to a project: id, publisher, date, url, what each "
+                "claims, and the stored excerpt. Start here — it tells you which articles "
+                "are worth reading. Pass `field` to list only the citations claiming that "
+                "field, each with the sentence it was quoted from and whether its claim is "
+                "the value the row holds. A long list comes in pages; its last line gives "
+                "the `offset` of the next page."
             ),
             parameters={
                 "type": "object",
-                "properties": {"project_id": {"type": "integer"}},
+                "properties": {
+                    "project_id": {"type": "integer"},
+                    "field": {
+                        "type": "string",
+                        "enum": list(_LISTED_CLAIMS),
+                        "description": "Only the citations that claim this field.",
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Where the page starts; default 0.",
+                    },
+                },
                 "required": ["project_id"],
             },
-            run=lambda project_id: _list_sources(session, int(project_id)),
+            run=lambda project_id, field=None, offset=0: _list_sources(
+                session, int(project_id), field=field or None, offset=int(offset or 0)
+            ),
         ),
         Tool(
             name="read_article",
@@ -582,24 +599,107 @@ def _claims_line(src: Any) -> str:
     return " · ".join(parts)
 
 
-def _list_sources(session: Any, project_id: int) -> str:
+#: Characters of one `list_sources` page, under `MAX_RESULT_CHARS` so the run's own
+#: clip never cuts a page: a cut list ended mid-citation with "[... truncated]", and
+#: on 2026-11-11 a row's 39 citations ran to 16,762 characters. 28 suspect re-reads
+#: in ten nights said they could not find the citation behind the figure, and left it.
+PAGE_CHARS: int = 7000
+
+
+def _json_dict(raw: Any) -> dict[str, Any]:
+    import json
+
+    try:
+        got = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _citation_lines(src: Any) -> list[str]:
+    """One citation as the whole list shows it: what it claims, and its excerpt."""
+    excerpt = (src.excerpt or "").strip().replace("\n", " ")
+    lines = [
+        f"- [{src.id}] {src.source_type or 'unknown'} {src.published_at or 'undated'}  {src.url}"
+    ]
+    claimed = _claims_line(src)
+    if claimed:
+        lines.append(f"    claims: {claimed}")
+    if excerpt:
+        lines.append(f'    "{excerpt[:300]}"')
+    return lines
+
+
+def _field_lines(src: Any, field: str, held: Any) -> list[str]:
+    """One citation's claim about `field`: value, standing, and the sentence behind it."""
+    from tracker.upsert import _same, claim_value
+
+    value = _json_dict(src.claims).get(field)
+    why = _json_dict(src.unconfirmed_reasons).get(field)
+    quote = (_json_dict(src.quotes).get(field) or "").strip().replace("\n", " ")
+    if why in ("misread", "superseded"):
+        standing = f"ruled out: {why}"
+    elif why:
+        standing = f"unconfirmed: {why}"
+    else:
+        standing = "quoted"
+    if held is not None and _same(value, claim_value(held)):
+        standing += " · THE VALUE THE ROW HOLDS"
+    lines = [
+        f"- [{src.id}] {src.source_type or 'unknown'} {src.published_at or 'undated'}  {src.url}",
+        f"    {field} {value} ({standing})",
+    ]
+    if quote:
+        lines.append(f'    "{quote[:400]}"')
+    return lines
+
+
+def _list_sources(
+    session: Any, project_id: int, *, field: str | None = None, offset: int = 0
+) -> str:
+    """A row's citations, one page at a time; with `field`, only those that claim it.
+
+    Paged rather than clipped: every page ends on a whole citation and says where the
+    next one starts, so a long list is never cut silently mid-row.
+    """
     from tracker.models import Project
 
     project = session.get(Project, project_id)
     if project is None:
         return f"no project #{project_id}"
-    lines = [f"{len(project.sources)} citation(s) on #{project_id}:"]
-    for src in project.sources:
-        excerpt = (src.excerpt or "").strip().replace("\n", " ")
-        lines.append(
-            f"- [{src.id}] {src.source_type or 'unknown'} "
-            f"{src.published_at or 'undated'}  {src.url}"
+    sources = list(project.sources or ())
+    held = None
+    if field:
+        if field not in _LISTED_CLAIMS:
+            return f"unknown field {field!r}; one of {', '.join(_LISTED_CLAIMS)}"
+        sources = [s for s in sources if _json_dict(s.claims).get(field) is not None]
+        held = getattr(project, field, None)
+    total = len(sources)
+    offset = max(0, int(offset or 0))
+    if field:
+        head = f"{total} citation(s) on #{project_id} claim {field}; the row holds {held}"
+    else:
+        head = f"{total} citation(s) on #{project_id}"
+    if offset and offset >= total:
+        return f"{head}. Nothing from offset {offset}: the last is at {max(total - 1, 0)}."
+    lines = [head + (f", from offset {offset}:" if offset else ":")]
+    used = len(lines[0])
+    index = offset
+    while index < total:
+        block = (
+            _field_lines(sources[index], field, held) if field else _citation_lines(sources[index])
         )
-        claimed = _claims_line(src)
-        if claimed:
-            lines.append(f"    claims: {claimed}")
-        if excerpt:
-            lines.append(f'    "{excerpt[:300]}"')
+        size = sum(len(line) + 1 for line in block)
+        if index > offset and used + size > PAGE_CHARS:
+            break
+        lines.extend(block)
+        used += size
+        index += 1
+    if index < total:
+        lines.append(
+            f"[citations {offset + 1}-{index} of {total} shown; call list_sources with "
+            f"offset={index}" + (f" and field={field}" if field else "") + " for the rest]"
+        )
     return "\n".join(lines)
 
 

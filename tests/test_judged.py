@@ -118,6 +118,38 @@ def test_a_failed_call_is_held_for_the_night_as_an_error(session):
     assert [r[0] for r in again.results] == [ids[1]]
 
 
+def test_a_failed_call_is_asked_once_more_after_the_rest(session):
+    """17 suspect re-reads in ten nights were lost to a provider's "overloaded"."""
+    ids = [p.id for p in _projects(session, 3)]
+    calls: list[int] = []
+
+    def ask(prepared, _db):
+        calls.append(prepared)
+        if prepared == ids[0] and calls.count(prepared) == 1:
+            raise RuntimeError("HTTP 429 overloaded")
+        return f"answered {prepared}"
+
+    got = _pass(session, ids, ask=ask, retry_errors=True)
+
+    assert calls == [ids[0], ids[1], ids[2], ids[0]], "asked again after the others"
+    assert got.retried == 1 and got.failed == 0
+    assert [r[0] for r in got.results] == [ids[1], ids[2], ids[0]]
+    assert session.scalar(select(ModelDecline)) is None, "nothing held: it was answered"
+
+
+def test_a_failed_look_is_retried_once_and_then_held_for_the_night(session):
+    ids = [p.id for p in _projects(session, 1)]
+
+    def apply(item, prepared, answer):
+        return judged.Done(result=item, decline=declines.ERROR, reason="provider error")
+
+    got = _pass(session, ids, apply=apply, retry_errors=True)
+
+    assert got.retried == 1 and got.results == [ids[0]], "reported once, after the retry"
+    row = session.scalar(select(ModelDecline))
+    assert row is not None and row.outcome == declines.ERROR
+
+
 def test_a_decline_is_recorded_on_the_evidence_shown_and_forgotten_when_decided(session):
     ids = [p.id for p in _projects(session, 1)]
     _pass(session, ids, apply=lambda i, p, a: judged.Done(result=i, decline="unclear", reason="r"))

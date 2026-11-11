@@ -77,6 +77,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly re-reads stop asking the same question, and the agent can find the
+  citation behind a value.** Over ten nights the suspicion score's re-reads read about
+  240 values and changed 23; 30 rows took 172 of the reads, Madison County seven
+  times. A value left alone was remembered by the wording of its question, which
+  carries the night's rank, so it came back the next night as a new question. A
+  re-read is now remembered by the value and the citations that claim it: one left
+  alone is not offered again until one of those citations changes, or a month passes,
+  and every one of the 25 slots goes to a value not already judged. Each suspect names
+  the citations that state its value. `list_sources` lists one field's citations with
+  their sentences and comes in pages, so a long row's list is no longer cut off at
+  8,000 characters; 28 re-reads had given up for that reason. A call the provider
+  failed ("overloaded") is asked once more at the end of the round instead of losing
+  the slot. The regular `logic resolve` round, capped at 60 a night, reads findings
+  about the likeliest-wrong values first. The confidence a ruling gives is now asked
+  for explicitly as confidence that the claims are wrong (`declines.value_evidence`,
+  `suspect.suspects`, `agent._list_sources`, `judged.run(retry_errors=True)`).
 - **A deploy during the night no longer changes the code the night runs.** On
   2026-10-19 two deploys landed mid-run and the night's later phases ran different
   code from its first, so every push had to wait for the loop to end. The loop now
