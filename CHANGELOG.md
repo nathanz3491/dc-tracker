@@ -77,7 +77,8 @@ initial build of the v1 PRD.
 
 ### Changed
 
-- **The nightly re-reads aim at wrong values a little better.** The suspicion score picks the 25 stored values the
+- **The nightly re-reads aim at wrong values a little better, and the score is now
+  tested on what the agent finds.** The suspicion score picks the 25 stored values the
   agent re-reads each night. It was measured on two label sets that share no campus:
   the answer key, and 105 values the nightly passes changed or kept elsewhere, each read
   from the snapshot taken before its pass. It now leaves out two signals — the age of a
@@ -91,7 +92,11 @@ initial build of the v1 PRD.
   transformer, whose 0.77 on the key is the luckiest of many retrains. A refit is now
   measured over five campus splits and kept only if it beats the saved model's own
   signals on the same labels, and the model saved before this change keeps ranking until
-  then (`tracker/suspect.py`, `docs/data-quality.md`).
+  then. Each night's outcomes are filed with what the ranking knew when it chose
+  (`data/runs/suspect-outcomes.jsonl`): an honest running test, and, after 50, a
+  correction to the probability the agent is shown, which the key alone sets far too
+  high — values put at 86% were changed 54% of the time (`tracker/suspect.py`,
+  `docs/data-quality.md`).
 - **The nightly re-reads stop asking the same question, and the agent can find the
   citation behind a value.** Over ten nights the suspicion score's re-reads read about
   240 values and changed 23; 30 rows took 172 of the reads, Madison County seven

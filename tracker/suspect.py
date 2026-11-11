@@ -6,7 +6,8 @@ sentence is about this campus, this phase or this kind of figure. The answer key
 everything is not affordable, so this ranks the values and the nightly loop re-reads
 the top of the list (plus a random fifth, so the record does not only confirm the
 ranking). The score never writes a value. It aims a pass that does — `logic resolve
---suspects N`, the agent that re-reads sources and rules.
+--suspects N`, the agent that re-reads sources and rules — and what that pass decides
+is filed against what the ranking knew (`record_outcomes`, below).
 
 **Two models, one in charge.** The logistic regression ranks, at the start of the
 night: seven readable signals about how a value is backed (how many statements and
@@ -45,6 +46,12 @@ fields. The saved model's own signal set is measured the same way on the same la
 and the better of the two is refitted; it is kept only if it clears `FLOOR`, otherwise
 the previous weights stay.
 
+**What the night's passes found is kept** (`record_outcomes`): every ranked value a
+pass then changed, kept or left alone with a reason, with the signals and the score it
+had when it was ranked. That is the honest test of the ranking — features from before
+the decision, a label from after — and it calibrates the probability shown to the
+agent, which the key alone sets far too high: values the score put at 86% were changed
+54% of the time, values at 60% one time in ten.
 """
 
 from __future__ import annotations
@@ -85,10 +92,13 @@ PRIMARY = {"company_filing", "government_doc"}
 FLOOR = 0.65
 #: Campus splits a refit is measured on; one split moves the AUC by ±0.015.
 REPEATS = 5
+#: Outcomes needed, of both kinds together, before they calibrate the probability.
+CALIBRATE_MIN = 50
 #: The share of each night's suspects drawn at random rather than from the top.
 RANDOM_SHARE = 0.2
 MODEL = "suspect-logistic.json"
 RANKED = "suspicion.jsonl"
+OUTCOMES = "suspect-outcomes.jsonl"
 CODE_PREFIX = "suspect_"
 
 
@@ -162,7 +172,8 @@ class Logistic:
 
     `features` names what it was fitted on, so a model saved with another signal set
     (an older one, or one a refit judged better) keeps scoring after the default
-    changes.
+    changes. `calibration` maps its log-odds onto what the night's passes then found
+    (`record_outcomes`); without it the probability is on the answer key's scale.
     """
 
     weights: list[float]
@@ -173,6 +184,7 @@ class Logistic:
     heldout_auc: float | None = None
     trained_at: str = ""
     features: list[str] = field(default_factory=lambda: list(FEATURES))
+    calibration: dict[str, float] | None = None
 
     def vector(self, sig: dict[str, float]) -> list[float]:
         return [sig[f] for f in self.features]
@@ -185,6 +197,13 @@ class Logistic:
 
     def prob(self, x: Sequence[float]) -> float:
         return _sigmoid(self.logit(x))
+
+    def calibrated(self, x: Sequence[float]) -> float:
+        """P(wrong) on the scale of what the passes found, once enough is known."""
+        if not self.calibration:
+            return self.prob(x)
+        t = max(-30.0, min(30.0, self.logit(x)))
+        return _sigmoid(self.calibration["slope"] * t + self.calibration["intercept"])
 
     def contributions(self, x: Sequence[float]) -> list[tuple[str, float]]:
         """Each feature's push on the log-odds, largest first."""
@@ -201,6 +220,7 @@ class Logistic:
             "labels": self.labels,
             "heldout_auc": self.heldout_auc,
             "trained_at": self.trained_at,
+            "calibration": self.calibration,
         }
 
     @classmethod
@@ -219,6 +239,7 @@ class Logistic:
             data.get("heldout_auc"),
             data.get("trained_at", ""),
             features,
+            data.get("calibration"),
         )
 
 
@@ -472,6 +493,36 @@ def compare(
     ]
 
 
+def calibrate(model: Logistic, lines: list[dict]) -> dict[str, Any]:
+    """Map the model's log-odds onto what the passes found, from `record_outcomes`' log.
+
+    A one-input logistic regression of each outcome on the model's log-odds for the
+    signals the value had when it was ranked. Applied only when it keeps the order (a
+    positive slope): it changes what the agent is told, never who is asked.
+    """
+    t, y = [], []
+    for line in lines:
+        sig = line.get("signals") or {}
+        if line.get("wrong") not in (0, 1) or not all(f in sig for f in model.features):
+            continue
+        t.append([max(-30.0, min(30.0, model.logit(model.vector(sig))))])
+        y.append(int(line["wrong"]))
+    if len(y) < CALIBRATE_MIN or len(set(y)) < 2:
+        model.calibration = None
+        return {"calibrated": f"not yet: {len(y)} outcome(s) of {CALIBRATE_MIN}"}
+    one = fit(t, y, l2=1e-6, features=["logit"])
+    slope = one.weights[0] / one.scale[0]
+    if slope <= 0:
+        model.calibration = None
+        return {"calibrated": f"no: on {len(y)} outcomes the ranking runs backwards"}
+    model.calibration = {
+        "slope": slope,
+        "intercept": one.intercept - one.weights[0] * one.mean[0] / one.scale[0],
+        "outcomes": len(y),
+    }
+    return {"calibrated": f"on {len(y)} outcomes", "outcome_auc": auc(y, [v[0] for v in t])}
+
+
 def train_logistic(session: Any, db_path: Path, *, today: dt.date | None = None) -> dict[str, Any]:
     """Refit on the answer key's verdicts; keep it if it measures at least as well.
 
@@ -524,6 +575,7 @@ def train_logistic(session: Any, db_path: Path, *, today: dt.date | None = None)
     model = fit([[s[f] for f in names] for s in sigs], y, features=names)
     model.heldout_auc = measured
     model.trained_at = (today or dt.date.today()).isoformat()
+    report.update(calibrate(model, outcomes(db_path)))
     path = models_dir(db_path) / MODEL
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(model.as_json(), indent=1), encoding="utf-8")
@@ -532,10 +584,17 @@ def train_logistic(session: Any, db_path: Path, *, today: dt.date | None = None)
 
 
 def score(session: Any, db_path: Path, *, today: dt.date | None = None) -> list[dict[str, Any]]:
-    """Rank every scored field's held value, most suspicious first, and save the list."""
+    """Rank every scored field's held value, most suspicious first, and save the list.
+
+    Each line keeps the value's signals and when it was scored, so what the night's
+    passes then decide can be filed against what the ranking knew (`record_outcomes`).
+    """
+    from tracker.models import utcnow
+
     model = load(db_path)
     if model is None:
         return []
+    scored_at = utcnow().isoformat()
     ranked = []
     for e in entries(session, db_path):
         if e["field"] not in SCORED:
@@ -549,21 +608,113 @@ def score(session: Any, db_path: Path, *, today: dt.date | None = None) -> list[
                 "project_id": e["project_id"],
                 "field": e["field"],
                 "held": e["held"],
-                "p_wrong": round(model.prob(x), 4),
+                "p_wrong": round(model.calibrated(x), 4),
+                "order": model.logit(x),
                 "why": [n for n, c in model.contributions(x)[:3] if c > 0],
+                "signals": {k: round(v, 5) for k, v in sig.items()},
             }
         )
-    ranked.sort(key=lambda r: (-r["p_wrong"], r["project_id"], r["field"]))
+    # Ordered by the model's own log-odds: calibration may squeeze the probabilities
+    # together but never reorders them.
+    ranked.sort(key=lambda r: (-r["order"], r["project_id"], r["field"]))
+    for r in ranked:
+        del r["order"]
     night = (today or dt.date.today()).isoformat()
     path = Path(db_path).parent / "runs" / RANKED
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "".join(
-            json.dumps({"night": night, "rank": i + 1, **r}) + "\n" for i, r in enumerate(ranked)
+            json.dumps({"night": night, "scored_at": scored_at, "rank": i + 1, **r}, default=str)
+            + "\n"
+            for i, r in enumerate(ranked)
         ),
         encoding="utf-8",
     )
     return ranked
+
+
+def outcomes(db_path: Path | str) -> list[dict[str, Any]]:
+    """Every outcome `record_outcomes` has filed, oldest first."""
+    from tracker import labels
+
+    return labels.read(db_path, OUTCOMES)
+
+
+def record_outcomes(session: Any, db_path: Path | str) -> dict[str, Any]:
+    """File what the night's passes decided about the values tonight's ranking scored.
+
+    A value a pass changed is wrong; one it kept, or a suspect the agent left alone
+    with its reason, is right; one it could not decide is not filed. Each line carries
+    the signals and the probability the value had when it was ranked, before anything
+    was decided — so the log is a test of the ranking with nothing leaking into it,
+    which the answer key, built from the campuses carrying the most money, is not for
+    the rest of the database. Run at the end of the night, before `train`; a rerun
+    files nothing twice.
+    """
+    from sqlalchemy import select
+
+    from tracker import labels
+    from tracker.models import ModelDecline
+
+    rows = ranked(db_path)
+    if not rows or not rows[0].get("scored_at"):
+        return {"recorded": 0, "outcomes": len(outcomes(db_path))}
+    scored_at = str(rows[0]["scored_at"])
+    night = rows[0]["night"]
+    by_value = {(int(r["project_id"]), r["field"]): r for r in rows}
+    filed = {(o["night"], int(o["project_id"]), o["field"]) for o in outcomes(db_path)}
+    found: dict[tuple[int, str], dict[str, Any]] = {}
+    for v in labels.read(db_path, labels.VERDICTS):
+        if str(v.get("at", "")) < scored_at or v.get("by") not in ("logic", "audit"):
+            continue
+        where = (int(v["project_id"]), v.get("field"))
+        r = by_value.get(where)
+        if (
+            r is None
+            or (night, *where) in filed
+            or not _same({"value": v.get("old"), "number": v.get("old")}, r["held"])
+        ):
+            continue
+        wrong = {"changed": 1, "kept": 0}.get(v.get("verdict"))
+        if where not in found or (found[where]["wrong"] is None and wrong is not None):
+            found[where] = {"wrong": wrong, "how": v.get("verdict"), "by": v.get("by")}
+    since = dt.datetime.fromisoformat(scored_at)
+    for (pid, f), seen in found.items():
+        if seen["wrong"] is not None:
+            continue
+        decline = session.scalars(
+            select(ModelDecline).where(
+                ModelDecline.kind == "logic", ModelDecline.subject == f"{pid}:{CODE_PREFIX}{f}"
+            )
+        ).first()
+        if decline is not None and decline.outcome == "left alone" and decline.decided_at >= since:
+            seen.update(wrong=0, how="left alone")
+    lines = [
+        {
+            "night": night,
+            "project_id": pid,
+            "field": f,
+            "held": by_value[(pid, f)]["held"],
+            "rank": by_value[(pid, f)]["rank"],
+            "p_wrong": by_value[(pid, f)]["p_wrong"],
+            "signals": by_value[(pid, f)].get("signals") or {},
+            **seen,
+        }
+        for (pid, f), seen in sorted(found.items())
+        if seen["wrong"] is not None
+    ]
+    if lines:
+        path = labels.path_of(db_path, OUTCOMES)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            for line in lines:
+                fh.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+    every = outcomes(db_path)
+    report: dict[str, Any] = {"recorded": len(lines), "outcomes": len(every)}
+    ranking_auc = auc([int(o["wrong"]) for o in every], [float(o["p_wrong"]) for o in every])
+    if ranking_auc is not None:
+        report["ranking_auc"] = round(ranking_auc, 3)
+    return report
 
 
 def ranked(db_path: Path | str) -> list[dict[str, Any]]:
@@ -733,7 +884,7 @@ def check_row(session: Any, db_path: Path, project_id: int) -> dict[str, Any]:
         view: dict[str, Any] = {"held": e["held"]}
         if model is not None and sig is not None:
             x = model.vector(sig)
-            view["logistic_p_wrong"] = round(model.prob(x), 3)
+            view["logistic_p_wrong"] = round(model.calibrated(x), 3)
             view["logistic_why"] = [(n, round(c, 2)) for n, c in model.contributions(x)[:3]]
         if e["field"] in transformer:
             view["transformer_p_wrong"] = transformer[e["field"]]
@@ -754,13 +905,16 @@ __all__ = [
     "SIGNALS",
     "Logistic",
     "auc",
+    "calibrate",
     "check_row",
     "compare",
     "entries",
     "fit",
     "heldout_auc",
     "load",
+    "outcomes",
     "ranked",
+    "record_outcomes",
     "score",
     "signals",
     "suspects",

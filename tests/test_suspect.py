@@ -4,7 +4,9 @@ Each test is one promise: the plain-Python regression learns a signal and ranks 
 and its Newton steps land on the penalised optimum; a saved model trained on unknown
 features is refused rather than misread, while one saved on an older signal set keeps
 scoring; a refit is measured against the saved model's signal set on the same labels
-and the better one kept; the night's suspects are the top of the ranking plus a
+and the better one kept; the probability shown to the agent is calibrated on what the
+passes found without reordering anything; the night's outcomes are filed once, with
+what the ranking knew; the night's suspects are the top of the ranking plus a
 reproducible random share; a refit with too few labels keeps the old model; and an
 agent asking about a row it cannot find is told so rather than failing its turn.
 """
@@ -19,7 +21,7 @@ import random
 import pytest
 
 from tracker import suspect
-from tracker.models import Project
+from tracker.models import ModelDecline, Project
 
 
 def test_the_regression_learns_a_signal_and_ranks_by_it():
@@ -118,7 +120,7 @@ def test_a_model_saved_on_an_older_signal_set_keeps_scoring(tmp_path):
 
     assert model.features == older
     assert len(model.vector(sig)) == k
-    assert 0 < model.prob(model.vector(sig)) < 1
+    assert 0 < model.calibrated(model.vector(sig)) < 1
 
 
 def _entry(pid: int = 1, field: str = "mw_planned", backers: int = 1, rivals: int = 1) -> dict:
@@ -193,6 +195,141 @@ def test_a_refit_keeps_the_signal_set_that_measures_better(tmp_path, monkeypatch
     assert report["default_signals_auc"] > report["previous_signals_auc"]
     assert report["kept"] == "new"
     assert suspect.load(db).features == list(suspect.FEATURES)
+
+
+def test_calibration_tells_the_agent_what_the_passes_found_without_reordering():
+    rng = random.Random(7)
+    model = suspect.fit(
+        [[float(i % 2)] for i in range(40)], [i % 2 for i in range(40)], features=["log_backers"]
+    )
+    raw = [model.prob([0.0]), model.prob([1.0])]
+    # The passes found far fewer wrong values than the key's scale says.
+    lines = [
+        {
+            "signals": {"log_backers": float(i % 2)},
+            "wrong": int(rng.random() < (0.4 if i % 2 else 0.05)),
+        }
+        for i in range(200)
+    ]
+
+    report = suspect.calibrate(model, lines)
+    shown = [model.calibrated([0.0]), model.calibrated([1.0])]
+
+    assert report["calibrated"] == "on 200 outcomes"
+    assert shown[1] > shown[0], "the order is kept"
+    assert shown[1] < raw[1], "and the probability comes down to what was found"
+    assert suspect.calibrate(model, lines[:10])["calibrated"].startswith("not yet")
+    assert model.calibration is None
+
+
+def _ranking_with_signals(tmp_path, scored_at: str) -> None:
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
+    rows = [
+        {
+            "night": "2026-11-11",
+            "scored_at": scored_at,
+            "rank": i + 1,
+            "project_id": pid,
+            "field": field,
+            "held": held,
+            "p_wrong": p,
+            "why": [],
+            "signals": {"log_backers": 0.69},
+        }
+        for i, (pid, field, held, p) in enumerate(
+            [
+                (1, "mw_planned", 300.0, 0.9),
+                (2, "investment_usd", 2e9, 0.8),
+                (3, "expected_online", "2028-01-01", 0.7),
+                (4, "mw_planned", 50.0, 0.6),
+                (5, "mw_planned", 80.0, 0.5),
+                (6, "mw_planned", 90.0, 0.4),
+            ]
+        )
+    ]
+    (runs / suspect.RANKED).write_text(
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
+    )
+
+
+def _verdict(at: str, pid: int, field: str, verdict: str, old, new, by: str = "logic") -> dict:
+    return {
+        "at": at,
+        "by": by,
+        "project_id": pid,
+        "field": field,
+        "verdict": verdict,
+        "old": old,
+        "new": new,
+    }
+
+
+def test_the_nights_outcomes_are_filed_once_with_what_the_ranking_knew(session, db_path):
+    _ranking_with_signals(db_path.parent, "2026-11-11T10:05:00")
+    lines = [
+        _verdict("2026-11-11T09:00:00", 4, "mw_planned", "changed", 50.0, 60.0),  # before: no
+        _verdict("2026-11-11T11:00:00", 1, "mw_planned", "changed", 300.0, 1200.0),  # wrong
+        _verdict("2026-11-11T11:01:00", 2, "investment_usd", "kept", 2e9, 2e9, by="audit"),
+        _verdict(
+            "2026-11-11T11:02:00", 3, "expected_online", "declined", "2028-01-01", "2028-01-01"
+        ),
+        _verdict("2026-11-11T11:03:00", 5, "mw_planned", "changed", 70.0, 90.0),  # other value
+        _verdict("2026-11-11T11:04:00", 6, "mw_planned", "declined", 90.0, 90.0),  # undecided
+    ]
+    (db_path.parent / "runs" / "verdicts.jsonl").write_text(
+        "".join(json.dumps(v) + "\n" for v in lines), encoding="utf-8"
+    )
+    session.add(
+        ModelDecline(
+            kind="logic",
+            subject="3:suspect_expected_online",
+            fingerprint="x",
+            outcome="left alone",
+            reason="the sources state 2028 for this campus",
+            decided_at=dt.datetime(2026, 11, 11, 11, 2, 30),
+        )
+    )
+    session.flush()
+
+    first = suspect.record_outcomes(session, db_path)
+    again = suspect.record_outcomes(session, db_path)
+    filed = {(o["project_id"], o["field"]): o for o in suspect.outcomes(db_path)}
+
+    assert first["recorded"] == 3 and again["recorded"] == 0
+    assert set(filed) == {(1, "mw_planned"), (2, "investment_usd"), (3, "expected_online")}
+    assert filed[(1, "mw_planned")]["wrong"] == 1
+    assert filed[(2, "investment_usd")]["wrong"] == 0
+    assert filed[(3, "expected_online")]["how"] == "left alone"
+    assert filed[(1, "mw_planned")]["signals"] == {"log_backers": 0.69}
+    assert filed[(1, "mw_planned")]["p_wrong"] == 0.9
+
+
+def test_a_ranking_from_before_outcomes_were_kept_files_nothing(session, db_path):
+    _ranking(db_path.parent)
+    assert suspect.record_outcomes(session, db_path)["recorded"] == 0
+
+
+def test_the_ranking_is_the_models_order_and_keeps_each_values_signals(tmp_path, monkeypatch):
+    rows = [
+        _entry(1, "mw_planned", backers=1, rivals=3),
+        _entry(2, "mw_planned", backers=4, rivals=0),
+        _entry(3, "phase", backers=1, rivals=3),
+    ]
+    monkeypatch.setattr(suspect, "entries", lambda session, db_path, ids=None: rows)
+    X = [[1.0, 0.0], [0.0, 1.0]] * 10
+    model = suspect.fit(X, [1, 0] * 10, features=["directory_only", "log_backers"])
+    model.calibration = {"slope": 0.5, "intercept": -1.0}
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / suspect.MODEL).write_text(json.dumps(model.as_json()), encoding="utf-8")
+
+    out = suspect.score(None, tmp_path / "tracker.db", today=dt.date(2026, 11, 1))
+    saved = suspect.ranked(tmp_path / "tracker.db")
+
+    assert [r["project_id"] for r in out] == [1, 2], "the stage is not ranked"
+    assert out[0]["p_wrong"] > out[1]["p_wrong"]
+    assert saved[0]["scored_at"] and "directory_only" in saved[0]["signals"]
+    assert saved[0]["rank"] == 1 and "order" not in saved[0]
 
 
 def test_the_signals_read_the_held_values_backing():

@@ -532,8 +532,13 @@ as the model scoring how right the row is rather than how wrong the claims are; 
 `rule_out_claims` schema now says which it means. The bar itself is unchanged.
 
 The nightly loop scores every stored MW, investment and online date before round 1
-(free), runs `logic resolve --suspects 25` once in round 1, and retrains the score at
-the end of the night from what the night's passes decided (`data/runs/verdicts.jsonl`).
+(free), runs `logic resolve --suspects 25` once in round 1, and at the end of the night
+files what the passes decided about the ranked values — changed, kept, or left alone
+with a reason — beside the signals each value had when it was ranked
+(`data/runs/suspect-outcomes.jsonl`), then refits the score on the answer key. The
+filed outcomes test the ranking and, once there are 50, calibrate the probability the
+agent is shown; they do not train it, because adding them lowered the score on both the
+key and the passes' own verdicts (`docs/data-quality.md`, "The suspicion score").
 Stages and first-announced dates are not ranked: the score finds their errors no
 better than chance.
 
@@ -663,7 +668,7 @@ Touching any of these means the poster is in scope. Re-render with
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_field_lines`, `_claims_line`, `PAGE_CHARS` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
-| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `_still_open`, `_carriers`, `ranked`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/declines.py` — `value_evidence`, `field_citations`; `tracker/triage.py` — `finding_evidence`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`), `_suspicion_by_field`, `_suspicion_of`; `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
+| Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `_still_open`, `_carriers`, `ranked`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`, `record_outcomes`; `tracker/declines.py` — `value_evidence`, `field_citations`; `tracker/triage.py` — `finding_evidence`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`), `_suspicion_by_field`, `_suspicion_of`; `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
 | CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons`, `_same_claim` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with

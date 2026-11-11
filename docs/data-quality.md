@@ -595,6 +595,15 @@ and retrains that never saw the judged campuses score 0.60 to 0.67 on them).
 over five splits, on the ranked fields. The saved model's own signal set is measured the
 same way on the same labels; the better one is refitted, and only if it clears 0.65.
 
+**What the passes find is kept.** At the end of each night every ranked value a pass
+changed, kept, or left alone with a reason is filed with the signals and the
+probability it had when ranked (`data/runs/suspect-outcomes.jsonl`). That is the honest
+test of the ranking, and `tracker suspect train` reports its running score. It also
+fixes the probability the agent is told: set by the key alone, it runs far too high —
+values put at 86% were changed 54% of the time, values at 60% one time in ten. Once 50
+outcomes are filed, the probability is mapped onto what the passes actually found; the
+order of the list never changes.
+
 ## What the stored data actually rests on
 
 ```bash

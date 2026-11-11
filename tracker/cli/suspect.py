@@ -1,9 +1,10 @@
 """`tracker suspect`: the suspicion score that aims the nightly re-checks.
 
 None of these commands writes to the database. `score` writes the ranked list to
-`data/runs/suspicion.jsonl` and `train` the models to `data/models/`; the values
-themselves are only ever changed by the pass the ranking aims (`logic resolve
---suspects N`).
+`data/runs/suspicion.jsonl`; `train` files what the night's passes decided about the
+ranked values to `data/runs/suspect-outcomes.jsonl` and the models to `data/models/`;
+the values themselves are only ever changed by the pass the ranking aims (`logic
+resolve --suspects N`).
 """
 
 from __future__ import annotations
@@ -84,13 +85,15 @@ def train_cmd(
         typer.Option("--snapshots", help="The nightly snapshot directory, for value history."),
     ] = None,
 ) -> None:
-    """Refit both models; each is kept only if it ranks the answer key well enough."""
+    """File the night's outcomes, then refit both models; each is kept only if it ranks
+    the answer key at least as well as the one it would replace."""
     from tracker import suspect, suspect_transformer
 
     if snapshots is not None and not snapshots.is_dir():
         _fail(f"--snapshots: {snapshots} is not a directory")
     path = _db_path()
     with session_scope(_read_engine(), commit=False) as session:
+        outcomes = suspect.record_outcomes(session, path)
         logistic = suspect.train_logistic(session, path)
         transformer = (
             suspect_transformer.train(
@@ -101,8 +104,10 @@ def train_cmd(
             else {"kept": "skipped: PyTorch is not installed (the `head` extra)"}
         )
     if json_mode():
-        emit({"logistic": logistic, "transformer": transformer})
+        emit({"outcomes": outcomes, "logistic": logistic, "transformer": transformer})
         return
+    detail = ", ".join(f"{k} {v}" for k, v in outcomes.items() if k != "recorded")
+    console.print(f"outcomes: {outcomes['recorded']} filed tonight  [dim]({detail})[/dim]")
     for name, report in (("logistic", logistic), ("transformer", transformer)):
         detail = ", ".join(f"{k} {v}" for k, v in report.items() if k != "kept")
         console.print(f"{name}: {report['kept']}" + (f"  [dim]({detail})[/dim]" if detail else ""))
