@@ -37,7 +37,15 @@ if TYPE_CHECKING:
     from tracker.capex import Tally
 
 #: The stages, in the order the page lists them.
-STAGES: Final = ("announced", "permitting", "construction", "operational", "paused", "cancelled")
+STAGES: Final = (
+    "announced",
+    "permitting",
+    "construction",
+    "operational",
+    "paused",
+    "cancelled",
+    "denied",
+)
 
 
 def counted_ids(session: Session) -> tuple[set[int], set[int]]:

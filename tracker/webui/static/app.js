@@ -159,7 +159,7 @@ const TIER_NOTE = {
 /* Phase hue lives on the map only, where a legend explains it. */
 const PHASE_TOKEN = {
   announced: "--chart-5", permitting: "--chart-1", construction: "--chart-3",
-  operational: "--chart-2", paused: "--warning", cancelled: "--muted-foreground",
+  operational: "--chart-2", paused: "--warning", cancelled: "--muted-foreground", denied: "--danger",
 };
 const SEV_TOKEN = { watch: "--muted-foreground", material: "--warning", blocking: "--danger" };
 const SEV_ORDER = ["watch", "material", "blocking"];
@@ -3338,7 +3338,7 @@ function noRiskText(p) {
       ? "Running, and nothing recorded says the rest is slipping."
       : "Operating — no date left to miss.";
   }
-  if (p.phase === "paused" || p.phase === "cancelled") return `The campus is ${p.phase}; a delay reading does not apply.`;
+  if (p.phase === "paused" || p.phase === "cancelled" || p.phase === "denied") return `The campus is ${p.phase}; a delay reading does not apply.`;
   return "No slipped date, no date passed and no open obstacle a source says moved the schedule.";
 }
 
@@ -4366,10 +4366,10 @@ function CompanyPage({ slug, data, onOpen, onGoto, onListChanged, onOpenCompany 
   const inRow = parts.capex_row?.mw_planned || 0;
   const unnamed = parts.no_named_buyer?.mw_planned || 0;
   const builderNote = "Counted as the builder: every campus it builds, whole, whoever buys it — each campus once, "
-    + "paused and cancelled campuses left out. These are not the Capex page's figures, which credit each campus to its buyer"
+    + "paused, cancelled and denied campuses left out. These are not the Capex page's figures, which credit each campus to its buyer"
     + (t.mw_planned > 0.5 ? ` (${gw(t.mw_planned)} planned as buyer).` : "; as a buyer it is credited with none.");
   const countedNote = "Planned and running are counted as on the Capex page: each campus once, "
-    + "paused and cancelled campuses left out, and a tenant credited only with its own buildings"
+    + "paused, cancelled and denied campuses left out, and a tenant credited only with its own buildings"
     + ([inRow && `${gw(inRow)} is its Capex row`,
         unnamed && `${gw(unnamed)} is campuses it builds with no named buyer, which Capex lists as “(no named customer)”`]
       .filter(Boolean).map((s, i) => (i ? "; " : " — ") + s).join("")) + ".";

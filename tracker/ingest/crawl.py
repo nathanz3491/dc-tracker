@@ -788,6 +788,20 @@ _PHASE_EVIDENCE: dict[str, tuple[str, ...]] = {
     ),
     "paused": ("paused", "on hold", "halted", "suspend", "shelved"),
     "cancelled": ("cancel", "scrapped", "abandon", "withdrew", "withdrawn", "terminated"),
+    # An authority said no: "supervisors on Wednesday rejected plans", "the board
+    # denied preliminary plans for 5 data center sites".
+    "denied": (
+        "denied",
+        "denies",
+        "denial",
+        "rejected",
+        "rejects",
+        "voted down",
+        "voted against",
+        "voted to deny",
+        "turned down",
+        "vetoed",
+    ),
 }
 
 #: The phases a sentence about growing something that already exists cannot put a
@@ -868,6 +882,28 @@ _SUPPLYING: Final = re.compile(
     r"\b(?:powered by|supplied by|served by|fed by|supported by|running|runs on|"
     r"delivering|adjacent|next to|near|beside|co-?located)\b"
 )
+
+
+#: An authority saying no, and the developer saying it has given up. A stop whose
+#: sentence has the first and not the second is a refusal, not a cancellation
+#: (`denied`, migration 0055).
+_REFUSAL_WORDING: Final = re.compile(
+    r"\b(?:denied|denies|denial|rejected|rejects|voted (?:down|against|to deny|to reject)|"
+    r"turned down|vetoed)\b"
+)
+_GAVE_UP_WORDING: Final = re.compile(
+    r"\b(?:cancel\w*|scrapped|abandon\w*|withdr[ae]w\w*|terminated|pulled out|dropped (?:its|the) plans?)\b"
+)
+
+
+def stop_is_a_refusal(low: str) -> bool:
+    """Whether a lower-cased stop sentence says an authority refused the campus.
+
+    "Pinal County supervisors on Wednesday rejected plans to build La Osa" is not the
+    developer cancelling; "the county denied the rezoning and the developer withdrew"
+    is, and stays `cancelled`.
+    """
+    return bool(_REFUSAL_WORDING.search(low) and not _GAVE_UP_WORDING.search(low))
 
 
 def construction_not_of_the_campus(low: str) -> bool:

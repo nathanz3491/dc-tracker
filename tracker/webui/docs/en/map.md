@@ -11,7 +11,7 @@ Under the map, the page says how many campuses have a location and are drawn. A 
 
 | Figure | What it counts |
 | --- | --- |
-| **Campuses tracked** | The campuses the [Capex](capex) page counts: paused and cancelled ones are left out, and a campus suspected of being listed twice is counted once. |
+| **Campuses tracked** | The campuses the [Capex](capex) page counts: paused, cancelled and denied ones are left out, and a campus suspected of being listed twice is counted once. |
 | **Capacity planned** | Those campuses' planned capacity, each at the figure for the campus as a whole. |
 | **Capacity operating** | The part of it already built and running. |
 | **States** | How many states those campuses are in. |
@@ -20,7 +20,7 @@ A campus whose size nobody has published counts as zero, so both capacities are 
 
 ## Reading the map
 
-- **Colour is stage**: announced, permitting, construction, operational, paused or cancelled. Paused and cancelled campuses are drawn, but not counted in the figures.
+- **Colour is stage**: announced, permitting, construction, operational, paused, cancelled or denied. Paused, cancelled and denied campuses are drawn, but not counted in the figures.
 - **Size is planned capacity**, in five steps: under 100 MW, 100–299 MW, 300–999 MW, 1–3 GW, and 3 GW or more. The legend under the map shows each one.
 - A **hollow dashed ring** means nobody has said how big the campus is. It is not small; it is unknown.
 - A **state's shade** deepens with the capacity planned in it, from the colour of the land to amber.

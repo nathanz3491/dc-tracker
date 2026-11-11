@@ -13,7 +13,7 @@ Type into **name, city, operator…**. Every word must appear somewhere in the r
 | Filter | What it keeps |
 | --- | --- |
 | **state** | Campuses in one state. |
-| **phase** | One phase: announced, permitting, construction, operational, paused or cancelled. See [Phases and progress](progress). |
+| **phase** | One phase: announced, permitting, construction, operational, paused, cancelled or denied. See [Phases and progress](progress). |
 | **confidence** | *1 or better*, *2 or better* or *3 only*. See [Confidence](confidence). |
 | **obstacle** | Campuses with an open obstacle of one kind, such as `grid_capacity` or `community_opposition`. |
 | **severity** | Campuses with an open obstacle of at least this severity: watch, material, blocking. |

@@ -1195,6 +1195,9 @@ class PhaseReport:
     construction: int = 0
     #: Of those, sentences whose construction is a power plant's or has not started.
     not_the_campus: int = 0
+    #: `cancelled` or `paused` claims whose sentence is an authority's refusal,
+    #: rewritten as `denied` (migration 0055).
+    refused: int = 0
 
     def as_rows(self) -> list[tuple[str, int]]:
         return [
@@ -1202,8 +1205,36 @@ class PhaseReport:
             ("about growing a site that exists", self.refiled),
             ("construction claims read", self.construction),
             ("a plant's construction, or not started", self.not_the_campus),
+            ("stops that were a refusal, now denied", self.refused),
             ("rows whose phase moved", len(self.moved)),
         ]
+
+
+def _rewrite_phase(
+    source: Any, phase: str, fields: set[str], unconfirmed: set[str], canonical: Any
+) -> None:
+    """Set one citation's `phase` claim to `phase`, quoted, keeping any ruling on it."""
+    import json
+
+    from tracker.upsert import DECIDED_REASONS
+
+    claims = json.loads(source.claims or "{}")
+    claims["phase"] = phase
+    source.claims = json.dumps(claims, sort_keys=True, ensure_ascii=False)
+    try:
+        reasons = json.loads(source.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        reasons = {}
+    if not isinstance(reasons, dict):
+        reasons = {}
+    if reasons.get("phase") in DECIDED_REASONS:
+        return
+    reasons.pop("phase", None)
+    source.unconfirmed_reasons = (
+        json.dumps(reasons, sort_keys=True, ensure_ascii=False) if reasons else None
+    )
+    source.fields = canonical(fields | {"phase"})
+    source.unconfirmed_fields = canonical(unconfirmed - {"phase"})
 
 
 def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
@@ -1237,6 +1268,7 @@ def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
         _EARLY_PHASES,
         _grows_an_existing_site,
         construction_not_of_the_campus,
+        stop_is_a_refusal,
     )
     from tracker.upsert import WRITABLE_FIELDS, recompute_from_sources
 
@@ -1255,6 +1287,17 @@ def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
             continue
         fields, unconfirmed = _names(source.fields), _names(source.unconfirmed_fields)
         quote = quotes.get("phase") if isinstance(quotes, dict) else None
+        if value in ("cancelled", "paused") and quote and stop_is_a_refusal(quote.lower()):
+            # Rewritten, not refiled: the sentence states a stop, just not this one.
+            # One the gate refused only because "rejected" is no word for
+            # `cancelled` is quoted again; a ruling on it stays.
+            report.refused += 1
+            report.projects.add(source.project_id)
+            if len(report.examples) < 12:
+                report.examples.append((source.project_id, "denied", quote[:100]))
+            if apply:
+                _rewrite_phase(source, "denied", fields, unconfirmed, _canonical)
+            continue
         if not value or not quote or "phase" not in fields or "phase" in unconfirmed:
             continue
         if value in _EARLY_PHASES:

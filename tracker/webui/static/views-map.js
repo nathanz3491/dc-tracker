@@ -12,7 +12,7 @@
  *
  * What the server decides and this page only draws (`webui/mapsummary.py`, at
  * `/api/map`): the totals, the stage counts and each state's figures, counted the
- * way the Capex page counts — paused and cancelled campuses left out, one row per
+ * way the Capex page counts — paused, cancelled and denied campuses left out, one row per
  * suspected duplicate — and which duplicate rows not to draw. The dots are the
  * console's own projects, so a dot opens its campus.
  *
@@ -33,10 +33,10 @@ const loadAtlas = () =>
     .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
     .catch((e) => { atlasPromise = null; throw e; }));
 
-const STAGES = ["announced", "permitting", "construction", "operational", "paused", "cancelled"];
+const STAGES = ["announced", "permitting", "construction", "operational", "paused", "cancelled", "denied"];
 const STAGE_LABEL = {
   announced: "Announced", permitting: "Permitting", construction: "Construction",
-  operational: "Operational", paused: "Paused", cancelled: "Cancelled",
+  operational: "Operational", paused: "Paused", cancelled: "Cancelled", denied: "Denied",
 };
 
 /* Capacity bands, as (key, lower bound in MW, radius at full width). */
@@ -289,7 +289,7 @@ export function MapView({ data, api, onOpen, Eyebrow }) {
       <${Eyebrow} figure="fig. 02 — geography" title="Who is building, and where">
         A dot sits on the middle of the town, ${html`<b>not</b>`} on the site — almost nobody publishes an
         address. Bigger dot, more capacity planned; a hollow ring means nobody has said how big. The figures
-        count what the Capex page counts: paused and cancelled campuses are drawn but left out, and a campus
+        count what the Capex page counts: paused, cancelled and denied campuses are drawn but left out, and a campus
         suspected of being listed twice is counted and drawn once.
       <//>
 

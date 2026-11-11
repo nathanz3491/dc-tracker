@@ -42,6 +42,7 @@ PHASE_STYLE: dict[str, str] = {
     "construction": theme.CHART[2],
     "operational": theme.SUCCESS,
     "cancelled": theme.DANGER,
+    "denied": theme.DANGER,
     "paused": theme.DANGER,
 }
 

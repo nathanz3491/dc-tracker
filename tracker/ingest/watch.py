@@ -68,6 +68,7 @@ CADENCE: Final[dict[str, dt.timedelta]] = {
     "operational": dt.timedelta(days=3),
     "paused": dt.timedelta(days=7),
     "cancelled": dt.timedelta(days=14),
+    "denied": dt.timedelta(days=7),
 }
 
 #: For a stage not in :data:`CADENCE`.
@@ -128,6 +129,8 @@ NEXT_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "operational": ("expansion", "expanding", "new building", "phase", "acquired", "sold"),
     "paused": ("resumes", "restart", "cancelled", "sold", "revived"),
     "cancelled": ("revived", "resumes", "new developer", "sold"),
+    # A refusal is often appealed, sued over or resubmitted.
+    "denied": ("appeal", "lawsuit", "resubmit", "reconsider", "approved", "withdrawn"),
 }
 
 #: A company with at least this many campuses here is searched as a company too: its

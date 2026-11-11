@@ -44,7 +44,7 @@ _RESTRICTED: Final[dict[str, tuple[str, str]]] = {
     "county": ("has_locality", "derivable from a known locality"),
     "lat": ("has_locality", "derivable from a known locality"),
     "lon": ("has_locality", "derivable from a known locality"),
-    "expected_online": ("not_cancelled", "a cancelled campus will not come online"),
+    "expected_online": ("not_cancelled", "a cancelled or denied campus will not come online"),
 }
 
 #: Order the report in, chosen so the fields an operator can actually move sit
@@ -78,7 +78,7 @@ def _predicate(kind: str) -> ColumnElement[bool]:
         # numerator while they sat in the "filled" column, understating coverage.
         return Project.city.is_not(None) | Project.county.is_not(None)
     if kind == "not_cancelled":
-        return Project.phase.is_(None) | (Project.phase != "cancelled")
+        return Project.phase.is_(None) | Project.phase.not_in(("cancelled", "denied"))
     raise ValueError(f"unknown applicability rule {kind!r}")
 
 
@@ -145,7 +145,7 @@ def measure(session: Session, fields: tuple[str, ...] = REPORT_FIELDS) -> list[F
 #: their T2 on 2026-10-05 for a fact that cannot exist, and was 31 of the gaps
 #: enrich had already searched for twice and given up on.
 _NOT_BUILT_PHASES: Final[frozenset[str]] = frozenset(
-    {"announced", "permitting", "construction", "paused", "cancelled"}
+    {"announced", "permitting", "construction", "paused", "cancelled", "denied"}
 )
 
 #: A null here is frequently the truth, so an enrichment run must not report
@@ -631,13 +631,13 @@ def for_project(project: Project, fields: tuple[str, ...] = REPORT_FIELDS) -> li
         # No date can exist for a campus that will not open. Asking for one counted
         # against all 28 cancelled rows without a date on 2026-10-29, and kept the
         # field on the list the nightly research searches for.
-        if name == "expected_online" and project.phase == "cancelled":
+        if name == "expected_online" and project.phase in ("cancelled", "denied"):
             out.append(
                 FieldState(
                     name,
                     None,
                     NOT_APPLICABLE,
-                    "phase is cancelled — the campus will not come online, so null is correct",
+                    f"phase is {project.phase} — the campus will not come online, so null is correct",
                 )
             )
             continue

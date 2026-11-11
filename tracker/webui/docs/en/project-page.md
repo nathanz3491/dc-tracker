@@ -70,7 +70,7 @@ Each company appears once in a role, under the same one name every other page us
 
 ## Delay risk and obstacles
 
-The delay risk first — the level and every reason for it, each something you can check on this page. It is the same reading the company page's *Supply* gives the campus; see [Company pages](companies) for what each level rests on. A campus that is running is read the same way while it still has capacity to deliver; once nothing is left to deliver, or when it is paused or cancelled, the risk is low.
+The delay risk first — the level and every reason for it, each something you can check on this page. It is the same reading the company page's *Supply* gives the campus; see [Company pages](companies) for what each level rests on. A campus that is running is read the same way while it still has capacity to deliver; once nothing is left to deliver, or when it is paused, cancelled or denied, the risk is low.
 
 Then the obstacles, one line each: how serious, what kind, what it is, and when it was first seen (and resolved). *uncited* marks a summary nobody could quote. Click a line to open the sentence it rests on, its status, the progress track it holds up and what would show it clearing. Open obstacles come first, the most serious first, twelve at a time; resolved ones are behind **N resolved or set aside**.
 

@@ -24,7 +24,7 @@ The four cards are all in megawatts, because a company's size is its capacity, n
 The line under the cards says how the capacity figures are counted. They follow the [Capex](capex) page's rules:
 
 - a campus suspected of being stored twice counts once (see [Duplicates](duplicates));
-- paused and cancelled campuses count nothing;
+- paused, cancelled and denied campuses count nothing;
 - a tenant of some of a campus's buildings is credited with those buildings, not the whole campus.
 
 So **planned** is the company's own row on the Capex page, plus the campuses it builds that name no buyer — Capex lists those under *(no named customer)*. The line gives both parts. A campus it builds for a named tenant counts for that tenant, as on Capex. Every megawatt is therefore on exactly one company's page, and the company pages add up to the Capex total. That total can be slightly higher than the [Map](map)'s, for the reason given there.
@@ -39,7 +39,7 @@ When a campus does not count in full towards the figures above, a short note bes
 
 | Note | Meaning |
 | --- | --- |
-| *not counted: cancelled* (or *paused*) | Left out, as on Capex. |
+| *not counted: cancelled* (or *paused*, *denied*) | Left out, as on Capex. |
 | *not counted: #12 is the same campus* | Suspected to be a second row for campus #12, which is counted instead. |
 | *counted for …* | Capex credits this campus to another buyer, usually the tenant the company builds it for. |
 | *not counted: one of several buyers named …* | The campus's sources name several buyers and say nothing about how it divides between them, so none is credited with it. See [Capex](capex). |
@@ -56,7 +56,7 @@ Capacity the company is credited with that is not yet running, by the year each 
 - **Delay risk** is *high*, *elevated* or *low*, with the evidence it rests on, each something you can check on the campus's page:
   - *high* — a suspected delay; the online date has slipped twice or more; or an open obstacle a source says has stopped work;
   - *elevated* — one slip; an open obstacle a source says moved the schedule or scope; or due within a year with no construction reported.
-  Only obstacles with a quoted sentence count, and a date restated more precisely inside the same year is not a slip. A running campus is read the same way while it still has capacity to deliver; once it has none left, it is *low*, as is a paused or cancelled one. A campus's own page shows the same level with every reason (see [A project's page](project-page)).
+  Only obstacles with a quoted sentence count, and a date restated more precisely inside the same year is not a slip. A running campus is read the same way while it still has capacity to deliver; once it has none left, it is *low*, as is a paused, cancelled or denied one. A campus's own page shows the same level with every reason (see [A project's page](project-page)).
 - When one campus is **a fifth or more** of the three years' supply and is at elevated or high delay risk, a line above the bars names it: *Conesville is 38% of this supply (600 of 1,596 MW), and is at high delay risk: …*
 
 A tenant's share uses the campus's own date; a tranche's separate date is not yet read here.

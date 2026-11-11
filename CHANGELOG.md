@@ -12,6 +12,17 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A campus an authority turned down now reads `denied`.** A stage could only say a
+  campus was paused or cancelled, so a county voting down the rezoning — where the
+  developer may still appeal or sue, as King of Prussia's did within weeks — was
+  stored as one or the other, and the two verified answers saying `denied` could
+  never be met. `denied` joins `paused` and `cancelled` outside the progression: it
+  overrides a stage the way they do, has no online date and stays out of Capex. The
+  reader's "rejected", "voted down" and "denied" map to it, and `backfill phase`
+  rewrites a stored stop whose own sentence is a refusal rather than the developer
+  giving up. The console, the API reference and the reader docs show it (migration
+  0055, which rebuilds the project table and keeps every project number ever issued).
+
 - **Why a stored value is wrong, measured, and the research agent kept off
   investment.** Against the 229 verified answers, 10 of the 13 wrong investment
   figures should have been empty: real figures for two campuses, a power plant, a

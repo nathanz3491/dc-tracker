@@ -322,7 +322,7 @@ def _company_sums_campuses(projects: list[Any], context: Any) -> list[Violation]
     campus_credit = 0.0
     for pid in sorted(tally.counted - set(tally.set_aside)):
         project = by_id.get(pid)
-        if project is None or project.phase in ("paused", "cancelled"):
+        if project is None or project.phase in ("paused", "cancelled", "denied"):
             continue
         credited = sum(planned for planned, _ in capex.credits(project).values())
         campus_credit += credited

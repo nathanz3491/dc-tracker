@@ -2,7 +2,7 @@
 
 **Capex** adds the tracker up by **buyer**: the company that will actually use the capacity, which is often not the company building it. A developer building for a cloud company, for example, is counted under the cloud company.
 
-Paused and cancelled campuses are left out of every figure on this page.
+Paused, cancelled and denied campuses are left out of every figure on this page.
 
 > [!IMPORTANT]
 > **Every number here is a minimum.** Capacity no source has stated counts as zero, so the true totals are higher. Trust the megawatts before the dollars: capacity is reported far more often and more consistently than investment.

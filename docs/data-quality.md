@@ -484,7 +484,7 @@ articles read since.
 Reading those 27 rows gave the rules that followed: a construction sentence about a
 power plant, or about construction not yet started, no longer sets a campus's stage;
 a later expansion's ceiling is not the planned capacity; two more directories count as
-second-hand (one's own estimate had displaced a quoted 1.2 GW); a paused or cancelled
+second-hand (one's own estimate had displaced a quoted 1.2 GW); a paused, cancelled or denied
 campus holds no online date (`upsert.drop_halted_online_date`); and an unquoted copy of
 a figure whose quoted sentences were refused is not the fallback
 (`upsert._fallbacks_of_refused`). Together they fixed 5 answers on the key. One rule

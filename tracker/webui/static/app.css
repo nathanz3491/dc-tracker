@@ -1077,6 +1077,7 @@ h5.dc-md-h {
   --stage-operational: #4c7a46;
   --stage-paused: #8a680a;
   --stage-cancelled: #9a8a7a;
+  --stage-denied: var(--danger);
   --map-land: #ece3d4;
   --map-land-edge: #fffaf1;
 }
@@ -1087,6 +1088,7 @@ h5.dc-md-h {
   --stage-operational: #8fbf86;
   --stage-paused: #dfb75c;
   --stage-cancelled: #7f705f;
+  --stage-denied: var(--danger);
   --map-land: #2b2018;
   --map-land-edge: #1b1410;
 }

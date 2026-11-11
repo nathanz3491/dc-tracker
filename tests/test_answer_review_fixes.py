@@ -157,6 +157,62 @@ def test_an_unquoted_copy_of_a_refused_figure_is_not_the_fallback(session):
     assert project.investment_usd is None
 
 
+@pytest.mark.parametrize(
+    ("sentence", "expected"),
+    [
+        ("Pinal County supervisors on Wednesday rejected plans to build La Osa.", True),
+        ("Upper Merion's Board of Supervisors denied preliminary plans for 5 sites.", True),
+        ("The council voted down the rezoning 4-1.", True),
+        # The developer gave up, whatever the county did first.
+        ("Denied and cancelled", False),
+        ("After the county denied the rezoning, the developer withdrew the project.", False),
+        ("The project was cancelled last spring.", False),
+    ],
+)
+def test_a_refusal_is_not_a_cancellation(sentence, expected):
+    from tracker.ingest.crawl import stop_is_a_refusal
+
+    assert stop_is_a_refusal(sentence.lower()) is expected
+
+
+def test_a_refused_campus_is_denied_and_holds_no_online_date(session):
+    """Vermaland La Osa: the reader wrote `cancelled` for "supervisors rejected plans"."""
+    from tracker.backfill import regate_phases
+    from tracker.upsert import recompute_from_sources
+
+    project = _row(session, phase="cancelled", expected_online=None)
+    _cite(
+        session,
+        project,
+        "https://e.test/vote",
+        {"phase": "cancelled", "expected_online": "2028-01-01"},
+        {
+            "phase": "Pinal County supervisors on Wednesday rejected plans to build La Osa.",
+            "expected_online": "The first building would open in 2028.",
+        },
+        fields="expected_online",
+        unconfirmed_fields="phase",
+        unconfirmed_reasons=json.dumps({"phase": "quote_off_target"}),
+    )
+    report = regate_phases(session, apply=True)
+    assert report.refused == 1
+    recompute_from_sources(session, project)
+    assert project.phase == "denied"
+    assert project.expected_online is None
+
+
+def test_the_stage_vocabulary_and_the_schema_agree_on_denied(session):
+    from tracker.normalize import norm_phase
+    from tracker.vocab import PHASE_TERMINAL, PHASES
+
+    assert "denied" in PHASE_TERMINAL and "denied" in PHASES
+    assert norm_phase("rejected") == "denied"
+    assert norm_phase("voted down") == "denied"
+    project = _row(session, phase="denied")
+    session.flush()
+    assert project.phase == "denied", "the CHECK constraint takes it"
+
+
 def test_a_directory_estimate_does_not_displace_a_quoted_figure(session):
     from tracker.confidence import TERTIARY_DOMAINS
     from tracker.upsert import recompute_from_sources

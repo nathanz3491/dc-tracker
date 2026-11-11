@@ -86,7 +86,7 @@ Terms you will meet in the console and these docs, alphabetically.
 
 **Party** — a company involved in a campus, with its role: developer, owner, operator, customer, utility or contractor.
 
-**Phase** — how far along a campus is: announced, permitting, construction, operational, paused, cancelled.
+**Phase** — how far along a campus is: announced, permitting, construction, operational, paused, cancelled, denied.
 
 **Precision** — how precisely a date was stated: day, month, quarter, half or year.
 

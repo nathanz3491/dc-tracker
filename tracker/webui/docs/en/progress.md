@@ -12,14 +12,15 @@ The tracker describes how far along a campus is in two ways: a single **phase**,
 | **operational** | At least part of it is running. |
 | **paused** | Work has stopped, by the developer's own account or a source's. |
 | **cancelled** | Abandoned. |
+| **denied** | An authority turned the campus down (a rezoning voted down, a permit refused); the developer may still appeal. |
 
-The first four are a ladder. *Paused* and *cancelled* stand outside it: when a credible source says a campus has stopped, that overrides how far it had got.
+The first four are a ladder. *Paused*, *cancelled* and *denied* stand outside it: when a credible source says a campus has stopped, that overrides how far it had got.
 
 When sources disagree on the phase, the furthest-along phase that a quoted source supports wins — unless a source says the campus stopped. Named buildings can also move a campus forward: if a source says a named building is running, the campus is at least operational. A campus is only cancelled through its buildings when *every* one of them is stopped.
 
 If no source states a phase at all, the row shows **announced** as a [default](provenance), not as a reported fact.
 
-[Capex](capex) leaves paused and cancelled campuses out of its totals.
+[Capex](capex) leaves paused, cancelled and denied campuses out of its totals.
 
 ## Five tracks
 

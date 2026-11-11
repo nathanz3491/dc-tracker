@@ -60,6 +60,7 @@
   --stage-operational: #4c7a46;
   --stage-paused: #8a680a;
   --stage-cancelled: #9a8a7a;
+  --stage-denied: #b0463c;
   --shadow: 0 18px 40px -24px rgb(84 58 24 / .35);
 
   --serif: "Instrument Serif", Georgia, serif;
@@ -97,6 +98,7 @@
   --stage-operational: #8fbf86;
   --stage-paused: #dfb75c;
   --stage-cancelled: #7f705f;
+  --stage-denied: #e08a7e;
   --shadow: 0 0 transparent;
   color-scheme: dark;
 }
@@ -129,6 +131,7 @@
     --stage-operational: #8fbf86;
     --stage-paused: #dfb75c;
     --stage-cancelled: #7f705f;
+  --stage-denied: #e08a7e;
     --shadow: 0 0 transparent;
     color-scheme: dark;
   }

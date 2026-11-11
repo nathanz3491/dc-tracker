@@ -483,7 +483,7 @@ def capex(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "as_of_year": payload.get("as_of_year"),
         "note": "Every figure is a floor: capacity no source states counts as zero. "
-        "Paused and cancelled campuses are left out. Suspected duplicate rows are "
+        "Paused, cancelled and denied campuses are left out. Suspected duplicate rows are "
         "counted once and disclosed in duplicate_rows_skipped.",
         "unattributed_label": payload.get("unattributed"),
         "buyers": [{k: row.get(k) for k in keep} for row in payload.get("positions") or []],

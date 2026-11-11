@@ -158,6 +158,7 @@ _BLOCK_STYLE: dict[str, str] = {
     "planned": "dim",
     "paused": "red",
     "cancelled": "red",
+    "denied": "red",
 }
 
 

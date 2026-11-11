@@ -289,7 +289,7 @@ Three stages before anything is put to a model:
 
    Nor does a planned or half-built tranche lift the campus once its own citation's
    stage claim has been ruled a misread on the row (a running one still does), and a
-   campus the claims call cancelled or paused is lifted only by a running
+   campus the claims call cancelled, paused or denied is lifted only by a running
    (`serving`) building or by a tranche reported after the latest report of the stop
    (`blocks.lifting_blocks`, since 2026-10-30; the latest report since 10-31 — against
    the first, a roundup published between two reports of Sulphur Springs' halt lifted

@@ -27,7 +27,7 @@ Campuses, as the [Projects](projects) table shows them, with the same filters.
 | --- | --- |
 | `q` | Free text. Every word must appear in the campus's name, company, tenant, city, county, state or biggest obstacle. `#42` means campus 42. |
 | `state` | Two-letter state, such as `TX`. |
-| `phase` | `announced`, `permitting`, `construction`, `operational`, `paused` or `cancelled`. |
+| `phase` | `announced`, `permitting`, `construction`, `operational`, `paused`, `cancelled` or `denied` (an authority turned the campus down; the developer may still appeal). |
 | `min_confidence` | `1`, `2` or `3`. See [Confidence](confidence). |
 | `obstacle` | Campuses with an open obstacle of this kind, such as `grid_capacity`. |
 | `severity` | Campuses with an open obstacle at least this severe: `watch`, `material`, `blocking`. |
@@ -180,7 +180,7 @@ What the tracker records about the company itself: `kind` (`hyperscaler`, `landl
 
 `name` is the company's one name, the same on every page; each project also carries `company_name` and `customer_name` beside the source's own `company` and `customer`. The planned and running MW in `totals` are counted as on [Capex](capex) — a suspected duplicate once, paused and cancelled campuses not at all, a tenant credited with its own tranches — and `totals.counting` splits them into `capex_row` (the company's row in `/v1/capex`) and `no_named_buyer` (campuses it builds that name no buyer), with how many campuses were set aside as `duplicates`, `stopped` (paused or cancelled) or counted for another buyer (`elsewhere`). Each project's `counted` says what it adds: `status` (`counted`, `part`, `elsewhere`, `duplicate` or `stopped`), `mw_planned`, `mw_built`, and `for` (the other buyers) or `of` (the campus a duplicate is counted as).
 
-`builds` is the company as the builder of its campuses: `campuses`, `mw_planned` and `mw_built` over every campus it builds, whole, whoever buys it — paused, cancelled and suspected-duplicate rows left out. `totals` credits each campus to its buyer, as the Capex page does, so a builder that leases out what it builds has small `totals` and large `builds`.
+`builds` is the company as the builder of its campuses: `campuses`, `mw_planned` and `mw_built` over every campus it builds, whole, whoever buys it — paused, cancelled, denied and suspected-duplicate rows left out. `totals` credits each campus to its buyer, as the Capex page does, so a builder that leases out what it builds has small `totals` and large `builds`.
 
 `new_parties` is the page's *Newly mentioned suppliers*: the companies a source named on one of these campuses for the first time in the last `days` (30) days, since `since`, the company itself left out. `parties` holds one entry per company — suppliers (contractors and utilities) first, then newest first — with `key`, `name` (its one name), `roles`, `supplier`, `confirmed` (true when a sentence supports its role on at least one campus), `latest` (the most recent date it was first named on a campus) and `campuses`. Each campus has `id`, `name`, `company` (its operator), `place`, `state`, `role` and `roles` (the company's roles there), `first_cited`, `quote`, `unconfirmed` (null, `role_inferred`, or why the role is 待确认), `url` (the article) and `new_campus` (true when the campus itself was first reported in the window). A role that has ended is never listed.
 
@@ -199,7 +199,7 @@ What the tracker records about the company itself: `kind` (`hyperscaler`, `landl
 | `duplicate_rows_skipped`, `mw_duplicate_skipped` | Suspected duplicate rows set aside rather than counted twice. |
 | `project_ids` | The campuses behind the row. |
 
-Every figure is a floor, and paused and cancelled campuses are left out.
+Every figure is a floor, and paused, cancelled and denied campuses are left out.
 
 ## GET /v1/updates
 

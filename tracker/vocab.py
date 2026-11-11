@@ -29,10 +29,16 @@ PHASE_PROGRESSION: Final[tuple[str, ...]] = (
 #: `PHASE_TERMINAL` is read as membership by three more: `capex` excludes it from the
 #: totals, `blocks.furthest_status` gives it the same override one level down, and
 #: `normalize._PHASE_FALLBACK` resolves a phrase naming two phases to it.
-PHASE_TERMINAL: Final[tuple[str, ...]] = ("paused", "cancelled")
+#:
+#: `denied` (migration 0055): an authority turned the campus down — a rezoning voted
+#: down, a permit refused. Neither paused (nothing is on hold) nor cancelled (the
+#: developer may appeal or sue, and often does).
+PHASE_TERMINAL: Final[tuple[str, ...]] = ("paused", "cancelled", "denied")
 PHASES: Final[tuple[str, ...]] = PHASE_PROGRESSION + PHASE_TERMINAL
 
-Phase = Literal["announced", "permitting", "construction", "operational", "paused", "cancelled"]
+Phase = Literal[
+    "announced", "permitting", "construction", "operational", "paused", "cancelled", "denied"
+]
 
 #: A *capacity block's* own ladder — one tranche of a campus, not the campus.
 #:

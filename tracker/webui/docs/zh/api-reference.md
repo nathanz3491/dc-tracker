@@ -27,7 +27,7 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | --- | --- |
 | `q` | 自由文本。每个词都必须出现在园区的名称、公司、租户、城市、县、州或最大障碍中。`#42` 表示 42 号园区。 |
 | `state` | 两个字母的州代码，例如 `TX`。 |
-| `phase` | `announced`、`permitting`、`construction`、`operational`、`paused` 或 `cancelled`。 |
+| `phase` | `announced`、`permitting`、`construction`、`operational`、`paused`、`cancelled` 或 `denied`（主管部门否决了该园区，开发商仍可能上诉）。 |
 | `min_confidence` | `1`、`2` 或 `3`。参见[可信度](confidence)。 |
 | `obstacle` | 存在这一类未解决障碍的园区，例如 `grid_capacity`。 |
 | `severity` | 存在至少达到这一严重程度的未解决障碍的园区：`watch`、`material`、`blocking`。 |
@@ -178,9 +178,9 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 
 系统关于公司本身记录的信息：`kind`（`hyperscaler`、`landlord`、`neocloud`、`ai_lab`、`utility`、`contractor`，或 null）、`parent` 和 `subsidiaries`（均为 `{name, slug}`），以及 `also_written` —— 其各园区来源使用的其他写法。母公司的数字不包括子公司的：每家公司的容量就是它自己的园区，与 [Capex](capex) 一致。
 
-`name` 是公司唯一的名称，在每个页面上都相同；每个项目除来源原文的 `company` 和 `customer` 外，还带有 `company_name` 和 `customer_name`。`totals` 中规划和运行的兆瓦数按 [Capex](capex)（资本支出）的方式计算——疑似重复的园区只算一次，暂停和取消的园区不计入，租户只计入自己的分期——`totals.counting` 把它们拆成 `capex_row`（该公司在 `/v1/capex` 中的那一行）和 `no_named_buyer`（它建设、但没有具名买方的园区），并给出因 `duplicates`（重复）、`stopped`（暂停或取消）或计入其他买方（`elsewhere`）而被搁置的园区数量。每个项目的 `counted` 说明它贡献了什么：`status`（`counted`、`part`、`elsewhere`、`duplicate` 或 `stopped`）、`mw_planned`、`mw_built`，以及 `for`（其他买方）或 `of`（重复项所归入的园区）。
+`name` 是公司唯一的名称，在每个页面上都相同；每个项目除来源原文的 `company` 和 `customer` 外，还带有 `company_name` 和 `customer_name`。`totals` 中规划和运行的兆瓦数按 [Capex](capex)（资本支出）的方式计算——疑似重复的园区只算一次，暂停、取消和被否决的园区不计入，租户只计入自己的分期——`totals.counting` 把它们拆成 `capex_row`（该公司在 `/v1/capex` 中的那一行）和 `no_named_buyer`（它建设、但没有具名买方的园区），并给出因 `duplicates`（重复）、`stopped`（暂停、取消或被否决）或计入其他买方（`elsewhere`）而被搁置的园区数量。每个项目的 `counted` 说明它贡献了什么：`status`（`counted`、`part`、`elsewhere`、`duplicate` 或 `stopped`）、`mw_planned`、`mw_built`，以及 `for`（其他买方）或 `of`（重复项所归入的园区）。
 
-`builds` 是把该公司作为其园区建设方来计算：`campuses`、`mw_planned` 和 `mw_built` 涵盖它建设的每个园区（整体计入，不论买方是谁），不含已暂停、已取消和疑似重复的行。`totals` 则像 Capex 页面一样把每个园区计入其买方，所以建设后租出去的建设方，`totals` 小而 `builds` 大。
+`builds` 是把该公司作为其园区建设方来计算：`campuses`、`mw_planned` 和 `mw_built` 涵盖它建设的每个园区（整体计入，不论买方是谁），不含已暂停、已取消、被否决和疑似重复的行。`totals` 则像 Capex 页面一样把每个园区计入其买方，所以建设后租出去的建设方，`totals` 小而 `builds` 大。
 
 `new_parties` 即页面上的 *Newly mentioned suppliers*（最近被提到的新供应商）：过去 `days`（30）天内（自 `since` 起）首次被来源点名出现在这些园区之一上的公司，公司本身不计在内。`parties` 每家公司一项 —— 先列供应商（承包商和电力公司），再按日期从新到旧 —— 包含 `key`、`name`（它唯一的名称）、`roles`、`supplier`、`confirmed`（至少在一个园区上有原句支持其角色时为 true）、`latest`（它在某个园区上首次被提到的最近日期）和 `campuses`。每个园区包含 `id`、`name`、`company`（其运营方）、`place`、`state`、`role` 和 `roles`（该公司在那里的角色）、`first_cited`、`quote`、`unconfirmed`（null、`role_inferred`，或该角色为何是待确认）、`url`（文章）以及 `new_campus`（园区本身在该时间窗口内首次被报道时为 true）。角色已结束的不会列出。
 
@@ -199,7 +199,7 @@ API 第 1 版的全部接口。所有接口都是 `GET`，以 JSON 返回，地�
 | `duplicate_rows_skipped`、`mw_duplicate_skipped` | 疑似重复、被单独搁置而不重复计算的行。 |
 | `project_ids` | 构成这一行的园区。 |
 
-每个数字都是下限，暂停和已取消的园区不计入。
+每个数字都是下限，暂停、已取消和被否决的园区不计入。
 
 ## GET /v1/updates
 

@@ -156,7 +156,7 @@ def delay_risk(
     company page reads the whole fleet's at once); otherwise it is worked out here.
     """
     phase = (getattr(project, "phase", None) or "").lower()
-    if phase in ("paused", "cancelled") or (
+    if phase in ("paused", "cancelled", "denied") or (
         phase == "operational" and not _capacity_to_come(project)
     ):
         return DelayRisk(LOW)

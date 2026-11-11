@@ -995,6 +995,9 @@ _PHASE_SYNONYMS: dict[str, str] = {
     "withdrawn": "cancelled", "retracted": "cancelled",
     "abandoned": "cancelled", "scrapped": "cancelled",
     "terminated": "cancelled", "deactivated": "cancelled", "dead": "cancelled",
+    # An authority said no (migration 0055): not on hold, and not given up.
+    "denied": "denied", "deny": "denied", "denial": "denied", "rejected": "denied",
+    "voted down": "denied", "turned down": "denied", "vetoed": "denied",
     # Plural and nominalized forms are spelled out rather than left to a stem match:
     # `_PHASE_FALLBACK` matches on word boundaries, so `cancel` does not cover
     # "cancellation" — and losing that would lose a terminal state, which is the
