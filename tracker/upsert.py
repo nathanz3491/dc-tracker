@@ -523,6 +523,9 @@ def _prefer_publication_date(settings: Any = None) -> bool:
 def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str, list[_Claim]]:
     """field -> every claim about it, strongest first."""
     out: dict[str, list[_Claim]] = {}
+    #: Values whose own sentence was read as another kind of figure
+    #: (`_not_this_figure`), per field, for `_fallbacks_of_refused`.
+    refused: dict[str, list[Any]] = {}
     for s in sources:
         if not s.claims:
             continue
@@ -544,7 +547,11 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         if not isinstance(claims, dict):
             continue
         unconfirmed = {f.strip() for f in (s.unconfirmed_fields or "").split(",") if f.strip()}
-        decided = _decided_against(s) | _withheld(s) | _not_this_figure(s)
+        read_out = _not_this_figure(s)
+        for name in read_out:
+            if claims.get(name) is not None:
+                refused.setdefault(name, []).append(claims[name])
+        decided = _decided_against(s) | _withheld(s) | read_out
         # Parsed once per source rather than once per claim and axis: it was 770,000
         # `json.loads` of the same few hundred envelopes per nightly count.
         meta = _claim_meta(s)
@@ -574,7 +581,30 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     quote=quotes.get(name),
                 )
             )
+    _fallbacks_of_refused(out, refused)
     return rank_claims(out, settings=settings)
+
+
+def _fallbacks_of_refused(out: dict[str, list[_Claim]], refused: dict[str, list[Any]]) -> None:
+    """Leave out an unquoted claim of a figure whose quoted sentences were refused.
+
+    When every sentence that states "$22 billion" says it is a power campus's cost,
+    the same $22 billion on a citation that quoted nothing is not better evidence —
+    it is the same figure with less behind it. Left in, it became Project Star's
+    stored investment on 2026-11-11 the moment both quoted claims were refused.
+    """
+    for name, values in refused.items():
+        claims = out.get(name)
+        if not claims:
+            continue
+        out[name] = [
+            _dataclass_replace(c, decided_against=True)
+            if not c.confirmed
+            and not c.decided_against
+            and any(_same_claim(c.value, v) for v in values)
+            else c
+            for c in claims
+        ]
 
 
 def _quotes(source: Source) -> dict[str, str]:
@@ -2277,6 +2307,8 @@ def upsert_record(
     built_from_claims = project.mw_built
     block_notes = blocks_mod.reconcile(project)
     capacity_notes += _cap_tranche_built(project, built_from_claims)
+    # After the reconcile, which can move the phase.
+    capacity_notes += drop_halted_online_date(project)
     # Parties after the block reconcile, because both may fill a null `customer`
     # and a tranche naming its own tenant is the more specific statement. Same
     # ordering and same reason as in `recompute_from_sources`.
@@ -2830,6 +2862,29 @@ _DATE_PRECISION_FIELDS: tuple[str, ...] = ("first_announced", "expected_online")
 BASIS_FIELDS_ORDERED: tuple[str, ...] = ("mw_planned", "mw_built")
 
 
+def drop_halted_online_date(project: Project) -> list[str]:
+    """Leave a paused or cancelled campus's online date empty. Returns the note, if any.
+
+    The date its citations give is when the campus was meant to come online before
+    it stopped, and a reader filtering "online in 2026" takes it as a forecast. The
+    answer key's rule since 2026-10-31 (a halted campus's old online date should be
+    empty) found two rows holding one — Sulphur Springs' "Q4 2026: 400MW" and Stream
+    Genesee's "fully operational by 2030" — which no sentence check could refuse,
+    because each sentence is real. The citations keep the date; a restart re-derives it.
+    """
+    from tracker.vocab import PHASE_TERMINAL
+
+    if (project.phase or "") not in PHASE_TERMINAL or project.expected_online is None:
+        return []
+    was = project.expected_online
+    project.expected_online = None
+    project.expected_online_precision = None
+    return [
+        f"expected_online {was} left empty: the campus is {project.phase}, and the date "
+        "its citations give is the plan it had before it stopped"
+    ]
+
+
 def apply_date_precision(project: Project, by_field: dict[str, list] | None = None) -> None:
     """Cache how precisely each date was stated, from the claim that won.
 
@@ -3023,6 +3078,8 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     built_from_claims = project.mw_built
     block_notes = blocks_mod.reconcile(project)
     capacity_notes += _cap_tranche_built(project, built_from_claims)
+    # After the reconcile, which can move the phase.
+    capacity_notes += drop_halted_online_date(project)
     # **Parties before the block reconcile would be wrong, and after it is right.**
     # Both may fill a null `customer`, and a tranche that names its tenant is the
     # more specific statement — Lake Mariner's 378 MW for Fluidstack beside 60 MW

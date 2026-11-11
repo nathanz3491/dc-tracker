@@ -1527,6 +1527,8 @@ def _backfill_phase(*, apply: bool, dry_run: bool) -> None:
             {
                 "claims": report.claims,
                 "refiled": report.refiled,
+                "construction": report.construction,
+                "not_the_campus": report.not_the_campus,
                 "projects": sorted(report.projects),
                 "moved": [
                     {"project_id": pid, "from": before, "to": after}

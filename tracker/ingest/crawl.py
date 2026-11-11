@@ -822,6 +822,73 @@ def _grows_an_existing_site(low: str) -> bool:
     return bool(_EXPANSION_WORDING.search(low) and _EXISTING_WORDING.search(low))
 
 
+#: Construction that has not started: "construction of the first phase to commence in
+#: late 2026", "before construction can begin", "will begin construction". The bare
+#: word `construction` in `_PHASE_EVIDENCE` read every one of these as a campus being
+#: built. Past and present tense ("construction began", "is under construction") are
+#: untouched.
+_FUTURE: Final = (
+    r"(?:will|would|could|may|is to|are to|plans? to|planning to|expects? to|aims? to|"
+    r"(?:is |are |was |were )?(?:expected|scheduled|slated|planned|set|due|anticipated) to)"
+)
+_CONSTRUCTION_TO_COME: Final = re.compile(
+    rf"\b{_FUTURE} (?:begin|start|commence)\s+construction\b"
+    rf"|\bconstruction\b[^.;]{{0,60}}?\b{_FUTURE} (?:begin|start|commence)\b"
+    r"|\bbefore construction (?:can|could|may|will) (?:begin|start)\b"
+    r"|\bcalls? for (?:the )?construction\b[^.;]{0,60}?\bto (?:begin|start|commence)\b"
+)
+
+#: Construction that has happened, which outweighs any future clause beside it:
+#: "has broken ground on two of the three facilities, with construction of the third
+#: due to commence".
+_CONSTRUCTION_UNDER_WAY: Final = re.compile(
+    r"\b(?:broke|broken|breaks) ground\b|\bunder construction\b|\bunderway\b|"
+    r"\b(?:began|begun|started) (?:construction|work|building)\b|"
+    r"\bconstruction (?:began|has begun|started|is (?:under ?way|ongoing|progressing))\b"
+)
+
+#: A power plant, a pipeline or the grid: what is under construction when a sentence
+#: names one of these and no data center. "Tallgrass is developing an associated
+#: natural gas power hub, which Laramie County said was already under construction"
+#: put Google's Cheyenne campus at construction; its own stage was land-use approval.
+_PLANT_WORDING: Final = re.compile(
+    r"\b(?:power (?:plant|station|hub|project|facility)|generating (?:station|plant|facility)|"
+    r"gas[- ]fired|natural[- ]gas (?:plant|facility|power|generation|hub)|gas turbines?|"
+    r"turbines|substation|transmission line|pipeline|microgrid|generation facility|"
+    r"solar (?:farm|project)|battery storage)\b"
+)
+_CAMPUS_WORDING: Final = re.compile(
+    r"\b(?:data[- ]?cent(?:er|re)s?|campus|hyperscale|ai factory|computing|servers?|"
+    r"capacity|it load|buildings?|facilit(?:y|ies))\b"
+)
+
+#: The plant supplies the campus rather than being what is built: "powered by a
+#: 400MW Oncor substation", "running temporary gas turbines".
+_SUPPLYING: Final = re.compile(
+    r"\b(?:powered by|supplied by|served by|fed by|supported by|running|runs on|"
+    r"delivering|adjacent|next to|near|beside|co-?located)\b"
+)
+
+
+def construction_not_of_the_campus(low: str) -> bool:
+    """Whether a lower-cased sentence's construction is not this campus being built.
+
+    Either it has not started (`_CONSTRUCTION_TO_COME`), or what is being built is a
+    power plant, a pipeline or the grid and the sentence names no data center
+    (`_PLANT_WORDING` without `_CAMPUS_WORDING`). Measured on the 2026-11-11 answer
+    key: two verified permitting campuses read as under construction this way.
+    """
+    if _CONSTRUCTION_UNDER_WAY.search(low) and not _PLANT_WORDING.search(low):
+        return False
+    if _CONSTRUCTION_TO_COME.search(low) and not _CONSTRUCTION_UNDER_WAY.search(low):
+        return True
+    return bool(
+        _PLANT_WORDING.search(low)
+        and not _CAMPUS_WORDING.search(low)
+        and not _SUPPLYING.search(low)
+    )
+
+
 #: Article wording that evidences each risk category.
 #:
 #: Same mechanism and same reason as `_PHASE_EVIDENCE` above. A risk category is a
@@ -1267,6 +1334,8 @@ def _stated_in(field: str, value: Any, quote: str) -> bool:
             return False
         low = quote.lower()
         if str(value) in _EARLY_PHASES and _grows_an_existing_site(low):
+            return False
+        if str(value) == "construction" and construction_not_of_the_campus(low):
             return False
         return any(token in low for token in _PHASE_EVIDENCE.get(str(value), ()))
 
@@ -2139,9 +2208,20 @@ _SUPPLIER = re.compile(
 #: plant constantly ("1.8 gigawatts, nearly the generation capacity of the Hoover
 #: Dam"), so for megawatts only the figure's own noun decides.
 _MW_IS_PLANT = re.compile(
-    r"^(?:\s+(?:of|in))?(?:\s+(?:new|natural|natural-gas|gas|gas-fired|nuclear|on-site|onsite|"
-    r"combined-cycle|solar|wind|operational|behind-the-meter))*\s+"
-    r"(?:power plant|power station|generating station|generation|generating capacity|turbines?)\b"
+    r"^(?:\s+(?:of|in|from))?(?:\s+(?:new|natural|natural-gas|gas|gas-fired|nuclear|on-site|onsite|"
+    r"combined-cycle|solar|wind|operational|behind-the-meter|an|a|the))*\s+"
+    r"(?:power plant|power station|generating station|generation|generating capacity|turbines?|"
+    r"microgrid)\b"
+)
+
+#: A later expansion's ceiling, not the plan: "a clear expansion path to 8GW+", "a
+#: 1,000-megawatt base case with potential expansion to 1,500 megawatts". Matched only
+#: directly before the figure. "Designed to scale to 1 gigawatt" is how a plan is
+#: often stated, so "scale to" is not here.
+_EXPANSION_CEILING = re.compile(
+    r"\b(?:expansion path|potential expansion|potential to expand|expandable|"
+    r"could (?:expand|grow)|future expansion|further expansion|eventual expansion|"
+    r"room to (?:expand|grow))\s+to\s+(?:about |approximately |roughly |more than |over |up to )?$"
 )
 
 #: The figure belongs to one named campus: "a 192MW campus in Culpeper". A list of
@@ -2191,6 +2271,10 @@ def wider_kind(quote: str | None, value: Any, field: str) -> str | None:
     campus" (Homer City), and two campuses summed into "Madison County investment".
     The reader's own scope label had said "this site" for all of them.
 
+    A later expansion's ceiling counts too ("a clear expansion path to 8GW+",
+    "potential expansion to 1,500 megawatts"): it is a figure for more than the
+    campus being planned.
+
     Read from the verified sentence like `money_kind`, for `investment_usd` and
     `mw_planned`, and only for the figure claimed (within 5%). Kept narrow on
     purpose: drafts that read "over the next ten years", "across all phases" or
@@ -2211,6 +2295,9 @@ def wider_kind(quote: str | None, value: Any, field: str) -> str | None:
         for amount, before, after in _clause_figures(text, field)
         if abs(amount - claimed) <= 0.05 * claimed
     ]
+    # A later expansion's ceiling is never the plan, whatever noun follows it.
+    if figures and all(_EXPANSION_CEILING.search(before) for before, _ in figures):
+        return "covers_more"
     # A sentence that gives the figure to one campus of its own anywhere — "a 10 GW
     # data center campus powered by 10 GW of new generation" — is that campus's.
     if any(_OWN_OBJECT.match(after) for _, after in figures):

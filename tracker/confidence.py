@@ -195,6 +195,13 @@ TERTIARY_DOMAINS = frozenset(
         "dcatlas.io",
         "electricchoice.com",
         "metrocoloadvisory.com",
+        # Added 2026-11-11, from the answer-key review: everydatacenter's own
+        # estimate ("960 MW planned IT capacity … (our estimate)") displaced Project
+        # Spade's quoted 1.2 GW, and an encyclopedia's "In August 2026, another data
+        # center … was announced" dated Project Tamarack a month before the
+        # governor first announced it.
+        "everydatacenter.com",
+        "wvencyclopedia.org",
         # lists, digests and reposts
         "blackridgeresearch.com",
         "brightlio.com",

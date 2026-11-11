@@ -1191,10 +1191,17 @@ class PhaseReport:
     #: (project id, phase before, phase after), once re-derived.
     moved: list[tuple[int, str, str]] = field(default_factory=list)
 
+    #: Confirmed `construction` claims with a stored sentence, read.
+    construction: int = 0
+    #: Of those, sentences whose construction is a power plant's or has not started.
+    not_the_campus: int = 0
+
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("announced or permitting claims read", self.claims),
             ("about growing a site that exists", self.refiled),
+            ("construction claims read", self.construction),
+            ("a plant's construction, or not started", self.not_the_campus),
             ("rows whose phase moved", len(self.moved)),
         ]
 
@@ -1208,7 +1215,12 @@ def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
     Claims read before keep the shape they were given until their article is read
     again, and some never are; this applies that one rule to what is stored.
 
-    **That rule only, never the whole wording table.** Re-gating every stored phase
+    Since 2026-11-11 the same holds for a `construction` claim whose sentence builds a
+    power plant and names no data center, or whose construction has not started
+    ("construction of the first phase to commence in late 2026")
+    (`crawl.construction_not_of_the_campus`).
+
+    **Those rules only, never the whole wording table.** Re-gating every stored phase
     claim against `_PHASE_EVIDENCE` was tried on the 2026-10-21 copy and would have
     demoted correct ones the table has never held the words for — "Our 750MW
     Childress site has been operating since April 2023" — moving rows backwards,
@@ -1221,7 +1233,11 @@ def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
     """
     import json
 
-    from tracker.ingest.crawl import _EARLY_PHASES, _grows_an_existing_site
+    from tracker.ingest.crawl import (
+        _EARLY_PHASES,
+        _grows_an_existing_site,
+        construction_not_of_the_campus,
+    )
     from tracker.upsert import WRITABLE_FIELDS, recompute_from_sources
 
     def _names(text: str | None) -> set[str]:
@@ -1241,12 +1257,18 @@ def regate_phases(session: Session, *, apply: bool = False) -> PhaseReport:
         quote = quotes.get("phase") if isinstance(quotes, dict) else None
         if not value or not quote or "phase" not in fields or "phase" in unconfirmed:
             continue
-        if value not in _EARLY_PHASES:
+        if value in _EARLY_PHASES:
+            report.claims += 1
+            if not _grows_an_existing_site(quote.lower()):
+                continue
+            report.refiled += 1
+        elif value == "construction":
+            report.construction += 1
+            if not construction_not_of_the_campus(quote.lower()):
+                continue
+            report.not_the_campus += 1
+        else:
             continue
-        report.claims += 1
-        if not _grows_an_existing_site(quote.lower()):
-            continue
-        report.refiled += 1
         report.projects.add(source.project_id)
         if len(report.examples) < 12:
             report.examples.append((source.project_id, str(value), quote[:100]))

@@ -66,6 +66,25 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **Five ways a real sentence set the wrong value, closed.** Reading the 27 verified
+  answers the database got wrong again found each held by a sentence about something
+  else:
+  - a power plant's construction, or construction not yet started ("construction of
+    the first phase to commence in late 2026"), no longer sets a campus's stage — 28
+    stored claims refiled;
+  - a later expansion's ceiling ("a clear expansion path to 8GW+") is not the planned
+    capacity;
+  - two more directories count as second-hand, so one's own estimate ("960 MW … our
+    estimate") no longer displaces a quoted 1.2 GW;
+  - a paused or cancelled campus holds no online date — 15 rows;
+  - an unquoted copy of a figure whose quoted sentences were refused is not the
+    fallback.
+
+  On the answer key: 5 more right, one moved to empty (Joliet's online date, now that
+  the campus reads paused). Tried and dropped: stopping directories' tranches lifting a
+  campus's stage, which demoted long-running campuses (`crawl.construction_not_of_the_campus`,
+  `crawl._EXPANSION_CEILING`, `upsert.drop_halted_online_date`,
+  `upsert._fallbacks_of_refused`).
 - **A figure for more than the campus is never the campus's value.** "A $22.3
   billion energy infrastructure campus", a power station converted into "an energy and
   data center campus", two campuses summed into "Madison County investment", "an 800

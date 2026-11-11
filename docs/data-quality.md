@@ -481,6 +481,17 @@ value is also stated by newer citations. On 2026-11-11, 27 verified answers were
 wrong, and most had been corrected by `answers apply` on 11-01 and re-asserted by
 articles read since.
 
+Reading those 27 rows gave the rules that followed: a construction sentence about a
+power plant, or about construction not yet started, no longer sets a campus's stage;
+a later expansion's ceiling is not the planned capacity; two more directories count as
+second-hand (one's own estimate had displaced a quoted 1.2 GW); a paused or cancelled
+campus holds no online date (`upsert.drop_halted_online_date`); and an unquoted copy of
+a figure whose quoted sentences were refused is not the fallback
+(`upsert._fallbacks_of_refused`). Together they fixed 5 answers on the key. One rule
+was tried and dropped: tranches from directories no longer lifting a campus's stage
+fixed directories' "serving" on new campuses and demoted long-running ones whose
+first-hand news is about expansions (Meta Los Lunas) — about 3 of 18 moves wrong.
+
 **Nothing else here says whether a stored value is true.** The quote check says a
 sentence exists, the tiers count open questions, and every merge rule was justified
 by the incident that prompted it. On 2026-10-30 a researched draft for the 50
