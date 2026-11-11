@@ -84,6 +84,37 @@ def test_a_no_figure_answer_empties_the_field(session):
     assert project.mw_planned is None
 
 
+def test_a_ruling_on_a_claim_the_key_holds_right_is_lifted(session):
+    """The 2026-11-11 shape: the right figure stood ruled out from an earlier reading."""
+    from tracker.conflicts import supersede
+    from tracker.models import Source
+
+    project = _cited(
+        session,
+        "Campus D",
+        **{
+            "https://a.example/old": {"mw_planned": 1500.0},
+            "https://a.example/new": {"mw_planned": 1000.0},
+        },
+    )
+    right = next(s for s in project.sources if s.url.endswith("/new"))
+    supersede(right, "mw_planned", reason="misread")
+    session.commit()
+    recompute_from_sources(session, project)
+    assert project.mw_planned == 1500.0
+    _answer(session, project, "mw_planned", "1000")
+
+    (fix,) = answer_apply.plan(session)
+    assert fix.lifted == [right.id] and len(fix.refuted) == 1
+    (outcome,) = answer_apply.apply(session, [fix])
+    session.commit()
+
+    assert outcome.verdict == "right"
+    assert project.mw_planned == 1000.0
+    assert "mw_planned" not in (session.get(Source, right.id).unconfirmed_fields or "")
+    assert "ruling(s) on right claim(s) lifted" in (project.notes or "")
+
+
 def test_a_value_the_key_holds_right_is_left_alone(session):
     project = _cited(session, "Campus C", **{"https://a.example/x": {"mw_planned": 300.0}})
     _answer(session, project, "mw_planned", "300")

@@ -472,6 +472,15 @@ values moved, all read by hand. It stays narrow because the obvious markers misf
 one campus's own total, and a data center's demand is described beside a power plant
 in most sentences about it.
 
+**A ruling is about a value, not a field.** Of the wrong answers whose right value had
+been read, 7 held it on a citation ruled out while it said something else; a re-read
+changed the claim to the right value and the ruling stayed. Re-reads now carry a
+ruling only onto the same value, and `answers apply` lifts one that stands on a claim
+the key proves right. Lifting those 7 moved no answer, though: in each row the wrong
+value is also stated by newer citations. On 2026-11-11, 27 verified answers were
+wrong, and most had been corrected by `answers apply` on 11-01 and re-asserted by
+articles read since.
+
 **Nothing else here says whether a stored value is true.** The quote check says a
 sentence exists, the tiers count open questions, and every merge rule was justified
 by the incident that prompted it. On 2026-10-30 a researched draft for the 50

@@ -17,6 +17,12 @@ is the same two moves a person makes by hand:
    judges wrong for that field is marked decided against as `misread` (the sentence
    was about something else), exactly as `logic rule-out` does, and the row is
    re-derived from what stands.
+3. **Lift the rulings the answer refutes.** A claim the key judges right that stands
+   ruled out loses its ruling. On 2026-11-11, 7 of the 11 wrong answers whose right
+   value had been read held it on such a claim: the citation was ruled out when it said
+   something else ("construction", "cancelled") and a re-read changed it to the right
+   value ("permitting", "denied") while the ruling stayed. Re-reads no longer carry a
+   ruling onto a new value (`upsert._carried_reasons`); this clears the ones that did.
 
 An answer of "no figure" (the field should be empty) is step 2 alone. The decision
 goes into the row's notes as the answer key's. Afterwards each row is judged again;
@@ -52,6 +58,7 @@ class Fix:
     cite: bool
     refuted: list[int] = field(default_factory=list)  # source ids whose claim goes
     note: str = ""
+    lifted: list[int] = field(default_factory=list)  # ruled-out right claims let back
 
 
 @dataclass
@@ -106,13 +113,21 @@ def plan(session: Session, project_ids: list[int] | None = None) -> list[Fix]:
         held, precision = answer_key.held_values(project)[answer.field]
         if answer_key.judge(answer, held, precision) != "wrong":
             continue
-        refuted = []
+        refuted, lifted = [], []
         backing_inside = False
         for source in project.sources:
             claims = _claims(source)
-            if answer.field not in claims or _decided(source, answer.field):
+            if answer.field not in claims:
                 continue
-            verdict = answer_key.judge(answer, claims[answer.field], None)
+            try:
+                verdict = answer_key.judge(answer, claims[answer.field], None)
+            except (TypeError, ValueError):
+                continue
+            if _decided(source, answer.field):
+                if verdict == "right":
+                    lifted.append(source.id)
+                    backing_inside = True
+                continue
             if verdict == "wrong":
                 refuted.append(source.id)
             elif verdict in ("right", "imprecise"):
@@ -125,7 +140,16 @@ def plan(session: Session, project_ids: list[int] | None = None) -> list[Fix]:
         elif point and not cite and not backing_inside:
             refuted, note = [], "no cited sentence to stand in for what would be ruled out"
         fixes.append(
-            Fix(answer.project_id, answer.field, held, _shown(answer), cite, refuted, note)
+            Fix(
+                answer.project_id,
+                answer.field,
+                held,
+                _shown(answer),
+                cite,
+                refuted,
+                note,
+                lifted=[] if note else lifted,
+            )
         )
     return fixes
 
@@ -171,7 +195,7 @@ def apply(session: Session, fixes: list[Fix], *, now: dt.datetime | None = None)
     """Make each fix and judge the row again. The caller commits."""
     from tracker import logic as logic_mod
     from tracker.audit import fmt_value
-    from tracker.conflicts import supersede
+    from tracker.conflicts import lift_ruling, supersede
     from tracker.models import Source
     from tracker.upsert import recompute_confidence, recompute_from_sources
 
@@ -191,6 +215,10 @@ def apply(session: Session, fixes: list[Fix], *, now: dt.datetime | None = None)
             source = session.get(Source, source_id)
             if source is not None:
                 supersede(source, fix.field, reason="misread")
+        for source_id in fix.lifted:
+            source = session.get(Source, source_id)
+            if source is not None:
+                lift_ruling(source, fix.field)
         if Project.__table__.columns[fix.field].nullable:
             setattr(project, fix.field, None)
         session.flush()
@@ -199,6 +227,7 @@ def apply(session: Session, fixes: list[Fix], *, now: dt.datetime | None = None)
         what = (
             f"{fix.field} {fmt_value(before)} -> {fmt_value(after)} (answer key: {fix.answer}; "
             f"{len(fix.refuted)} claim(s) ruled out as misread"
+            + (f"; {len(fix.lifted)} ruling(s) on right claim(s) lifted" if fix.lifted else "")
             + ("; its sentence cited" if fix.cite else "")
             + ")"
         )

@@ -472,6 +472,35 @@ def supersede(source: Source, field: str, *, reason: str = SUPERSEDED) -> bool:
     return True
 
 
+def lift_ruling(source: Source, field: str) -> bool:
+    """Undo `supersede`: let one citation's claim about one field back into the merge.
+
+    Only a decision is lifted (`upsert.DECIDED_REASONS`); a measured reason — no
+    quote, a quote that does not state the value — stays, because it is the article
+    that says so. A claim whose sentence a quote supports (`fields`) goes back to
+    confirmed; one without stays 待确认, a last resort, as an unquoted claim always is.
+    Returns whether anything changed.
+    """
+    from tracker.upsert import DECIDED_REASONS
+
+    try:
+        reasons = json.loads(source.unconfirmed_reasons or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(reasons, dict) or reasons.get(field) not in DECIDED_REASONS:
+        return False
+    reasons.pop(field)
+    source.unconfirmed_reasons = (
+        json.dumps(reasons, sort_keys=True, ensure_ascii=False) if reasons else None
+    )
+    quoted = {f.strip() for f in (source.fields or "").split(",") if f.strip()}
+    if field in quoted:
+        unconfirmed = {f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()}
+        unconfirmed.discard(field)
+        source.unconfirmed_fields = ",".join(f for f in WRITABLE_FIELDS if f in unconfirmed) or None
+    return True
+
+
 def apply_outcome(session: Session, project: Project, outcome: Outcome) -> int:
     """Write one resolved outcome. Returns citations marked. Nothing else moves.
 
@@ -504,6 +533,7 @@ __all__ = [
     "SolveReport",
     "apply_outcome",
     "disputes",
+    "lift_ruling",
     "solve",
     "supersede",
 ]

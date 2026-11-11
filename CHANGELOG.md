@@ -234,6 +234,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A ruling no longer follows a citation onto a value it was not made against.**
+  When a citation was ruled out — superseded, or misread — and its article was read
+  again, the ruling stayed on the field whatever the new reading said. Seven verified
+  answers held their right value on such a citation: ruled out while it said
+  "construction" or "cancelled", re-read as "permitting" or "denied". A re-read now
+  carries a ruling only while it claims the same value, and `tracker answers apply`
+  lifts a ruling standing on a claim a verified answer proves right
+  (`upsert._carried_reasons`, `conflicts.lift_ruling`). Nothing moves until the next
+  re-read or `answers apply`, and lifting those seven alone changes no stored value.
 - **An email the recipient's server refused is no longer recorded as sent.** From
   2026-11-06 to 11-09 Outlook refused every morning email to one reader — "Message
   lacks SPF/DKIM/DMARC Auth Records": since 11-05 Outlook refuses mail from a domain

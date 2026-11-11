@@ -148,9 +148,10 @@ def apply_cmd(
     """Correct the values the answer key proves wrong, through the claims. Dry run by default.
 
     For each verified answer the row holds wrong: the answer's page and sentence are
-    cited on the row, and the row's claims the key judges wrong are ruled out as
-    misread, as `logic rule-out` does; the row is re-derived and judged again. "No
-    figure" answers only rule out. Run on the host, where the database is written.
+    cited on the row, the row's claims the key judges wrong are ruled out as
+    misread, as `logic rule-out` does, and a ruling standing on a claim the key judges
+    right is lifted; the row is re-derived and judged again. "No figure" answers only
+    rule out. Run on the host, where the database is written.
     """
     from tracker import answer_apply
 
@@ -161,12 +162,21 @@ def apply_cmd(
             emit({"fixes": [vars(f) for f in fixes]})
             return
         table = Table(header_style="bold", box=TABLE_BOX)
-        for column in ("row", "field", "held", "answer key", "cite", "rule out", "note"):
+        for column in (
+            "row",
+            "field",
+            "held",
+            "answer key",
+            "cite",
+            "rule out",
+            "let back",
+            "note",
+        ):
             table.add_column(column)
         for f in fixes:
             table.add_row(
                 f"#{f.project_id}", f.field, escape(str(f.held)), escape(f.answer),
-                "yes" if f.cite else "-", str(len(f.refuted)), escape(f.note),
+                "yes" if f.cite else "-", str(len(f.refuted)), str(len(f.lifted)), escape(f.note),
             )  # fmt: skip
         console.print(table)
         doable = sum(1 for f in fixes if not f.note)

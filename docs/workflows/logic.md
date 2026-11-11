@@ -245,6 +245,17 @@ and has since been restated, a fact about the world; `misread` says the sentence
 always about something else, a fact about the sentence. The first could stop
 applying; the second cannot.
 
+Either is a ruling about the **value** the citation claimed when it was made. A re-read
+of the same article carries the ruling only while it claims the same value
+(`upsert._carried_reasons`); one that now claims something else is a new reading and
+is judged afresh. Until 2026-11-11 the ruling followed the field, and that is how
+seven verified answers came to hold their right value on a ruled-out citation:
+ruled out while it said "construction" or "cancelled", re-read as "permitting" or
+"denied", and still ruled out. `tracker answers apply` lifts a ruling standing on a
+claim a verified answer proves right (`conflicts.lift_ruling`); lifting those seven
+alone moved no answer, because each row's wrong value was also stated by citations
+that arrived after the answer key's correction.
+
 Run `tracker backfill dates` first — the tiebreak and the model both reason from
 publication dates. A run of more than 20 fields asks for `--yes`, and writes are
 committed per field so a run that dies partway keeps what it settled.
@@ -606,7 +617,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `_drop_restated_delays`, `_clear_built`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news`; `tracker/delays.py` — `restates`, `period_end` |
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `hold_out_kilowatt_misreads`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
-| Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD` |
+| Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `lift_ruling`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD`; `tracker/answer_apply.py` — `plan`, `apply` |
 | The agent path | `tracker/triage.py` — `triage_findings`, `triage`, `investigate`, `conclude`, `finding_question`, `finding_subject`, `finding_evidence`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | One loop for every paid pass: per-item commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |
@@ -614,7 +625,7 @@ Touching any of these means the poster is in scope. Re-render with
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
 | Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`); `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
-| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons` |
+| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons`, `_same_claim` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with
 `--apply` already implied and run automatically after every harvest.

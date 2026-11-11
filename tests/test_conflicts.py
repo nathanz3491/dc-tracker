@@ -351,6 +351,43 @@ def test_a_superseded_claim_survives_a_re_read_of_the_same_article(session):
     assert json.loads(source.unconfirmed_reasons)["investment_usd"] == "superseded"
 
 
+def test_a_ruling_does_not_follow_a_re_read_onto_another_value(session):
+    """A ruling is about the value it was made against.
+
+    On 2026-11-11 seven verified answers held their right value on a citation ruled
+    out when it said something else: re-read, it said the right thing, and the ruling
+    had followed the field onto it.
+    """
+    project = _contested(session)
+    older = next(s for s in project.sources if "gov.example" in s.url)
+    conflicts.supersede(older, "investment_usd")
+    session.commit()
+
+    _hyperion(
+        session,
+        _source(
+            "https://gov.example/2024", source_type="government_doc", investment_usd=27_000_000_000
+        ),
+    )
+    source = session.scalar(
+        select(conflicts.Source).where(conflicts.Source.url == "https://gov.example/2024")
+    )
+    assert "investment_usd" not in json.loads(source.unconfirmed_reasons or "{}")
+    assert "investment_usd" not in (source.unconfirmed_fields or "")
+
+
+def test_lifting_a_ruling_lets_the_claim_back_and_leaves_a_measured_reason(session):
+    project = _contested(session)
+    source = project.sources[0]
+    conflicts.supersede(source, "investment_usd", reason="misread")
+    assert conflicts.lift_ruling(source, "investment_usd") is True
+    assert "investment_usd" not in (source.unconfirmed_fields or "")
+    assert conflicts.lift_ruling(source, "investment_usd") is False, "nothing left to lift"
+
+    source.unconfirmed_reasons = json.dumps({"investment_usd": "quote_off_target"})
+    assert conflicts.lift_ruling(source, "investment_usd") is False, "the article said so"
+
+
 def test_r_is_never_an_option_key():
     """`r` is the refusal key. An option lettered `r` would turn a refusal into a
     silent pick of that option — the one outcome this module exists to prevent."""

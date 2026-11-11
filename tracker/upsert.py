@@ -352,12 +352,38 @@ def _part_fields(row: Source) -> frozenset[str]:
     )
 
 
-def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
+def _same_claim(was: Any, now: Any) -> bool:
+    """Whether two readings of a citation claim the same value for a field.
+
+    Numbers within half a percent (a re-read writes 1e10 for 10000000000.0), anything
+    else as text, ignoring case and spacing.
+    """
+    if was is None or now is None:
+        return False
+    if isinstance(was, bool) or isinstance(now, bool):
+        return was == now
+    try:
+        a, b = float(was), float(now)
+    except (TypeError, ValueError):
+        return " ".join(str(was).lower().split()) == " ".join(str(now).lower().split())
+    return abs(a - b) <= 0.005 * max(abs(a), abs(b))
+
+
+def _carried_reasons(
+    row: Source, claims: dict[str, Any], before: dict[str, Any] | None = None
+) -> dict[str, str]:
     """Decisions already recorded on this source row, for fields it still claims.
 
     And an operator's ruling on the citation's tranches (`blocks.RULED_OUT`), which
     is about the article rather than one claimed field: a re-read of NTT's land
     purchase would otherwise put the second campus's tranches straight back.
+
+    With `before` (the claims the ruling was made against), a field's ruling is
+    carried only while the re-read claims the same value. A ruling is about a value:
+    on 2026-11-11, 7 of the 11 wrong answers whose right value had been read held it
+    on a citation ruled out when that citation said something else — "construction"
+    re-read as "permitting", "cancelled" re-read as "denied" — and the ruling had
+    followed the field onto the right answer.
     """
     from tracker.blocks import RULED_OUT
 
@@ -370,7 +396,11 @@ def _carried_reasons(row: Source, claims: dict[str, Any]) -> dict[str, str]:
     return {
         k: v
         for k, v in existing.items()
-        if v in DECIDED_REASONS and (k in claims or k == RULED_OUT)
+        if v in DECIDED_REASONS
+        and (
+            k == RULED_OUT
+            or (k in claims and (before is None or _same_claim(before.get(k), claims[k])))
+        )
     }
 
 
@@ -2111,6 +2141,8 @@ def upsert_record(
             existing_sources[url_identity(sr.url)] = row
         if reading is not None:
             reading.add((project.id, row.url))
+        # What the rulings on this citation were made against (`_carried_reasons`).
+        claimed_before = _json_object(row.claims)
         row.source_type = sr.source_type
         row.excerpt = sr.excerpt
         row.claims = blob
@@ -2129,8 +2161,9 @@ def upsert_record(
         # measurement of it, so it survives a re-crawl of the same URL. Everything
         # else here is re-derived from the article and rightly overwritten — but
         # re-reading the page that said $10B would otherwise silently un-supersede
-        # the figure and hand the merge back to crawl order.
-        carried = _carried_reasons(row, claims)
+        # the figure and hand the merge back to crawl order. Only while the re-read
+        # says $10B again: a ruling is about the value it was made against.
+        carried = _carried_reasons(row, claims, claimed_before)
         why = {**carried, **{k: v for k, v in why.items() if k not in carried}}
         row.unconfirmed_reasons = (
             json.dumps(why, sort_keys=True, ensure_ascii=False) if why else None
