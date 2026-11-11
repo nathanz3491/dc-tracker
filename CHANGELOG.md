@@ -77,6 +77,21 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **The nightly re-reads aim at wrong values a little better.** The suspicion score picks the 25 stored values the
+  agent re-reads each night. It was measured on two label sets that share no campus:
+  the answer key, and 105 values the nightly passes changed or kept elsewhere, each read
+  from the snapshot taken before its pass. It now leaves out two signals — the age of a
+  value's newest support and how cited its row is — that describe the campus rather
+  than the value: ranking quality rose from 0.79 to 0.80 on the key and from 0.76 to 0.77
+  on the passes' verdicts, and of the ten judged values it ranks highest, eight were
+  wrong against six before. Everything else tried helped on the key and failed the
+  second test, so none of it ships: the figure's size and dollars per megawatt (key 0.84,
+  verdicts 0.65), sentence flags for hedges, power plants and purchases, the passes'
+  verdicts as training, per-field models, boosted trees, and ranking with the
+  transformer, whose 0.77 on the key is the luckiest of many retrains. A refit is now
+  measured over five campus splits and kept only if it beats the saved model's own
+  signals on the same labels, and the model saved before this change keeps ranking until
+  then (`tracker/suspect.py`, `docs/data-quality.md`).
 - **The nightly re-reads stop asking the same question, and the agent can find the
   citation behind a value.** Over ten nights the suspicion score's re-reads read about
   240 values and changed 23; 30 rows took 172 of the reads, Madison County seven

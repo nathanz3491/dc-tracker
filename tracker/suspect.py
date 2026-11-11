@@ -6,20 +6,32 @@ sentence is about this campus, this phase or this kind of figure. The answer key
 everything is not affordable, so this ranks the values and the nightly loop re-reads
 the top of the list (plus a random fifth, so the record does not only confirm the
 ranking). The score never writes a value. It aims a pass that does — `logic resolve
---suspects N`, the agent that re-reads sources and rules — and that pass's answers go
-into the verdict log (`tracker.labels`), which is what the next model learns from.
+--suspects N`, the agent that re-reads sources and rules.
 
 **Two models, one in charge.** The logistic regression ranks, at the start of the
-night: nine readable signals about how a value is backed (how many statements and
-publishers stand behind it, whether only directories do, whether a filing does, how
-many sources claim something else, how much of the row's evidence was ruled out, how
-old the newest support is, how cited the row is) plus the field. Measured on 205
-answer-key labels from 60 campuses, scored on campuses it never saw: AUC 0.76, against
-0.64 for the field alone; bigger models overfit (forest 0.74, boosting 0.69). Written
-in plain Python because the host has no numpy, and 15 weights do not need it.
+night: seven readable signals about how a value is backed (how many statements and
+publishers stand behind it, whether only directories do, whether only unconfirmed
+statements do, whether a filing does, how many sources claim something else, how much
+of the row's evidence was ruled out) plus the field. Written in plain Python, and
+dependency-free on purpose: 12 weights do not need numpy.
+
+**How it was chosen (2026-11-11).** Two label sets that do not share a campus: the
+answer key's frozen verdicts (204 values, 60 campuses — the campuses carrying the most
+money) and 105 values the nightly agent passes judged elsewhere (changed = wrong;
+kept, or left alone with a reason = right), each read from the snapshot taken before
+its pass. A change had to help on both. Dropping two signals did — the age of the
+newest support and how cited the row is, which describe the campus and the calendar
+rather than the value — from AUC 0.79 to 0.80 on the key's ranked fields (campuses
+held out) and 0.76 to 0.77 on the agent's labels. Everything else that helped on the
+key failed the second set: the figure's size and its dollars per megawatt (key 0.84,
+agent 0.65 — the key's big campuses are wrong by being too big; elsewhere size says
+nothing), hedge, power-plant, purchase and other sentence flags (no better than chance
+on either), agent labels as extra training, per-field models, boosting, stronger or
+weaker penalties, and ranking with the transformer (key +0.01, agent -0.02).
+
 The transformer (`tracker.suspect_transformer`, the optional `head` extra) is retrained
-beside it each night and is there for an agent to consult on one row; it ranks nothing
-until it clearly beats the logistic on the key.
+beside it each night and is there for an agent to consult on one row. It ranks nothing:
+fresh retrains that never saw the agent's labels score 0.60 to 0.67 on them.
 
 **Which fields.** Planned MW, investment and the online date, where the score finds
 wrong values two times in three or better. Not the stage (its errors are an unrecorded
@@ -27,9 +39,12 @@ stop, which a date check finds better) and not the first-announced date (its err
 are about which facility a date belongs to, which no backing signal shows: AUC 0.54).
 
 **Retraining.** `train` refits at the end of each night on the answer key's verdicts on
-the held values. The key is the only clean label set, so the logistic's held-out AUC is
-measured by refitting with whole campuses left out, and a refit is kept only if that
-measurement clears `FLOOR`; otherwise the previous weights stay.
+the held values. The key is the only clean label set, so a refit is measured by
+refitting with whole campuses left out, over five different splits, on the ranked
+fields. The saved model's own signal set is measured the same way on the same labels,
+and the better of the two is refitted; it is kept only if it clears `FLOOR`, otherwise
+the previous weights stay.
+
 """
 
 from __future__ import annotations
@@ -39,7 +54,7 @@ import json
 import math
 import random
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -47,6 +62,7 @@ from urllib.parse import urlparse
 FIELDS = ("phase", "mw_planned", "investment_usd", "expected_online", "first_announced")
 #: The fields the score ranks for re-checking. See the module docstring for the others.
 SCORED = ("mw_planned", "investment_usd", "expected_online")
+#: Every signal `signals` reads. A saved model may use any of these.
 SIGNALS = (
     "log_backers",
     "publishers",
@@ -58,10 +74,17 @@ SIGNALS = (
     "log_age_days",
     "log_row_citations",
 )
-FEATURES = SIGNALS + tuple(f"field_{f}" for f in FIELDS)
+FIELD_FLAGS = tuple(f"field_{f}" for f in FIELDS)
+KNOWN = SIGNALS + FIELD_FLAGS
+#: What a new fit uses. Not the age of the newest support nor how cited the row is:
+#: both describe the campus and the calendar rather than the value, and leaving them
+#: out ranked better on the answer key and on the agent's own verdicts alike.
+FEATURES = tuple(s for s in SIGNALS if s not in ("log_age_days", "log_row_citations")) + FIELD_FLAGS
 PRIMARY = {"company_filing", "government_doc"}
 #: A refit whose held-out AUC falls below this keeps the previous weights.
 FLOOR = 0.65
+#: Campus splits a refit is measured on; one split moves the AUC by ±0.015.
+REPEATS = 5
 #: The share of each night's suspects drawn at random rather than from the top.
 RANDOM_SHARE = 0.2
 MODEL = "suspect-logistic.json"
@@ -129,9 +152,18 @@ def signals(entry: dict, today: dt.date | None = None) -> dict[str, float] | Non
 # --- the logistic regression, in plain Python ----------------------------------------
 
 
+def _sigmoid(t: float) -> float:
+    return 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, t))))
+
+
 @dataclass
 class Logistic:
-    """Standardised features, L2-penalised logistic regression. 15 weights."""
+    """Standardised features, L2-penalised logistic regression, one weight per feature.
+
+    `features` names what it was fitted on, so a model saved with another signal set
+    (an older one, or one a refit judged better) keeps scoring after the default
+    changes.
+    """
 
     weights: list[float]
     intercept: float
@@ -140,22 +172,28 @@ class Logistic:
     labels: int = 0
     heldout_auc: float | None = None
     trained_at: str = ""
+    features: list[str] = field(default_factory=lambda: list(FEATURES))
+
+    def vector(self, sig: dict[str, float]) -> list[float]:
+        return [sig[f] for f in self.features]
 
     def z(self, x: Sequence[float]) -> list[float]:
         return [(v - m) / s for v, m, s in zip(x, self.mean, self.scale, strict=True)]
 
+    def logit(self, x: Sequence[float]) -> float:
+        return self.intercept + sum(w * v for w, v in zip(self.weights, self.z(x), strict=True))
+
     def prob(self, x: Sequence[float]) -> float:
-        t = self.intercept + sum(w * v for w, v in zip(self.weights, self.z(x), strict=True))
-        return 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, t))))
+        return _sigmoid(self.logit(x))
 
     def contributions(self, x: Sequence[float]) -> list[tuple[str, float]]:
         """Each feature's push on the log-odds, largest first."""
-        parts = [(n, w * v) for n, w, v in zip(FEATURES, self.weights, self.z(x), strict=True)]
+        parts = [(n, w * v) for n, w, v in zip(self.features, self.weights, self.z(x), strict=True)]
         return sorted(parts, key=lambda p: -abs(p[1]))
 
     def as_json(self) -> dict[str, Any]:
         return {
-            "features": list(FEATURES),
+            "features": list(self.features),
             "weights": self.weights,
             "intercept": self.intercept,
             "mean": self.mean,
@@ -167,8 +205,11 @@ class Logistic:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Logistic:
-        if list(data.get("features") or []) != list(FEATURES):
+        features = list(data.get("features") or [])
+        if not features or not set(features) <= set(KNOWN):
             raise ValueError("the saved model was trained on other features")
+        if not len(data["weights"]) == len(data["mean"]) == len(data["scale"]) == len(features):
+            raise ValueError("the saved model's weights do not match its features")
         return cls(
             data["weights"],
             data["intercept"],
@@ -177,27 +218,93 @@ class Logistic:
             data.get("labels", 0),
             data.get("heldout_auc"),
             data.get("trained_at", ""),
+            features,
         )
 
 
-def fit(X: list[list[float]], y: list[int], *, l2: float = 2.0, steps: int = 3000) -> Logistic:
-    """Gradient descent on the mean log-loss plus `l2`/n times the squared weights."""
+def _solve(A: list[list[float]], b: list[float]) -> list[float]:
+    """A x = b by Gaussian elimination with partial pivoting (A is small and symmetric)."""
+    n = len(b)
+    M = [[*row, b[i]] for i, row in enumerate(A)]
+    for c in range(n):
+        p = max(range(c, n), key=lambda r: abs(M[r][c]))
+        M[c], M[p] = M[p], M[c]
+        if abs(M[c][c]) < 1e-12:
+            continue
+        for r in range(c + 1, n):
+            f = M[r][c] / M[c][c]
+            if f:
+                M[r] = [a - f * v for a, v in zip(M[r], M[c], strict=True)]
+    x = [0.0] * n
+    for r in range(n - 1, -1, -1):
+        s = M[r][n] - sum(M[r][j] * x[j] for j in range(r + 1, n))
+        x[r] = s / M[r][r] if abs(M[r][r]) >= 1e-12 else 0.0
+    return x
+
+
+def fit(
+    X: list[list[float]],
+    y: list[int],
+    *,
+    l2: float = 2.0,
+    steps: int = 50,
+    features: Sequence[str] | None = None,
+) -> Logistic:
+    """Minimise the summed log-loss plus `l2`/2 times the squared weights, by Newton steps.
+
+    The intercept is not penalised. This is the optimum the gradient descent it replaced
+    approached in 3,000 steps; Newton's method reaches it in about ten, which is what
+    makes measuring a refit on several campus splits affordable in plain Python.
+    """
     n, k = len(X), len(X[0])
     mean = [sum(r[j] for r in X) / n for j in range(k)]
     scale = [max(math.sqrt(sum((r[j] - mean[j]) ** 2 for r in X) / n), 1e-9) for j in range(k)]
-    Z = [[(r[j] - mean[j]) / scale[j] for j in range(k)] for r in X]
-    w, b, lr = [0.0] * k, 0.0, 0.5
-    for _ in range(steps):
-        gw, gb = [l2 * wj / n for wj in w], 0.0
+    Z = [[1.0] + [(r[j] - mean[j]) / scale[j] for j in range(k)] for r in X]
+    beta = [0.0] * (k + 1)
+
+    def objective(b: list[float]) -> float:
+        total = l2 / 2 * sum(v * v for v in b[1:])
         for row, target in zip(Z, y, strict=True):
-            t = b + sum(wj * v for wj, v in zip(w, row, strict=True))
-            err = 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, t)))) - target
-            gb += err / n
-            for j in range(k):
-                gw[j] += err * row[j] / n
-        b -= lr * gb
-        w = [wj - lr * g for wj, g in zip(w, gw, strict=True)]
-    return Logistic(w, b, mean, scale, labels=n)
+            t = max(-30.0, min(30.0, sum(c * v for c, v in zip(b, row, strict=True))))
+            total += math.log1p(math.exp(-t)) if target else math.log1p(math.exp(t))
+        return total
+
+    current = objective(beta)
+    for _ in range(steps):
+        grad = [0.0] + [l2 * v for v in beta[1:]]
+        hess = [
+            [(l2 + 1e-9) if (i == j and i) else 0.0 for j in range(k + 1)] for i in range(k + 1)
+        ]
+        for row, target in zip(Z, y, strict=True):
+            p = _sigmoid(sum(c * v for c, v in zip(beta, row, strict=True)))
+            err, w = p - target, p * (1.0 - p)
+            for i in range(k + 1):
+                grad[i] += err * row[i]
+                wi = w * row[i]
+                if wi:
+                    h = hess[i]
+                    for j in range(i, k + 1):
+                        h[j] += wi * row[j]
+        for i in range(k + 1):
+            for j in range(i):
+                hess[i][j] = hess[j][i]
+        step = _solve(hess, grad)
+        # Halve a step that does not lower the objective; Newton rarely needs it here.
+        scale_step, nxt, value = 1.0, beta, current
+        for _ in range(20):
+            nxt = [b - scale_step * s for b, s in zip(beta, step, strict=True)]
+            value = objective(nxt)
+            if value <= current + 1e-12:
+                break
+            scale_step /= 2
+        moved = max(abs(a - b) for a, b in zip(nxt, beta, strict=True))
+        beta, current = nxt, value
+        if moved < 1e-9:
+            break
+    names = list(features) if features is not None else None
+    if names is None:
+        names = list(FEATURES) if k == len(FEATURES) else [f"x{j}" for j in range(k)]
+    return Logistic(beta[1:], beta[0], mean, scale, labels=n, features=names)
 
 
 def auc(y: Sequence[int], p: Sequence[float]) -> float | None:
@@ -210,21 +317,40 @@ def auc(y: Sequence[int], p: Sequence[float]) -> float | None:
     return wins / (len(pos) * len(neg))
 
 
-def heldout_auc(X, y, groups, folds: int = 5) -> float | None:
-    """AUC with every campus scored by a model fitted without it."""
-    campuses = sorted(set(groups))
-    random.Random(0).shuffle(campuses)
-    fold_of = {c: i % folds for i, c in enumerate(campuses)}
-    scores = [0.0] * len(y)
-    for f in range(folds):
-        train = [i for i, g in enumerate(groups) if fold_of[g] != f]
-        test = [i for i, g in enumerate(groups) if fold_of[g] == f]
-        if not test or len({y[i] for i in train}) < 2:
-            continue
-        model = fit([X[i] for i in train], [y[i] for i in train])
-        for i in test:
-            scores[i] = model.prob(X[i])
-    return auc(y, scores)
+def heldout_auc(
+    X,
+    y,
+    groups,
+    folds: int = 5,
+    *,
+    repeats: int = 1,
+    measure: Sequence[bool] | None = None,
+) -> float | None:
+    """AUC with every campus scored by a model fitted without it.
+
+    Averaged over `repeats` different splits of the campuses (split `r` shuffles them
+    with seed `r`, so split 0 is the one this always used). `measure` picks the rows the
+    AUC is taken on — the ranked fields — while every row of the other campuses trains.
+    """
+    measured = []
+    for r in range(repeats):
+        campuses = sorted(set(groups))
+        random.Random(r).shuffle(campuses)
+        fold_of = {c: i % folds for i, c in enumerate(campuses)}
+        scores = [0.0] * len(y)
+        for f in range(folds):
+            train = [i for i, g in enumerate(groups) if fold_of[g] != f]
+            test = [i for i, g in enumerate(groups) if fold_of[g] == f]
+            if not test or len({y[i] for i in train}) < 2:
+                continue
+            model = fit([X[i] for i in train], [y[i] for i in train])
+            for i in test:
+                scores[i] = model.logit(X[i])
+        keep = [i for i in range(len(y)) if measure is None or measure[i]]
+        value = auc([y[i] for i in keep], [scores[i] for i in keep])
+        if value is not None:
+            measured.append(value)
+    return sum(measured) / len(measured) if measured else None
 
 
 def load(db_path: Path | str) -> Logistic | None:
@@ -330,17 +456,37 @@ def freeze(session: Any, db_path: Path | str) -> int:
     return len(new)
 
 
+def compare(
+    sigs: list[dict[str, float]],
+    y: list[int],
+    groups: list[int],
+    measure: list[bool],
+    candidates: Sequence[Sequence[str]],
+) -> list[float | None]:
+    """Each candidate signal set's held-out AUC on the same labels, splits and rows."""
+    return [
+        heldout_auc(
+            [[s[f] for f in names] for s in sigs], y, groups, repeats=REPEATS, measure=measure
+        )
+        for names in candidates
+    ]
+
+
 def train_logistic(session: Any, db_path: Path, *, today: dt.date | None = None) -> dict[str, Any]:
-    """Refit on the answer key's verdicts; keep it if its held-out AUC clears `FLOOR`.
+    """Refit on the answer key's verdicts; keep it if it measures at least as well.
 
     The verdicts are the frozen ones where the key has already corrected the row
-    (`frozen`): a corrected row reads "right" and would teach nothing.
+    (`frozen`): a corrected row reads "right" and would teach nothing. Every field's
+    verdicts train it — the stage and announced date carry what being badly backed
+    looks like too — and the measure is taken on the ranked fields alone. The saved
+    model's signal set and the default are measured on the same labels and splits; the
+    better one is refitted (the saved one on a tie) and kept if it clears `FLOOR`.
     """
     from tracker import answer_key
 
     key = {(a.project_id, a.field) for a in answer_key.answers(session)}
     rows = with_frozen(entries(session, db_path, sorted({p for p, _ in key})), db_path)
-    X, y, groups = [], [], []
+    sigs, y, groups, measure = [], [], [], []
     for e in rows:
         ans = e.get("answer") or {}
         if (e["project_id"], e["field"]) not in key or ans.get("verdict") not in (
@@ -352,25 +498,36 @@ def train_logistic(session: Any, db_path: Path, *, today: dt.date | None = None)
         sig = signals(e, today)
         if sig is None:
             continue
-        X.append([sig[f] for f in FEATURES])
+        sigs.append(sig)
         y.append(int(ans["verdict"] == "wrong"))
         groups.append(e["project_id"])
+        measure.append(e["field"] in SCORED)
     report: dict[str, Any] = {"labels": len(y), "campuses": len(set(groups))}
     if len(set(y)) < 2 or len(set(groups)) < 10:
         report["kept"] = "too few labels to fit; the previous model stays"
         return report
-    measured = heldout_auc(X, y, groups)
+    previous = load(db_path)
+    candidates = [list(FEATURES)]
+    if previous is not None and list(previous.features) != list(FEATURES):
+        candidates.insert(0, list(previous.features))
+    scores = compare(sigs, y, groups, measure, candidates)
+    best = max(range(len(candidates)), key=lambda i: -1.0 if scores[i] is None else scores[i])
+    measured = scores[best]
     report["heldout_auc"] = measured
+    if len(candidates) > 1:
+        report["previous_signals_auc"] = scores[0]
+        report["default_signals_auc"] = scores[1]
     if measured is None or measured < FLOOR:
         report["kept"] = f"held-out AUC {measured} below {FLOOR}; the previous model stays"
         return report
-    model = fit(X, y)
+    names = candidates[best]
+    model = fit([[s[f] for f in names] for s in sigs], y, features=names)
     model.heldout_auc = measured
     model.trained_at = (today or dt.date.today()).isoformat()
     path = models_dir(db_path) / MODEL
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(model.as_json(), indent=1), encoding="utf-8")
-    report["kept"] = "new"
+    report["kept"] = "new" if best == len(candidates) - 1 else "new, on the saved model's signals"
     return report
 
 
@@ -386,7 +543,7 @@ def score(session: Any, db_path: Path, *, today: dt.date | None = None) -> list[
         sig = signals(e, today)
         if sig is None:
             continue
-        x = [sig[f] for f in FEATURES]
+        x = model.vector(sig)
         ranked.append(
             {
                 "project_id": e["project_id"],
@@ -575,7 +732,7 @@ def check_row(session: Any, db_path: Path, project_id: int) -> dict[str, Any]:
         sig = signals(e)
         view: dict[str, Any] = {"held": e["held"]}
         if model is not None and sig is not None:
-            x = [sig[f] for f in FEATURES]
+            x = model.vector(sig)
             view["logistic_p_wrong"] = round(model.prob(x), 3)
             view["logistic_why"] = [(n, round(c, 2)) for n, c in model.contributions(x)[:3]]
         if e["field"] in transformer:
@@ -592,10 +749,13 @@ def check_row(session: Any, db_path: Path, project_id: int) -> dict[str, Any]:
 __all__ = [
     "FEATURES",
     "FLOOR",
+    "KNOWN",
     "SCORED",
+    "SIGNALS",
     "Logistic",
     "auc",
     "check_row",
+    "compare",
     "entries",
     "fit",
     "heldout_auc",

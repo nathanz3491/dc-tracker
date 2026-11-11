@@ -19,6 +19,17 @@ give its label away. Measured 2026-11-01 on the key's 205 labels: AUC 0.75 to 0.
 ever seeing a key label, level with the logistic regression, and best on planned MW
 (0.85). A refit replaces the saved model only if it ranks the key at least as well as
 the saved one does on the same key.
+
+**Why it ranks nothing (measured 2026-11-11).** The saved model's 0.77 on the key is the
+best of every night's retrain, kept because it scored best on the key, so the key
+flatters it: fresh retrains score 0.72 to 0.76. On a second label set — 105 values the
+nightly agent passes changed or kept outside the key's campuses, read from the
+snapshot before each pass — retrains that never saw those campuses score 0.60 to 0.67
+where the logistic regression scores 0.78, and averaging the two rankings lowers the
+logistic's 0.78 to 0.76 while raising its key score by 0.01. (Retrains that had seen
+those campuses scored 0.84 on them: the agent's rulings become this model's weak labels,
+so a test on the agent's values must keep their campuses out of training.) It stays a
+second opinion an agent can ask for on one row.
 """
 
 from __future__ import annotations

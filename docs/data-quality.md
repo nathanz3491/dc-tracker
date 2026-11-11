@@ -546,6 +546,55 @@ which was decided on 2026-10-31. Correctness is enforced by the protocol instead
 A merge carries the folded row's answers to the survivor. The two were one campus,
 so the survivor's own answer for a field stands.
 
+## The suspicion score
+
+```bash
+tracker suspect              # tonight's ranking: the stored values likeliest wrong
+tracker suspect row 597      # both models' view of one row
+```
+
+The nightly loop can afford to re-read about 25 stored values a night, each an agent
+session. The suspicion score decides which: it ranks every stored planned MW,
+investment and online date by how likely the value is to be wrong, and the agent takes
+the top of the list plus a random fifth. What it reads is how a value is backed — how
+many statements and publishers stand behind it, whether only directories or only
+unconfirmed statements do, whether a filing does, how many sources say something else,
+how much of the row's evidence was ruled out — and which field it is.
+
+**How well it ranks, measured 2026-11-11.** Two label sets that share no campus: the
+answer key's verdicts as they stood before the key corrected anything (120 ranked values
+on 60 campuses, half of them wrong), and 105 values the nightly passes changed or kept
+elsewhere, each read from the snapshot taken before its pass. A score of 0.5 is chance.
+
+| | answer key, campuses held out | the passes' verdicts |
+| --- | --- | --- |
+| until 2026-11-11 (nine signals) | 0.79 — MW 0.86, investment 0.77, online 0.64 | 0.76 to 0.78 |
+| now (seven signals) | 0.80 — MW 0.87, investment 0.78, online 0.67 | 0.77 to 0.78 |
+
+On the 105 judged values, the ten it ranks highest were wrong eight times, against six
+before and a base rate of one in three. Of the key's wrong values, about one in four would
+be inside the top 250 of the whole ranking — ten nights of re-reads — and almost every
+key value that gets that high is wrong; the top 25 holds about three of them. The key
+covers the campuses carrying the most money, so that is a floor on what the ranking
+finds elsewhere, not an estimate of it.
+
+**Why two signals went.** The age of the newest support and how cited the row is
+describe the campus and the calendar, not the value. Leaving them out helped on both
+label sets. A change had to: most of what helped on the key alone failed the second test.
+The figure's size and its dollars per megawatt lifted the key to 0.84 and dropped the
+passes' verdicts to 0.65 — the key's big campuses are wrong by being too big; elsewhere
+size says nothing. Sentence flags (a hedge, a power plant, a purchase, financing, several
+campuses, an expansion ceiling) did no better than chance on either set: on the key a
+hedge was commoner beside right values than wrong ones. Also tried and
+dropped: the passes' verdicts as extra training, one model per field, boosted trees,
+stronger or weaker penalties, and averaging in the transformer (key +0.01, verdicts -0.02;
+its own 0.77 on the key is the best of many nightly retrains, so the key flatters it,
+and retrains that never saw the judged campuses score 0.60 to 0.67 on them).
+
+**How a refit is kept.** Each night's refit is measured with whole campuses held out,
+over five splits, on the ranked fields. The saved model's own signal set is measured the
+same way on the same labels; the better one is refitted, and only if it clears 0.65.
+
 ## What the stored data actually rests on
 
 ```bash

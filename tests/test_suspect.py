@@ -1,15 +1,19 @@
 """The suspicion score: its model, its ranking, the suspects it hands the logic agent.
 
 Each test is one promise: the plain-Python regression learns a signal and ranks by it,
-a saved model trained on other features is refused rather than misread, the night's
-suspects are the top of the ranking plus a reproducible random share, a refit with too
-few labels keeps the old model, and an agent asking about a row it cannot find is told
-so rather than failing its turn.
+and its Newton steps land on the penalised optimum; a saved model trained on unknown
+features is refused rather than misread, while one saved on an older signal set keeps
+scoring; a refit is measured against the saved model's signal set on the same labels
+and the better one kept; the night's suspects are the top of the ranking plus a
+reproducible random share; a refit with too few labels keeps the old model; and an
+agent asking about a row it cannot find is told so rather than failing its turn.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import math
 import random
 
 import pytest
@@ -34,6 +38,45 @@ def test_the_regression_learns_a_signal_and_ranks_by_it():
     assert suspect.heldout_auc(X, y, [i % 30 for i in range(300)]) > 0.8
 
 
+def test_the_newton_steps_land_on_the_penalised_optimum():
+    rng = random.Random(2)
+    X = [[rng.gauss(0, 1), rng.gauss(0, 2), float(rng.random() < 0.3)] for _ in range(120)]
+    y = [int(rng.random() < _p(0.8 * a - 0.4 * b + c)) for a, b, c in X]
+
+    model = suspect.fit(X, y, l2=2.0)
+
+    # The gradient of the summed log-loss plus l2/2 |w|^2 is zero at the optimum.
+    errs = [model.prob(x) - t for x, t in zip(X, y, strict=True)]
+    zs = [model.z(x) for x in X]
+    assert abs(sum(errs)) < 1e-6
+    for j, w in enumerate(model.weights):
+        assert abs(sum(e * z[j] for e, z in zip(errs, zs, strict=True)) + 2.0 * w) < 1e-6
+    assert model.features == ["x0", "x1", "x2"]
+
+
+def _p(t: float) -> float:
+    return 1 / (1 + math.exp(-t))
+
+
+def test_the_held_out_measure_reads_the_chosen_rows_over_several_splits():
+    rng = random.Random(3)
+    X, y, groups, measure = [], [], [], []
+    for i in range(240):
+        ranked = i % 2 == 0
+        wrong = rng.random() < 0.5
+        # Informative on the ranked rows, noise on the others.
+        X.append([(1.0 if wrong else -1.0) + rng.gauss(0, 0.3) if ranked else rng.gauss(0, 1)])
+        y.append(int(wrong))
+        groups.append(i % 24)
+        measure.append(ranked)
+
+    ranked_only = suspect.heldout_auc(X, y, groups, repeats=3, measure=measure)
+    every_row = suspect.heldout_auc(X, y, groups, repeats=3)
+
+    assert ranked_only > 0.95
+    assert every_row < ranked_only
+
+
 def test_auc_is_the_chance_a_wrong_value_outranks_a_right_one():
     assert suspect.auc([1, 0], [0.9, 0.1]) == 1.0
     assert suspect.auc([1, 0], [0.1, 0.9]) == 0.0
@@ -52,6 +95,104 @@ def test_a_model_saved_on_other_features_is_refused(tmp_path):
     data["features"] = ["something", "else"]
     (tmp_path / "models" / suspect.MODEL).write_text(json.dumps(data), encoding="utf-8")
     assert suspect.load(db) is None
+
+
+def test_a_model_saved_on_an_older_signal_set_keeps_scoring(tmp_path):
+    """The model deployed before 2026-11-11 read nine signals; it must rank until a
+    refit replaces it, not leave the night without a ranking."""
+    older = list(suspect.SIGNALS) + list(suspect.FIELD_FLAGS)
+    assert older != list(suspect.FEATURES)
+    k = len(older)
+    data = {
+        "features": older,
+        "weights": [0.1] * k,
+        "intercept": -0.5,
+        "mean": [0.0] * k,
+        "scale": [1.0] * k,
+    }
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / suspect.MODEL).write_text(json.dumps(data), encoding="utf-8")
+
+    model = suspect.load(tmp_path / "tracker.db")
+    sig = suspect.signals(_entry(), dt.date(2026, 11, 1))
+
+    assert model.features == older
+    assert len(model.vector(sig)) == k
+    assert 0 < model.prob(model.vector(sig)) < 1
+
+
+def _entry(pid: int = 1, field: str = "mw_planned", backers: int = 1, rivals: int = 1) -> dict:
+    claims = [
+        {
+            "value": "300",
+            "number": 300.0,
+            "tier": "directory" if backers == 1 else "confirmed",
+            "held": True,
+            "source_url": f"https://a{i}.example/x",
+            "source_type": "general_media",
+            "as_of": "2026-10-01",
+            "quote": "",
+        }
+        for i in range(backers)
+    ]
+    claims += [
+        {
+            "value": "1200",
+            "number": 1200.0 + i,
+            "tier": "confirmed",
+            "held": False,
+            "source_url": f"https://b{i}.example/y",
+            "source_type": "company_filing",
+            "as_of": "2026-10-20",
+            "quote": "up to 1.2 GW",
+        }
+        for i in range(rivals)
+    ]
+    return {
+        "project_id": pid,
+        "field": field,
+        "held": 300.0,
+        "row": {"citations": 9},
+        "claims": claims,
+    }
+
+
+def test_a_refit_keeps_the_signal_set_that_measures_better(tmp_path, monkeypatch):
+    """The saved model's signal set and the default are measured on the same labels;
+    a set carrying only noise loses to one carrying the signal, whichever is saved."""
+    from types import SimpleNamespace
+
+    from tracker import answer_key
+
+    rng = random.Random(5)
+    rows = []
+    for pid in range(1, 41):
+        for field in ("mw_planned", "investment_usd", "phase"):
+            wrong = rng.random() < 0.45
+            e = _entry(
+                pid, field, backers=1 if wrong else rng.randint(2, 5), rivals=rng.randint(0, 3)
+            )
+            e["answer"] = {"verdict": "wrong" if wrong else "right"}
+            rows.append(e)
+    monkeypatch.setattr(suspect, "entries", lambda session, db_path, ids=None: rows)
+    monkeypatch.setattr(
+        answer_key,
+        "answers",
+        lambda session: [
+            SimpleNamespace(project_id=e["project_id"], field=e["field"]) for e in rows
+        ],
+    )
+    db = tmp_path / "tracker.db"
+    (tmp_path / "models").mkdir()
+    noise = ["log_age_days", "log_row_citations"]
+    saved = suspect.fit([[0.0, 0.0], [1.0, 1.0]], [0, 1], features=noise)
+    (tmp_path / "models" / suspect.MODEL).write_text(json.dumps(saved.as_json()), encoding="utf-8")
+
+    report = suspect.train_logistic(None, db, today=dt.date(2026, 11, 1))
+
+    assert report["default_signals_auc"] > report["previous_signals_auc"]
+    assert report["kept"] == "new"
+    assert suspect.load(db).features == list(suspect.FEATURES)
 
 
 def test_the_signals_read_the_held_values_backing():
