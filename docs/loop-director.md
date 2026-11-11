@@ -28,7 +28,8 @@ moves non-determinism into that one layer, and that layer is the easiest to boun
   (`tracker/night/record.py`);
 - **nothing the model writes reaches a command line** except through a step's fields;
 - **every limit is code**: the money ceiling, the search cap, the wall clock, the
-  rounds, the snapshot before a merge, the lock, the deploy hold — all unchanged.
+  rounds, the snapshot before a merge, the lock, the night's frozen copy of the code —
+  all unchanged.
 
 The worst night a director can produce is the worst sequence of allowed steps.
 

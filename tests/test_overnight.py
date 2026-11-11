@@ -208,19 +208,188 @@ def test_only_a_shell_running_the_poll_script_is_a_deploy(tmp_path, command, dep
 def test_the_shell_holds_the_lock_and_runs_the_loop_as_its_child():
     """The deployer reads the lock's pid and looks for `overnight.sh` in that process's
     command line. An `exec` into Python would leave a pid whose command line names
-    Python, and the deployer would deploy under a running night."""
+    Python, and the deployer would deploy under a running night. The one `exec` is into
+    this script again, from the night's copy: the same pid, still `overnight.sh`."""
     text = SCRIPT.read_text(encoding="utf-8")
+    run = text.index('"$PY" -m tracker.overnight run --repo "$REPO" --allowance "$ALLOWANCE" "$@"')
+    frozen = text.index('\nif [ -n "${OVERNIGHT_FROZEN:-}" ]; then\n  trap')
     check = text.index('"$PY" -m tracker.overnight check "$@" || exit 2')
     ledger = text.index("export TRACKER_SPEND_LEDGER=")
     allowance = text.index('"$PY" -m tracker.spend allowance "$(dirname "$LOG")"')
     tee = text.index('exec > >(tee -a "$LOG") 2>&1')
     lock = text.index("\ntake_lock || exit 1\n")
-    trap = text.index("trap 'rm -rf \"$LOCK\"' EXIT")
+    trap = text.index("trap 'rm -rf \"$LOCK\"' EXIT", lock)
     wait = text.index("\nwait_for_deploy\n")
-    run = text.index('"$PY" -m tracker.overnight run --repo "$REPO" --allowance "$ALLOWANCE" "$@"')
-    assert check < ledger < allowance < tee < lock < trap < wait < run
+    freeze = text.index("\nif freeze_code; then\n")
+    again = text.index('exec bash "$NIGHT_CODE/scripts/overnight.sh" "$@"')
+    fallback = text.rindex('\nrun_night "$@" || exit $?')
+    assert run < frozen < check < ledger < allowance < tee < lock < trap < wait < freeze < again
+    assert again < fallback
     assert not re.search(r"^\s*exec\s+\"?\$PY", text, re.M), "the loop must not replace the shell"
     assert re.search(r'^DEPLOYER="\$\(cd "\$REPO/\.\." && pwd\)/ops/poll\.sh"$', text, re.M)
+
+
+def _git_repo(path: Path, files: dict[str, str]) -> str:
+    """A git checkout at `path` holding `files`, committed; returns the commit."""
+    path.mkdir(parents=True, exist_ok=True)
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=path, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    # LF as written: on Windows `core.autocrlf` would hand bash a script with \r in it.
+    git("config", "core.autocrlf", "false")
+    git("config", "user.email", "night@example.test")
+    git("config", "user.name", "night")
+    for name, body in files.items():
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body, encoding="utf-8", newline="\n")
+    git("add", "-A")
+    git("commit", "-qm", "the night's code")
+    return git("rev-parse", "HEAD")
+
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="no git on this machine")
+
+
+def _freeze(tmp_path: Path, night: Path) -> subprocess.CompletedProcess:
+    script = (
+        "set -euo pipefail\n"
+        f"REPO={shlex.quote((tmp_path / 'repo').as_posix())}\n"
+        f"NIGHT_CODE={shlex.quote(night.as_posix())}\n" + _function("freeze_code") + "freeze_code\n"
+    )
+    return subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+    )
+
+
+@needs_bash
+@needs_git
+def test_the_night_copies_the_commit_in_place_of_the_last_nights_copy(tmp_path):
+    sha = _git_repo(
+        tmp_path / "repo",
+        {"scripts/overnight.sh": "echo copy\n", "tracker/__init__.py": "__version__ = '1'\n"},
+    )
+    (tmp_path / "repo" / "data").mkdir()
+    (tmp_path / "repo" / "data" / "tracker.db").write_text("not code")
+    (tmp_path / "repo" / "tracker" / "__init__.py").write_text("an edit nobody committed")
+    night = tmp_path / "night"
+    (night / "tracker").mkdir(parents=True)
+    (night / "tracker" / "gone.py").write_text("last night's")
+
+    done = _freeze(tmp_path, night)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == f"the night runs commit {sha[:8]}, copied to {night.as_posix()}"
+    assert (night / "COMMIT").read_text().strip() == sha
+    assert (night / "scripts" / "overnight.sh").is_file()
+    assert (night / "tracker" / "__init__.py").read_text() == "__version__ = '1'\n", "the commit"
+    assert not (night / "tracker" / "gone.py").exists(), "last night's copy is replaced"
+    assert not (night / "data").exists(), "tracked files only: data stays in the checkout"
+
+
+@needs_bash
+@needs_git
+def test_the_copy_refuses_a_folder_it_was_not_made_for(tmp_path):
+    """It starts by deleting the folder, so only one named `night` is ever touched."""
+    _git_repo(tmp_path / "repo", {"scripts/overnight.sh": "echo copy\n"})
+    elsewhere = tmp_path / "backups"
+    elsewhere.mkdir()
+    (elsewhere / "keep.db").write_text("precious")
+    done = _freeze(tmp_path, elsewhere)
+    assert done.returncode == 1
+    assert (elsewhere / "keep.db").read_text() == "precious"
+
+
+#: Stands in for the venv's python: answers the shell's three calls, and in the night
+#: reports what it was started with, then rewrites the checkout's copy of the script the
+#: way a deploy would.
+_NIGHT_PYTHON = """#!/usr/bin/env bash
+case "$*" in
+  *"tracker.overnight check"*) exit 0 ;;
+  *"tracker.spend allowance"*) echo 12.5; exit 0 ;;
+  *"tracker.overnight run"*)
+    echo "run: ${*}"
+    echo "frozen=${OVERNIGHT_FROZEN:-} home=${TRACKER_HOME:-} safe=${PYTHONSAFEPATH:-}"
+    echo "pythonpath=${PYTHONPATH:-}"
+    [ -d "$OVERNIGHT_REPO/data/runs/overnight.lock" ] && echo "lock pid $(cat "$OVERNIGHT_REPO/data/runs/overnight.lock/pid")"
+    printf 'echo TAMPERED\\n' >> "$OVERNIGHT_REPO/scripts/overnight.sh"
+    exit 0 ;;
+esac
+exit 3
+"""
+
+
+@needs_bash
+@needs_git
+def test_the_night_runs_from_its_copy_and_keeps_the_checkouts_data(tmp_path):
+    """The night imports the copy and reads and writes the checkout, and a deploy that
+    rewrites the checkout's script mid-night does not reach the night that is running."""
+    repo = tmp_path / "repo"
+    sha = _git_repo(
+        repo, {"scripts/overnight.sh": SCRIPT.read_text(encoding="utf-8"), "pyproject.toml": ""}
+    )
+    python = repo / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(_NIGHT_PYTHON, encoding="utf-8", newline="\n")
+    python.chmod(0o755)
+
+    done = subprocess.run(
+        [BASH, (repo / "scripts" / "overnight.sh").as_posix(), "--hours", "1"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "PYTHONPATH": ""},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    out = done.stdout
+    assert f"the night runs commit {sha[:8]}, copied to " in out
+    frozen = re.search(r"^frozen=(\S+) home=(\S+) safe=(\S*)$", out, re.M)
+    assert frozen, out
+    assert frozen.group(1).endswith("/night")
+    assert frozen.group(2).endswith("/repo"), "data, .env and the lock stay in the checkout"
+    assert frozen.group(3) == "1", "`python -m` must not put the checkout ahead of the copy"
+    assert re.search(rf"^pythonpath={re.escape(frozen.group(1))}(:|$)", out, re.M)
+    assert re.search(r"^lock pid \d+$", out, re.M), "the copy holds the checkout's lock"
+    assert "--allowance 12.5" in out
+    assert "TAMPERED" not in out, "the running night read its own copy of the script"
+    assert not (repo / "data" / "runs" / "overnight.lock").exists(), "released at the end"
+    assert (tmp_path / "night" / "COMMIT").read_text().strip() == sha
+    assert "the night runs commit" in (repo / "data" / "runs" / "overnight.log").read_text()
+
+
+@needs_bash
+def test_a_night_that_cannot_copy_its_code_still_runs(tmp_path):
+    """No checkout to export from: the night runs from where it is, and says so."""
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "overnight.sh").write_text(
+        SCRIPT.read_text(encoding="utf-8"), encoding="utf-8", newline="\n"
+    )
+    python = repo / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        _NIGHT_PYTHON.replace('"$OVERNIGHT_REPO', '"${OVERNIGHT_REPO:-.}'),
+        encoding="utf-8",
+        newline="\n",
+    )
+    python.chmod(0o755)
+    done = subprocess.run(
+        [BASH, (repo / "scripts" / "overnight.sh").as_posix(), "--hours", "1"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": tmp_path.as_posix()},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the code could not be copied" in done.stdout
+    assert re.search(r"^frozen= home=", done.stdout, re.M), done.stdout
 
 
 def test_the_shell_names_the_ledger_the_way_the_status_page_reads_it():

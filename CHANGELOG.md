@@ -66,6 +66,17 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A deploy during the night no longer changes the code the night runs.** On
+  2026-10-19 two deploys landed mid-run and the night's later phases ran different
+  code from its first, so every push had to wait for the loop to end. The loop now
+  copies the commit it starts on into `~/dev/tracker/night/` (one folder, replaced
+  each night, the commit in its log) and runs every phase from that copy, keeping the
+  database, `.env` and logs in the checkout. A push during the night goes live on the
+  console at once. The deployer still holds a commit that changes a migration or the
+  dependencies until the night ends, deploys nothing between 17:55 and 18:05 while the
+  night copies its code, and leaves `tracker init` (the recompute of stored values)
+  until after the night, so one version of the code writes each night's data
+  (`scripts/overnight.sh`, `ops/poll.sh`, `CLAUDE.md` §1).
 - **Five ways a real sentence set the wrong value, closed.** Reading the 27 verified
   answers the database got wrong again found each held by a sentence about something
   else:

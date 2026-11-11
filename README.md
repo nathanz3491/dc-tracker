@@ -190,7 +190,10 @@ consecutive rounds and nights are comparable.
 their order and the argument for it, the ceilings and the stop rules, tested with a
 stub in place of each command. The shell keeps only what the deployer has to see (the
 lock, whose pid must be a process named `overnight.sh`), `--status`, the wait for a
-deploy already running, the night's spend ledger and the log. It loops
+deploy already running, the night's spend ledger and the log — and the night's own
+copy of the code: it exports the commit it starts on into `~/dev/tracker/night/` and
+runs every phase from there, so a deploy during the night changes the console and not
+the night (`CLAUDE.md` §1 has the deploy rules that go with it). It loops
 until two consecutive rounds fail to reduce any count, because neither backlog is a
 queue that drains — ruling a claim out re-derives a row and can raise a finding
 the old value hid, and merging changes the survivor's claim set and can match a

@@ -29,21 +29,33 @@ of what went live:
 ssh $PROD '~/dev/tracker/ops/poll.sh >>~/dev/tracker/ops/logs/deploy.log 2>&1; tail -3 ~/dev/tracker/ops/logs/deploy.log'
 ```
 
-**Never push while the nightly loop runs.** The loop (`scripts/overnight.sh`) starts
-at 18:01 and can run ten hours. A deploy in the middle of it swaps the code under
-the phases it has not reached and runs `tracker init` beside it: on 2026-10-19 two
-deploys landed mid-run, and the night's later phases ran different code from its
-first. Check before every push:
+**The nightly loop runs the commit it started on, so a push during the night is
+safe — with three exceptions.** The loop (`scripts/overnight.sh`) starts at 18:01 and
+can run ten hours. It used to run whatever was on disk, so on 2026-10-19 two deploys
+landed mid-run and the night's later phases ran different code from its first. Now,
+once it holds its lock, it copies the checkout's commit into `~/dev/tracker/night/`
+(one folder, replaced each night; the commit is in `night/COMMIT` and the night's
+log) and runs every phase from that copy, with the database, `.env` and logs still
+the checkout's. A deploy during the night therefore changes the console and nothing
+the night runs. The deployer enforces the exceptions itself, each logged once in
+`deploy.log`:
+
+- **17:55–18:05: nothing deploys.** The night copies its code at 18:01, and the copy
+  has to be of a commit that finished deploying. A push in that window goes at 18:05.
+- **A commit that adds or changes a migration waits for the night to end** —
+  the night's code would be writing to a schema newer than it knows.
+- **A commit that changes the dependencies waits too** — the night and the console
+  share one `.venv`. (A version stamp alone is not a dependency change.)
+
+And `tracker init` — migrations plus the recompute of stored values — never runs
+during the night, even for a commit that deploys: the deploy leaves `ops/init-pending`
+and the first poll after the night ends runs it, so one version of the code writes the
+data each night. Anything that has to re-derive data after a merge-rule change
+(`backfill derive`) belongs after the night as well.
 
 ```bash
-ssh $PROD '~/dev/tracker/repo/scripts/overnight.sh --status | head -1'   # "not running"
+ssh $PROD '~/dev/tracker/repo/scripts/overnight.sh --status | head -1'   # is a night running?
 ```
-
-Both sides enforce it as well, so a push that slips through does no harm: the
-deployer holds any commit while the loop's lock is live and takes it at the first
-poll after the loop ends (`deploy.log` says `waits until it finishes`), and a loop
-that starts while a deploy is under way waits for it. The rule stands anyway,
-because a held commit goes live in the small hours with nobody checking it.
 
 **A commit that does not import is refused** and the checkout rolled back, so the
 console keeps serving the previous code. That is the point of noticing a push

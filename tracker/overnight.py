@@ -255,7 +255,10 @@ released by the shell's EXIT trap, and the shell runs this module as a child rat
 than `exec`-ing into it. It also keeps `--status`, the wait for a running deployer,
 the PATH and venv, the per-night spend ledger (`TRACKER_SPEND_LEDGER`, named
 `overnight-YYYYMMDD-HHMMSS.spend`), the read of tonight's allowance, and the `tee`
-into `data/runs/overnight.log`.
+into `data/runs/overnight.log`. And the night's copy of the code: it exports the
+commit into `~/dev/tracker/night/` and starts itself again from there, so this module
+and every phase import the copy (`PYTHONPATH`, `PYTHONSAFEPATH`) while `TRACKER_HOME`
+keeps the data in the checkout — `--repo` is that checkout, not the copy.
 
 THE LOG IS A CONTRACT. The status page reads `data/runs/overnight.log`
 (`tracker.webui.statussite.parse_nights`), `tracker loop` reads it with the opening

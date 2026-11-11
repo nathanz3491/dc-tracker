@@ -23,7 +23,9 @@
 #     ledger beside tonight's), handed to the loop, which falls back to ¥15 when it
 #     reads nothing;
 #   * the `tee` into data/runs/overnight.log, so the loop and every phase it runs
-#     write to one stream.
+#     write to one stream;
+#   * THE COPY. The night runs from its own copy of the code, not from the checkout
+#     — see THE NIGHT'S CODE below.
 #
 # RUNNING IT IN TMUX
 #
@@ -35,20 +37,39 @@
 # From anywhere else, `overnight.sh --status` prints where it has got to;
 # `overnight.sh --help` lists the options.
 #
-# The night runs on one version of the code. A deploy resets the checkout under the
-# commands not yet started and runs `tracker init`, which wants the same single write
-# lock: on 2026-10-19 two deploys landed mid-run, so the night's later phases ran
-# different code from its first. The deployer now holds any commit while this run's
-# lock is live, and this run waits for a deployer that is already running when it
-# starts (`wait_for_deploy`). Still, do not push to main while it runs: the held
-# commit goes live unwatched when the night ends.
+# THE NIGHT'S CODE. The night runs on one version of the code, the commit the
+# checkout holds when it starts. On 2026-10-19 two deploys landed mid-run and the
+# night's later phases ran different code from its first, because every phase is a
+# fresh `python -m tracker …` that loads whatever is on disk — and bash itself reads
+# this script a line at a time, so a deploy that rewrote it could garble the run.
+#
+# So once the lock is taken and any deploy already running has finished, this script
+# exports the checkout's HEAD (`git archive`: tracked files only, about 13 MB, a tenth
+# of a second) into ~/dev/tracker/night/, replacing the last night's copy, writes the
+# commit to night/COMMIT and the log, and starts itself again from the copy (`exec`,
+# so the pid that holds the lock stays the same). From there the loop and every phase
+# import the copy — PYTHONPATH names it, and PYTHONSAFEPATH keeps `python -m` from
+# putting the current directory, the checkout, ahead of it — while TRACKER_HOME keeps
+# the database, .env, the logs and the lock in the checkout. A deploy during the night
+# then changes the console and nothing the night runs; the deployer still holds a
+# commit that changes a migration or the dependencies, never deploys 17:55-18:05, and
+# leaves `tracker init` until the night ends. No copy is kept: a night's code is its
+# commit, which the log names and git can re-create.
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The checkout the night belongs to: its data, its .env, its lock and its logs. Run
+# again from the copy (OVERNIGHT_FROZEN), this script is told where it is.
+if [ -n "${OVERNIGHT_FROZEN:-}" ]; then
+  REPO="$OVERNIGHT_REPO"
+else
+  REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 cd "$REPO"
 
-export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# launchd's PATH is the system's alone, so Homebrew's tools come first; whatever the
+# caller had stays after them.
+export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
 PY="$REPO/.venv/bin/python"
 
 LOG="${OVERNIGHT_LOG:-$REPO/data/runs/overnight.log}"
@@ -56,6 +77,9 @@ LOCK="$REPO/data/runs/overnight.lock"
 # The deploy poller, which sits beside the checkout in `ops/`, never inside it.
 DEPLOYER="$(cd "$REPO/.." && pwd)/ops/poll.sh"
 DEPLOY_WAIT=1800
+# The night's copy of the code, beside the checkout like ops/ and backups/. One
+# folder, replaced each night.
+NIGHT_CODE="${OVERNIGHT_CODE:-$(cd "$REPO/.." && pwd)/night}"
 
 # Only the two options this script answers itself; every other one is the loop's,
 # passed through untouched and checked by it before the lock is taken.
@@ -96,22 +120,6 @@ if [ "$HELP" -eq 1 ]; then
   exit 0
 fi
 
-# A mistyped option ends here, before the lock and before the log.
-"$PY" -m tracker.overnight check "$@" || exit 2
-
-mkdir -p "$(dirname "$LOG")"
-# One ledger per night, so the tally reads only this run's calls — summing a shared
-# file made a second night start at the first night's total. Exported, so every
-# `tracker` child appends to it. The name is `ledger_name` in tracker/overnight.py,
-# which the status page reads back.
-export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight-$(date '+%Y%m%d-%H%M%S').spend}"
-# Tonight's share of the month, read before tonight's ledger exists: from Go's own
-# usage windows, or the ledgers when Go cannot be read. Its one-line why goes to the
-# night's log. Empty when it cannot be read at all; the loop then falls back, and
-# `--cny` overrides it either way.
-ALLOWANCE="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>>"$LOG" || true)"
-exec > >(tee -a "$LOG") 2>&1
-
 # One at a time. `mkdir` is the atomic primitive available everywhere; macOS has no
 # flock. The pid inside says whose it is.
 #
@@ -151,18 +159,15 @@ take_lock() {
   return 1
 }
 
-take_lock || exit 1
-trap 'rm -rf "$LOCK"' EXIT
-
-# A deploy already under way when the night starts is let finish first. The deployer
-# holds any commit while the lock above is live, but one that passed that check a
-# moment before the lock was taken still resets the checkout and runs `tracker init`
-# under the first phases — and a push made just before 18:01 to catch the night lands
-# in exactly that minute. Each side raises its own flag before it looks at the
-# other's: this run takes its lock, then looks for the deployer; the deployer is
-# running, then looks for the lock. One of the two always sees the other, so they
-# never both go ahead. Bounded, because a night that never starts is worse than one
-# that starts beside a deployer that has hung.
+# A deploy already under way when the night starts is let finish first, so the copy
+# below is of a commit that finished deploying. The deployer never starts one
+# 17:55-18:05, but one started at 17:54 — a push made just before the window to
+# catch the night — can still be resetting the checkout or running `tracker init` at
+# 18:01. Each side raises its own flag before it looks at the other's: this run takes
+# its lock, then looks for the deployer; the deployer is running, then looks for the
+# lock. One of the two always sees the other, so they never both go ahead. Bounded,
+# because a night that never starts is worse than one that starts beside a deployer
+# that has hung.
 #
 # Only a shell running the script counts: matched loosely, any process whose command
 # line merely names the file — an editor on it, an ssh command quoting its path —
@@ -186,7 +191,20 @@ wait_for_deploy() {
   echo "the deployer finished after ${waited}s"
 }
 
-wait_for_deploy
+# The checkout's HEAD, exported into NIGHT_CODE in place of the last night's copy.
+# Fails, saying nothing, when it cannot be made — the night then runs from the
+# checkout as it always did. Refuses any folder not named `night`, because what it
+# does first is delete it.
+freeze_code() {
+  local sha
+  [ "$(basename "$NIGHT_CODE")" = "night" ] || return 1
+  sha="$(git -C "$REPO" rev-parse --verify HEAD 2>/dev/null)" || return 1
+  rm -rf "$NIGHT_CODE" && mkdir -p "$NIGHT_CODE" || return 1
+  git -C "$REPO" archive --format=tar "$sha" | tar -x -C "$NIGHT_CODE" || return 1
+  [ -f "$NIGHT_CODE/scripts/overnight.sh" ] || return 1
+  echo "$sha" > "$NIGHT_CODE/COMMIT"
+  echo "the night runs commit ${sha:0:8}, copied to $NIGHT_CODE"
+}
 
 # The night. A child, not `exec` — see THE LOCK above. Its own stdin is /dev/null and
 # so is every phase's: nothing in the night may wait on a keyboard.
@@ -209,4 +227,44 @@ run_night() {
   return "$status"
 }
 
+# Started again from the copy: the lock is already this pid's, and stdout is already
+# the log's `tee`. Everything the night runs imports the copy; everything it reads or
+# writes is the checkout's.
+if [ -n "${OVERNIGHT_FROZEN:-}" ]; then
+  trap 'rm -rf "$LOCK"' EXIT
+  ALLOWANCE="${OVERNIGHT_ALLOWANCE:-}"
+  export TRACKER_HOME="$REPO" PYTHONSAFEPATH=1
+  export PYTHONPATH="$OVERNIGHT_FROZEN${PYTHONPATH:+:$PYTHONPATH}"
+  run_night "$@" || exit $?
+  exit 0
+fi
+
+# A mistyped option ends here, before the lock and before the log.
+"$PY" -m tracker.overnight check "$@" || exit 2
+
+mkdir -p "$(dirname "$LOG")"
+# One ledger per night, so the tally reads only this run's calls — summing a shared
+# file made a second night start at the first night's total. Exported, so every
+# `tracker` child appends to it. The name is `ledger_name` in tracker/overnight.py,
+# which the status page reads back.
+export TRACKER_SPEND_LEDGER="${TRACKER_SPEND_LEDGER:-$(dirname "$LOG")/overnight-$(date '+%Y%m%d-%H%M%S').spend}"
+# Tonight's share of the month, read before tonight's ledger exists: from Go's own
+# usage windows, or the ledgers when Go cannot be read. Its one-line why goes to the
+# night's log. Empty when it cannot be read at all; the loop then falls back, and
+# `--cny` overrides it either way.
+ALLOWANCE="$("$PY" -m tracker.spend allowance "$(dirname "$LOG")" 2>>"$LOG" || true)"
+exec > >(tee -a "$LOG") 2>&1
+
+take_lock || exit 1
+trap 'rm -rf "$LOCK"' EXIT
+
+wait_for_deploy
+
+# The copy, then this script again from it — `exec`, so the lock's pid is unchanged,
+# and its EXIT trap is not run: the lock passes to the copy, which sets its own.
+if freeze_code; then
+  export OVERNIGHT_FROZEN="$NIGHT_CODE" OVERNIGHT_REPO="$REPO" OVERNIGHT_ALLOWANCE="$ALLOWANCE"
+  exec bash "$NIGHT_CODE/scripts/overnight.sh" "$@"
+fi
+echo "the code could not be copied to $NIGHT_CODE; the night runs from the checkout, so a deploy during it changes its code"
 run_night "$@" || exit $?
