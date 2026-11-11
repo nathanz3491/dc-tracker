@@ -60,6 +60,12 @@ initial build of the v1 PRD.
   from about 500 to about 300. The state keeps a town's name to its own place
   ("Aurora" is in three states); a result naming none of the search's campuses is
   queued as `watch:place:<ST>` for the crawl to place (`tracker/ingest/watch.py`).
+  The first night on it, 11-10, did not show the saving: the weekly company searches
+  all came due together, 75 against about 16 on an ordinary night. They are now
+  spread a seventh a night, most overdue first (`watch.tonights_companies`); a held
+  company is searched a night or two later and its search still reaches back to its
+  last, so no news is lost. A company a reader watches is searched daily and never
+  held.
 - **A deploy no longer signs readers out of the console.** The deployer restarts the
   console on every commit — eleven times on the night of 2026-11-09 — and sessions
   lived only in its memory, so each restart sent every reader back to the sign-in

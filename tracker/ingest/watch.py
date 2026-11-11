@@ -1010,6 +1010,8 @@ class CompanyLook:
 class CompanyReport:
     looks: list[CompanyLook] = field(default_factory=list)
     due: int = 0
+    #: Due, and held for a later night so the week's searches spread evenly.
+    held: int = 0
     queries: int = 0
     failures: int = 0
     stopped: str | None = None
@@ -1021,6 +1023,7 @@ class CompanyReport:
     def as_rows(self) -> list[tuple[str, int]]:
         return [
             ("companies due", self.due),
+            ("of them held for a later night", self.held),
             ("companies looked at", len(self.looks)),
             ("of them first looks", sum(1 for look in self.looks if look.baseline)),
             ("searches", self.queries),
@@ -1070,6 +1073,45 @@ def companies_due(
         out.append((0 if key in watched else 1, -counts.get(key, 0), key, label, look))
     out.sort()
     return [(key, label, look) for _, _, key, label, look in out]
+
+
+def tonights_companies(
+    session: Session, *, now: dt.datetime
+) -> tuple[list[tuple[str, str, CompanyWatch | None]], int]:
+    """(the companies to search tonight; how many more were due and are held).
+
+    A company is searched weekly, and a week after a night that searched many, all of
+    them come due together: 75 on 2026-11-10, against about 16 on an ordinary night,
+    which took the night's saving from the state searches straight back. So a
+    company searched weekly is held once a night has taken its share — a seventh of
+    every such company, most overdue first, a company never searched before them
+    all — and goes on a later night. Its search still reaches back to its last one,
+    so nothing is lost; it is heard a day or two later. A company a reader watches is
+    searched daily and never held.
+    """
+    import math
+
+    from tracker.dedup import company_key
+
+    plan = companies_due(session, now=now)
+    watched = {key for key in session.scalars(select(Watch.company_key)) if key}
+    counts: dict[str, int] = {}
+    for company in session.scalars(select(Project.company)):
+        key = company_key(company)
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    weekly = sum(1 for key, n in counts.items() if n >= COMPANY_MIN_CAMPUSES and key not in watched)
+    share = math.ceil(weekly / COMPANY_CADENCE.days) if weekly else 0
+    daily = [item for item in plan if item[0] in watched]
+    rest = sorted(
+        (item for item in plan if item[0] not in watched),
+        key=lambda item: (
+            item[2] is not None and item[2].baseline_at is not None,
+            item[2].checked_at if item[2] is not None else dt.datetime.min,
+            -counts.get(item[0], 0),
+        ),
+    )
+    return daily + rest[:share], max(0, len(rest) - share)
 
 
 def company_query(label: str, look: CompanyWatch | None, *, now: dt.datetime) -> Query | None:
@@ -1125,8 +1167,8 @@ def run_companies(
     now = now or utcnow()
     report = CompanyReport()
     run_id = run_id or now.strftime("watch-companies-%Y%m%dT%H%M%S")
-    plan = companies_due(session, now=now)
-    report.due = len(plan)
+    plan, report.held = tonights_companies(session, now=now)
+    report.due = len(plan) + report.held
     if not plan:
         return report
     if provider is None:
@@ -1740,5 +1782,6 @@ __all__ = [
     "run_companies",
     "run_conditions",
     "split_followups",
+    "tonights_companies",
     "window_for",
 ]

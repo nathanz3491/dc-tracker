@@ -743,6 +743,32 @@ def test_a_company_with_three_campuses_or_a_watched_one_is_searched_as_a_company
     assert [(key, label) for key, label, _ in due] == [("xai", "xAI"), ("meta", "Meta")]
 
 
+def test_a_weeks_company_searches_are_spread_a_seventh_a_night_watched_ones_never_held(session):
+    """75 companies came due together on 2026-11-10, against about 16 on an ordinary
+    night: a week after a night that had searched them all."""
+    from tracker import accounts
+
+    for c in range(14):
+        for n in range(3):
+            _campus(session, 300 + c * 3 + n, company=f"Co{c}", name=f"Co{c} site {n}",
+                    city=f"Town{c}x{n}")  # fmt: skip
+        session.add(
+            CompanyWatch(
+                company_key=f"co{c}", baseline_at=NOW, checked_at=NOW - dt.timedelta(days=c)
+            )
+        )
+    account = accounts.create(session, "reader@example.com", "a long enough password 1")
+    session.add(Watch(account_id=account.id, entry="xAI", company_key="xai"))
+    session.flush()
+
+    later = NOW + dt.timedelta(days=7)
+    plan, held = watch.tonights_companies(session, now=later)
+    keys = [key for key, _, _ in plan]
+    assert keys[0] == "xai", "a watched company is searched daily and never held"
+    assert len(keys) == 1 + 2 and held == 12, "14 weekly companies: two a night"
+    assert keys[1:] == ["co13", "co12"], "the most overdue first"
+
+
 def test_a_company_search_reaches_back_a_month_then_to_its_last_look():
     first = watch.company_query("Meta", None, now=NOW)
     assert first.text == '"Meta" "data center"' and first.window == "qdr:m"
