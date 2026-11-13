@@ -635,6 +635,54 @@ purchase for a second Hillsboro campus, read onto the existing one as two planne
 `unconfirmed_reasons`), the tranches are rebuilt without it, and a re-read of the same
 article does not bring them back.
 
+## `logic expire` — how long a decision holds
+
+```bash
+tracker logic expire              # what would reopen, with the sentences
+tracker logic expire --apply      # the night runs this in its free step, before derive
+```
+
+A ruling used to hold forever, and so did the answer key: its corrections were cited
+with no date, so the rule that stops a source a year older than its rivals winning on
+weight (`STALE_AFTER`) never reached them, and they outranked every later news article
+for good. A decision is about the world on the day it was made, so each one now
+carries that day and who made it (`source.rulings`, beside the reason), and a later
+report can reopen it.
+
+**What reopens one is a report that the figure changed** — a live, first-hand claim for
+the whole campus, dated after the decision, whose sentence says the figure moved:
+"increasing its investment from $12 billion to $18 billion", "raised the investment to
+more than $50 billion", "delayed to 2028", or for a stage, a later stage. Then:
+
+- **an answer reopens.** It stops being scored, applied or used for training
+  (`answer_key.reopened_on`), its own citation is set aside as `superseded` — true when
+  verified, restated since — and the merge decides between what is left.
+  `answers load --replace` records it again, which is the re-check;
+  `answers show` lists it as reopened.
+- **a `superseded` ruling lifts** when the report goes back to its figure: "restated
+  since" is no longer true of it.
+- **a `misread` never lifts.** It is a fact about a sentence; it ends only when a
+  re-read of that sentence claims something else (`_carried_reasons`).
+
+Every answer's claim is also dated with the day the answer was recorded (`as_of`), so
+it grows stale like any other source.
+
+**What does not reopen one, measured on 2026-11-13.** Not a timer and not a repeat. Of
+4,932 standing rulings, 627 had their figure printed again after the ruling; the forty
+read by hand were echoes — Hyperion's 2024 "$10 billion" in a November 2026 article,
+"announced plans in spring 2024 to build a $3.3 billion data center", a neighbouring
+building, a stale directory. Lapsing on either would have put them back. A possibility
+("could grow to 10 GW") is a ceiling, and a change the clause dates before its own
+article ("In September 2025, Microsoft revealed…") is a retelling. Real changes mostly
+won already: of 111 sentences reporting one, 73 became the stored value and 26 were
+overtaken by a later report; the 8 that rulings held back were right to be (a state or
+regional total). On that day's database the first run dated 91 answer claims, moved no
+value, and reopened one answer (Project Camellia's stage: the key's "permitting" of
+10-31 against "a construction site already under way" on 11-12).
+
+A ruling made before 2026-11-14 has no date and counts as made that day
+(`DATED_FROM`), the latest it can have been made. First-announced dates never reopen.
+
 ## When the loop director runs it
 
 On a directed night ([The loop director](../loop-director.md)) the director sizes the
@@ -669,7 +717,8 @@ Touching any of these means the poster is in scope. Re-render with
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |
 | Settled-finding bookkeeping | `tracker/audit.py` — `settled_codes`, `_no_change`, `left_as_it_was`, `free_answer`, `fmt_value`; `tracker/cli/quality.py` — `_print_resolution_summary`; `tracker/changes.py` — `render` |
 | Suspects: the values the score ranks, as findings | `tracker/suspect.py` — `suspects`, `_still_open`, `_carriers`, `ranked`, `score`, `signals`, `SCORED`, `RANDOM_SHARE`, `record_outcomes`; `tracker/declines.py` — `value_evidence`, `field_citations`; `tracker/triage.py` — `finding_evidence`; `tracker/cli/logic.py` — `logic_resolve` (`--suspects`, `--project`), `_suspicion_by_field`, `_suspicion_of`; `tracker/agent.py` — `_director_note`; `tracker/overnight.py` — `Options.suspects` |
-| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons`, `_same_claim` |
+| How long a decision holds | `tracker/expiry.py` — `expire`, `change_reports`, `reopen_answers`, `reopen_rulings`, `date_answer_claims`, `_later_stage`; `tracker/ingest/crawl.py` — `reports_change`, `_MOVED_TO`, `_FROM_TO`, `_NOW`, `_CHANGED_FROM`, `_NOT_YET`, `_DATE_MOVED`; `tracker/conflicts.py` — `ruling_of`, `note_ruling`, `Ruling`, `DATED_FROM`; `tracker/answer_key.py` — `answers` (`reopened`), `load`; `tracker/answer_apply.py` — `_cite` (`as_of`); `tracker/audit.py` — `apply_action` (`by`), `_ACTING`; `tracker/night/steps.py` — `commands` (free step) |
+| CLI | `tracker/cli/logic.py` — `logic_check`, `logic_conflicts`, `logic_resolve`, `logic_rule_out`, `_rule_out_blocks`, `logic_expire`; `tracker/blocks.py` — `RULED_OUT`, `rule_out`, `ruled_out`, `blocks_by_key`; `tracker/upsert.py` — `_carried_reasons`, `_same_claim` |
 
 See also: [enrich](enrich.md), whose settle stage is `logic conflicts` with
 `--apply` already implied and run automatically after every harvest.

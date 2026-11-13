@@ -1227,7 +1227,7 @@ def logic_rule_out(
             return
 
         was = getattr(project, field)
-        marked = sum(1 for s in chosen if supersede(s, field, reason=reason))
+        marked = sum(1 for s in chosen if supersede(s, field, by="operator", reason=reason))
         # Emptied first only where the column may be empty. `phase` is NOT NULL, and
         # blanking it made the flush fail, so a phase claim could never be ruled out
         # by hand; the recompute below sets it from what is left standing either way.
@@ -1255,6 +1255,69 @@ def logic_rule_out(
             console.print("[yellow]dry run[/yellow] — nothing written")
 
 
+@logic_app.command("expire")
+def logic_expire(
+    apply: Annotated[
+        bool, typer.Option("--apply", help="Write it. Without, show what would reopen.")
+    ] = False,
+    project: Annotated[
+        list[int] | None, typer.Option("--project", help="Only this row. Repeat for several.")
+    ] = None,
+) -> None:
+    """Reopen the decisions a later report says no longer hold. Free: no model.
+
+    A verified answer reopens when a sentence published after it was recorded reports
+    the field changed to something else ("increasing its investment from $12 billion
+    to $18 billion", "delayed to 2028", a later stage): it stops being scored or
+    applied, and its own citation is set aside, until `answers load --replace` records
+    it again. A `superseded` ruling lifts when such a sentence reports a change back to
+    the ruled figure. A `misread` never lifts — it is about a sentence. A figure merely
+    printed again is not a change: that is how old figures live on in the news.
+
+    Also dates every claim an answer wrote with the day the answer was recorded, so it
+    ages like any other. The night runs this with `--apply` before re-deriving.
+    """
+    from tracker import expiry
+
+    engine, _ = init_db(_db_path())
+    if apply:
+        try:
+            release = acquire_write_lock(_db_path(), command="logic expire")
+        except AlreadyRunning as exc:
+            _fail(str(exc))
+            raise
+        atexit.register(release)
+    with _explain_db_locks(), session_scope(engine, commit=apply) as session:
+        found = expiry.expire(session, apply=apply, project_ids=project or None)
+    if json_mode():
+        emit({"applied": apply, **found.as_json()})
+        return
+    verb = "" if apply else "would be "
+    console.print(
+        f"{found.dated} answer claim(s) {verb}dated with the day their answer was recorded"
+    )
+    console.print(f"{len(found.answers)} answer(s) {verb}reopened by a later report")
+    for item in found.answers:
+        _print_reopened(item)
+    console.print(f"{len(found.rulings)} superseded ruling(s) {verb}lifted by a later report")
+    for item in found.rulings:
+        _print_reopened(item)
+    for project_id, name, before, after in found.moved:
+        console.print(f"  [green]#{project_id} {name}: {before} -> {after}[/green]")
+    if not apply:
+        console.print("[yellow]preview[/yellow] — nothing written; --apply to write")
+
+
+def _print_reopened(item) -> None:
+    what = f"answer {item.was}" if item.kind == "answer" else f"s{item.source_id} {item.was}"
+    console.print(
+        f"  #{item.project_id} {escape(item.name)} | {item.field}: {escape(str(what))} "
+        f"(since {item.since}) <- s{item.report.source_id} {item.report.day} "
+        f"= {escape(str(item.report.value))}"
+    )
+    console.print(f"    [dim]{escape(item.report.quote[:200])}[/dim]")
+
+
 def _rule_out_blocks(
     session, project, chosen: list, *, reason: str, why: str, dry_run: bool
 ) -> None:
@@ -1268,7 +1331,7 @@ def _rule_out_blocks(
         _fail(f"these citations name no tranche: {', '.join(s.url for s in silent)}")
         return
     before = {b.block_key: b.label for b in project.blocks}
-    marked = sum(1 for s in chosen if blocks_mod.rule_out(s, reason=reason))
+    marked = sum(1 for s in chosen if blocks_mod.rule_out(s, by="operator", reason=reason))
     session.flush()
     blocks_mod.rebuild(session, project)
     recompute_from_sources(session, project)

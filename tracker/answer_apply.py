@@ -160,11 +160,15 @@ def _cite(session: Session, project: Project, answer: AnswerKey, now: dt.datetim
     from tracker.upsert import upsert_record
 
     url = canonical_url(answer.source_url)
-    meta = {}
+    # True as of the day it was verified (`as_of`), so it ages like any other claim:
+    # undated, it was never stale (`upsert.stale_claims`) and outranked every lighter
+    # source for good. See `expiry`.
+    entry: dict[str, str] = {"as_of": answer.recorded_at.date().isoformat()}
     if answer.field in DATES and answer.precision:
-        meta = {answer.field: {"date_precision": answer.precision}}
+        entry["date_precision"] = answer.precision
     if answer.field == "mw_planned" and answer.basis:
-        meta = {answer.field: {"basis": answer.basis}}
+        entry["basis"] = answer.basis
+    meta = {answer.field: entry}
     record = SourceRecord(
         url=url,
         source_type="manual",
@@ -214,7 +218,7 @@ def apply(session: Session, fixes: list[Fix], *, now: dt.datetime | None = None)
         for source_id in fix.refuted:
             source = session.get(Source, source_id)
             if source is not None:
-                supersede(source, fix.field, reason="misread")
+                supersede(source, fix.field, by="answer key", reason="misread")
         for source_id in fix.lifted:
             source = session.get(Source, source_id)
             if source is not None:

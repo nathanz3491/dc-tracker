@@ -1541,15 +1541,18 @@ def ruled_out(source: Any) -> bool:
     return isinstance(reasons, dict) and reasons.get(RULED_OUT) in DECIDED_REASONS
 
 
-def rule_out(source: Any, *, reason: str) -> bool:
+def rule_out(source: Any, *, by: str, reason: str) -> bool:
     """Rule this citation's tranches out of its row. Idempotent; True if it changed.
 
     For an article about another site that names its buildings — NTT's 2025 land
     purchase for a 216 MW second Hillsboro campus, read onto the existing campus
     (#29) as two planned tranches. The article stays a citation; its tranches stop
-    describing this row. `reason` is one of `upsert.DECIDED_REASONS`.
+    describing this row. `reason` is one of `upsert.DECIDED_REASONS`; `by` is who
+    decided, dated beside it (`conflicts.note_ruling`).
     """
     import json
+
+    from tracker.conflicts import note_ruling
 
     try:
         reasons = json.loads(source.unconfirmed_reasons or "{}")
@@ -1561,6 +1564,7 @@ def rule_out(source: Any, *, reason: str) -> bool:
         return False
     reasons[RULED_OUT] = reason
     source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True, ensure_ascii=False)
+    note_ruling(source, RULED_OUT, by=by)
     return True
 
 

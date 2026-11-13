@@ -782,7 +782,7 @@ def duplicates() -> Canvas:
 
 
 def logic() -> Canvas:
-    c = Canvas(1500, 1160)
+    c = Canvas(1500, 1400)
     c.title(
         "tracker logic — do the supported values agree?",
         "Every other check asks whether a value is cited. These ask whether the cited values contradict "
@@ -862,6 +862,24 @@ def logic() -> Canvas:
     c.box(
         1140, 792, 312, 276, "Why an agent, and its limits",
         ["The fixed menu could only answer with a key from", "ACTIONS[code], and 16 of the 22 codes have none — a", "property of the menu, not of the finding. It declined", "432 of 526 findings before calling a model at all.", "", "An agent rules claims out of the merge instead, and a", "ruling survives the next backfill derive. But it moves", "a project scalar and nothing else, so the ~250 tranche", "findings are withheld rather than read at 45k-260k", "tokens each to reach the only answer available — as is", "one whose every claim is already ruled out, and it is", "shown which claims those are. It reads at most eight", "articles and runs four searches a finding, and is told", "to answer two turns before its twelve run out.", "", "It may never mark a row verified: that means an", "operator says so, and it feeds confidence. And its", "edits are recorded as 'agent', never as 'operator'."],
+        role="red", title_size=13, align="left", sub_size=10.2,
+    )
+
+    c.rule(1092)
+    c.section(48, 1128, "logic expire", "how long a decision holds. Free, nightly, before the re-derive")
+    c.box(
+        48, 1162, 440, 172, "A report that the figure changed reopens it",
+        ["A live, first-hand sentence for the whole campus,", "dated after the decision, saying the figure moved:", "'from $12 billion to $18 billion', 'raised to $50", "billion', 'delayed to 2028', or a later stage.", "", "Every ruling now carries when and by whom; one made", "before 2026-11-14 counts as made that day."],
+        role="teal", title_size=13, align="left", sub_size=10.2,
+    )
+    c.box(
+        512, 1162, 440, 172, "What reopening does",
+        ["An answer: no longer scored or applied, and its own", "citation set aside as superseded, so the merge decides", "between what is left. answers load --replace re-checks it.", "", "A superseded ruling the report goes back to: lifted.", "", "An answer's claim is dated the day it was recorded,", "so it grows stale beside a source a year newer."],
+        role="orange", title_size=13, align="left", sub_size=10.2,
+    )
+    c.box(
+        976, 1162, 476, 172, "What never ends one",
+        ["Not a timer, and not a repeat. Of 627 rulings whose", "figure was printed again after the ruling, the forty", "read were echoes: Hyperion's 2024 '$10 billion' in a", "November 2026 article. A possibility ('could grow to')", "is a ceiling, not a change.", "", "A misread never lifts: it is about a sentence, and", "ends only when that sentence is read differently."],
         role="red", title_size=13, align="left", sub_size=10.2,
     )
 

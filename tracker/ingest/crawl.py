@@ -2423,6 +2423,161 @@ def stated_roughly(quote: str | None, value: Any, field: str) -> bool:
     )
 
 
+#: A figure in a range a hedge may put before it: "to more than $50 billion".
+_HEDGE = (
+    r"(?:(?:more than|over|about|around|roughly|approximately|nearly|almost|some|"
+    r"an estimated|a total of|as much as|up to|at least|just over|just under)\s+)?"
+)
+
+#: A verb that moves a figure, ending in "to" right before the claimed figure:
+#: "raised the investment to more than $50 billion", "increasing its investment
+#: from $12 billion to $18 billion", "is being expanded to 450 megawatts".
+_MOVED_TO = re.compile(
+    r"\b(?:rais(?:ed|es|ing)|increas(?:ed|es|ing)|boost(?:ed|s|ing)|expand(?:ed|s|ing)|"
+    r"upsiz(?:ed|es|ing)|lift(?:ed|s|ing)|bump(?:ed|s|ing)|upp(?:ed|ing)|"
+    r"revis(?:ed|es|ing)|updat(?:ed|es|ing)|scal(?:ed|es|ing) (?:up|back|down)|cut(?:s|ting)?|"
+    r"reduc(?:ed|es|ing)|trimm(?:ed|ing)|lower(?:ed|s|ing)|downsiz(?:ed|es|ing)|shr[ua]nk|"
+    r"doubl(?:ed|es|ing)|tripl(?:ed|es|ing)|gr(?:ew|own|owing|ows)|jump(?:ed|s)|"
+    r"climb(?:ed|s)|ris(?:en|es)|rose|slash(?:ed|es)|pared|hik(?:ed|es))\b"
+    r"[^;]{0,90}?\bto\s+" + _HEDGE + r"$"
+)
+
+#: "from $12 billion to $18 billion": an earlier figure, then the claimed one.
+_FROM_TO = re.compile(r"\bfrom\s+[^;]{0,40}?\d[^;]{0,30}?\bto\s+" + _HEDGE + r"$")
+
+#: "now" shortly before the figure: "Meta now plans 2 GW", "is now valued at $15
+#: billion". Not "until now", "by now", "for now", "from now", "as of now".
+_NOW = re.compile(r"(?<!until )(?<!by )(?<!for )(?<!from )(?<!of )\bnow\b[^;]{0,40}$")
+
+#: After the figure, a comparison with the one it replaced: "$18 billion, up from $12
+#: billion", "1 GW, an increase from 600 MW", "$4.5 billion, compared with an earlier
+#: $3 billion".
+_CHANGED_FROM = re.compile(
+    r"^\W{0,3}(?:(?:\w+\s+){0,2}?(?:up|down) from\b|"
+    r"(?:from|over|versus|vs\.?|compared (?:with|to)) (?:a |an |the |its )?"
+    r"(?:previous|prior|earlier|original|initial|previously)\b|"
+    r"(?:an? )?(?:increase|decrease|jump|rise|drop|reduction|cut) (?:from|over|of)\b)"
+)
+
+#: Words that make what follows a possibility rather than what happened: "could grow
+#: to 10 GW", "a potential expansion to 1,500 megawatts", "designed to scale to".
+#: Those are ceilings (`_EXPANSION_CEILING`), not changes.
+_NOT_YET = re.compile(
+    r"\b(?:could|might|may|would|potential(?:ly)?|possible|possibly|option to|ability to|"
+    r"room to|designed to|able to|if|expandable|eventually|ultimately|someday)\b"
+)
+
+#: A date moved: "delayed to 2028", "pushed back to the second half of 2027",
+#: "now expected to open in 2029", "postponed until 2028".
+_DATE_MOVED = re.compile(
+    r"\b(?:delay(?:ed|s|ing)?|push(?:ed|es|ing)(?: (?:back|out))?|mov(?:ed|es|ing) "
+    r"(?:up|back|forward|out)|slipp?(?:ed|s|ing)?|postpon(?:ed|es|ing)|resched\w*|"
+    r"revis(?:ed|es|ing)|deferr?(?:ed|s|ing)?|accelerat\w*|brought forward|"
+    r"now (?:expected|slated|scheduled|set|planned|targeted|anticipated|projected|due))\b"
+    r"[^;]{0,80}$"
+)
+
+#: "a year later than planned", "rather than 2027", "instead of late 2026".
+_DATE_CHANGED_FROM = re.compile(
+    r"^[^;]{0,40}?\b(?:(?:a|one|two|\w+) (?:years?|months?|quarters?) "
+    r"(?:later|earlier|behind|ahead of)|rather than|instead of|(?:up|down|back) from)\b"
+)
+
+#: "moved from late 2027 to mid-2028".
+_DATE_FROM_TO = re.compile(
+    r"\bfrom\s+(?:[\w-]+\s+){0,3}[\w-]*20\d\d\s+to\s+(?:[\w-]+\s+){0,3}(?:\w+-)?$"
+)
+
+_YEAR = re.compile(r"\b(20\d\d)\b")
+
+
+def _clause_before(text: str, start: int) -> str:
+    """The clause the figure at `start` sits in, up to the figure: earlier figures
+    included, unlike `_clause_figures`, because "from $12 billion to" is the point."""
+    return _CLAUSE_END.split(text[max(0, start - _CLAUSE_REACH) : start])[-1]
+
+
+def _past_year(before: str, year: int | None) -> bool:
+    """Whether the clause dates the change before the report: "In September 2025,
+    Microsoft revealed it was increasing its investment to $7.3 billion", read in a
+    2026 article, is that article retelling an old change, not reporting one."""
+    if year is None:
+        return False
+    return any(int(y) < year for y in _YEAR.findall(before))
+
+
+@lru_cache(maxsize=65536)
+def reports_change(quote: str | None, value: Any, field: str, year: int | None = None) -> bool:
+    """Whether the sentence reports that the claimed figure replaced another.
+
+    The one kind of later evidence that should reopen a decision. Measured on
+    2026-11-13: a ruling's figure printed again after the ruling was an echo in
+    nearly every case read — Hyperion's 2024 "$10 billion" in a November 2026 article,
+    "announced plans in spring 2024 to build a $3.3 billion data center" — so neither
+    a timer nor a repeat is a reason to let a decision go. A sentence saying the
+    figure *moved* — "increasing its investment from $12 billion to $18 billion",
+    "raised the investment to more than $50 billion", "delayed to 2028" — is.
+
+    For `investment_usd` and `mw_planned` (the claimed figure, within 5%, must be
+    where the change lands) and `expected_online` (the claimed year). `year` is the
+    report's own year: a clause dated before it ("In September 2025, …") retells an
+    old change. A possibility — "could grow to", "potential expansion to" — is a
+    ceiling and never a change.
+    """
+    if not quote or value is None or isinstance(value, bool):
+        return False
+    text = " ".join(str(quote).lower().split())
+    if field == "expected_online":
+        target = str(value)[:4]
+        if not target.isdigit():
+            return False
+        for m in re.finditer(rf"\b{target}\b", text):
+            before = _clause_before(text, m.start())
+            after = _CLAUSE_END.split(text[m.end() : m.end() + _CLAUSE_REACH])[0]
+            if _NOT_YET.search(before[-60:]):
+                continue
+            # "from 2027 to 2028" names the old year itself; any other earlier year
+            # in the clause dates a retelling.
+            if _DATE_FROM_TO.search(before):
+                return True
+            if _past_year(before, year):
+                continue
+            if _DATE_MOVED.search(before) or _DATE_CHANGED_FROM.search(after):
+                return True
+        return False
+    if field not in ("investment_usd", "mw_planned"):
+        return False
+    try:
+        claimed = float(value)
+    except (TypeError, ValueError):
+        return False
+    if claimed <= 0:
+        return False
+    if field == "investment_usd":
+        found = [(m, _dollars(m.group(0))) for m in re.finditer(_MONEY, text)]
+    else:
+        found = [
+            (m, float(m.group(1).replace(",", "")) * (1000 if m.group(2).startswith("g") else 1))
+            for m in _MW_FIGURE.finditer(text)
+        ]
+    for m, amount in found:
+        if amount is None or abs(amount - claimed) > 0.05 * claimed:
+            continue
+        before = _clause_before(text, m.start())
+        after = _CLAUSE_END.split(text[m.end() : m.end() + _CLAUSE_REACH])[0]
+        moved = _MOVED_TO.search(before) or _FROM_TO.search(before) or _NOW.search(before)
+        cue = moved.start() if moved else None
+        if moved is None and _CHANGED_FROM.search(after):
+            cue = len(before)
+        if cue is None:
+            continue
+        # A possibility or a dated retelling before the cue makes it no change.
+        if _NOT_YET.search(before[max(0, cue - 60) : cue + 30]) or _past_year(before[:cue], year):
+            continue
+        return True
+    return False
+
+
 def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecord]:
     """Milestones from one extracted project, each verified against the article.
 

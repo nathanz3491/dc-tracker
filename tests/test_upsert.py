@@ -2073,7 +2073,7 @@ def test_a_claim_a_decision_ruled_against_leaves_the_merge(session):
     session.add(source)
     session.flush()
 
-    assert supersede(source, "mw_planned") is True
+    assert supersede(source, "mw_planned", by="operator") is True
     row.mw_planned = None
     session.flush()
     recompute_from_sources(session, row)

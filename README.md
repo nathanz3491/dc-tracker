@@ -311,7 +311,9 @@ behind it, such as a re-read that left a field out while the article still state
 it (`tracker losses --restore`, see `docs/data-quality.md`). The morning report ends
 with every value the night changed, each with the sentence behind it
 (`tracker changes`), and `tracker logic rule-out` takes back a claim a person finds
-wrong.
+wrong. No decision holds forever: each ruling records when and by whom, and the free
+step's `tracker logic expire` reopens a verified answer or a superseded ruling once a
+report published after it says the figure changed.
 
 What a night costs, measured on the six nights to 2026-09-29, before these changes:
 ¥9–34, ¥23 on average, 86% of it enrich re-reading unchanged articles for rows it

@@ -472,6 +472,10 @@ def commands(step: Step, c: Context) -> list[Command]:
             out.append(Command(("ingest", "geo")))
         out += [
             Command(("backfill", "scope", "--apply")),
+            # Before derive, which then re-derives what it reopened: answers a report
+            # published since says changed, superseded rulings a report went back to.
+            # Code only, free.
+            Command(("logic", "expire", "--apply")),
             Command(("backfill", "derive")),
             # After derive, which settles each row's stage and county: a campus placed,
             # merged or moved on since the last match is matched to the rules for its

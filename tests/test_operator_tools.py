@@ -144,7 +144,7 @@ def test_a_phase_claim_can_be_ruled_out_by_hand(engine, db_path):
     with session_scope(engine) as session:
         project = session.get(Project, pid)
         source = session.scalar(select(Source).where(Source.url == CAMPUS))
-        assert blocks_mod.rule_out(source, reason="misread")
+        assert blocks_mod.rule_out(source, reason="misread", by="operator")
         blocks_mod.rebuild(session, project)
         recompute_from_sources(session, project)
     with session_scope(engine, commit=False) as session:

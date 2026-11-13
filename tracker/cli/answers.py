@@ -233,6 +233,8 @@ def show_cmd(
             verdict = (
                 answer_key.judge(answer, value, precision) if answer.status != "unsettled" else "-"
             )
+            if answer.reopened_on is not None:
+                verdict = f"reopened {answer.reopened_on} (s{answer.reopened_by})"
             truth = (
                 answer.value
                 if answer.low is None and answer.high is None
@@ -248,6 +250,8 @@ def show_cmd(
                     "held": None if value is None else str(value),
                     "verdict": verdict,
                     "source_url": answer.source_url,
+                    "reopened_on": answer.reopened_on and answer.reopened_on.isoformat(),
+                    "reopened_by": answer.reopened_by,
                 }
             )
     if json_mode():
@@ -279,6 +283,7 @@ def _as_json(found) -> dict:
             for name, one in found.fields.items()
         },
         "absent": found.absent,
+        "reopened": found.reopened,
     }
 
 
@@ -315,6 +320,11 @@ def _print_score(found, *, title: str, drafts: bool) -> None:
     console.print(table)
     if found.absent:
         console.print(f"  {len(found.absent)} answer(s) name a campus not in this database")
+    if found.reopened:
+        console.print(
+            f"  {found.reopened} answer(s) reopened by a later report and not scored until "
+            "checked again — `tracker answers show` lists them as `reopened`"
+        )
 
 
 @answers_app.command("why")

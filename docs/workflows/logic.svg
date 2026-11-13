@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1160" viewBox="0 0 1500 1160" font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1400" viewBox="0 0 1500 1400" font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif">
 <defs><marker id="a5C6B73" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 10 5 L 0 9 z" fill="#5C6B73"/></marker></defs>
-<rect width="1500" height="1160" fill="#FFFFFF"/>
+<rect width="1500" height="1400" fill="#FFFFFF"/>
 <g font-family="system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue','DejaVu Sans',Arial,sans-serif" xml:space="preserve">
 <text x="48.0" y="54.0" font-size="25" fill="#16242E" text-anchor="start" font-weight="700">tracker logic — do the supported values agree?</text>
 <text x="48.0" y="82.0" font-size="13" fill="#5C6B73" text-anchor="start">Every other check asks whether a value is cited. These ask whether the cited values contradict each other, which a perfectly sourced row can still do.</text>
@@ -190,7 +190,39 @@
 <text x="1154.0" y="1033.1" font-size="10.2" fill="#5C6B73" text-anchor="left">It may never mark a row verified: that means an</text>
 <text x="1154.0" y="1046.7" font-size="10.2" fill="#5C6B73" text-anchor="left">operator says so, and it feeds confidence. And its</text>
 <text x="1154.0" y="1060.3" font-size="10.2" fill="#5C6B73" text-anchor="left">edits are recorded as 'agent', never as 'operator'.</text>
-<line x1="48" y1="1098" x2="1452" y2="1098" stroke="#B9C6CC" stroke-width="1"/>
-<text x="48.0" y="1126.0" font-size="12.5" fill="#16242E" text-anchor="start">The layers are ordered by cost, and the free ones are not a warm-up: rules and collisions settle most of what is wrong, and only what survives them is worth a model call.</text>
+<line x1="48" y1="1092" x2="1452" y2="1092" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="1128.0" font-size="10.5" fill="#5C6B73" text-anchor="start" font-weight="700" letter-spacing="2.4">LOGIC EXPIRE</text>
+<text x="183.5" y="1128.0" font-size="11" fill="#5C6B73" text-anchor="start">how long a decision holds. Free, nightly, before the re-derive</text>
+<rect x="48.0" y="1162.0" width="440.0" height="172.0" rx="7" fill="#E7F0F0" stroke="#0F6E75" stroke-width="1.3"/>
+<text x="62.0" y="1204.9" font-size="13" fill="#0F6E75" text-anchor="left" font-weight="700">A report that the figure changed reopens it</text>
+<text x="62.0" y="1221.9" font-size="10.2" fill="#5C6B73" text-anchor="left">A live, first-hand sentence for the whole campus,</text>
+<text x="62.0" y="1235.5" font-size="10.2" fill="#5C6B73" text-anchor="left">dated after the decision, saying the figure moved:</text>
+<text x="62.0" y="1249.1" font-size="10.2" fill="#5C6B73" text-anchor="left">'from $12 billion to $18 billion', 'raised to $50</text>
+<text x="62.0" y="1262.7" font-size="10.2" fill="#5C6B73" text-anchor="left">billion', 'delayed to 2028', or a later stage.</text>
+<text x="62.0" y="1276.3" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="62.0" y="1289.9" font-size="10.2" fill="#5C6B73" text-anchor="left">Every ruling now carries when and by whom; one made</text>
+<text x="62.0" y="1303.5" font-size="10.2" fill="#5C6B73" text-anchor="left">before 2026-11-14 counts as made that day.</text>
+<rect x="512.0" y="1162.0" width="440.0" height="172.0" rx="7" fill="#FBF2E4" stroke="#D9891F" stroke-width="1.3"/>
+<text x="526.0" y="1198.1" font-size="13" fill="#16242E" text-anchor="left" font-weight="700">What reopening does</text>
+<text x="526.0" y="1215.1" font-size="10.2" fill="#5C6B73" text-anchor="left">An answer: no longer scored or applied, and its own</text>
+<text x="526.0" y="1228.7" font-size="10.2" fill="#5C6B73" text-anchor="left">citation set aside as superseded, so the merge decides</text>
+<text x="526.0" y="1242.3" font-size="10.2" fill="#5C6B73" text-anchor="left">between what is left. answers load --replace re-checks it.</text>
+<text x="526.0" y="1255.9" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="526.0" y="1269.5" font-size="10.2" fill="#5C6B73" text-anchor="left">A superseded ruling the report goes back to: lifted.</text>
+<text x="526.0" y="1283.1" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="526.0" y="1296.7" font-size="10.2" fill="#5C6B73" text-anchor="left">An answer's claim is dated the day it was recorded,</text>
+<text x="526.0" y="1310.3" font-size="10.2" fill="#5C6B73" text-anchor="left">so it grows stale beside a source a year newer.</text>
+<rect x="976.0" y="1162.0" width="476.0" height="172.0" rx="7" fill="#F7EBE9" stroke="#A83E33" stroke-width="1.3"/>
+<text x="990.0" y="1198.1" font-size="13" fill="#A83E33" text-anchor="left" font-weight="700">What never ends one</text>
+<text x="990.0" y="1215.1" font-size="10.2" fill="#5C6B73" text-anchor="left">Not a timer, and not a repeat. Of 627 rulings whose</text>
+<text x="990.0" y="1228.7" font-size="10.2" fill="#5C6B73" text-anchor="left">figure was printed again after the ruling, the forty</text>
+<text x="990.0" y="1242.3" font-size="10.2" fill="#5C6B73" text-anchor="left">read were echoes: Hyperion's 2024 '$10 billion' in a</text>
+<text x="990.0" y="1255.9" font-size="10.2" fill="#5C6B73" text-anchor="left">November 2026 article. A possibility ('could grow to')</text>
+<text x="990.0" y="1269.5" font-size="10.2" fill="#5C6B73" text-anchor="left">is a ceiling, not a change.</text>
+<text x="990.0" y="1283.1" font-size="10.2" fill="#5C6B73" text-anchor="left"></text>
+<text x="990.0" y="1296.7" font-size="10.2" fill="#5C6B73" text-anchor="left">A misread never lifts: it is about a sentence, and</text>
+<text x="990.0" y="1310.3" font-size="10.2" fill="#5C6B73" text-anchor="left">ends only when that sentence is read differently.</text>
+<line x1="48" y1="1338" x2="1452" y2="1338" stroke="#B9C6CC" stroke-width="1"/>
+<text x="48.0" y="1366.0" font-size="12.5" fill="#16242E" text-anchor="start">The layers are ordered by cost, and the free ones are not a warm-up: rules and collisions settle most of what is wrong, and only what survives them is worth a model call.</text>
 </g>
 </svg>

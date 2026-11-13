@@ -412,7 +412,7 @@ def apply_rule_out(
     # what made these rulings look like they bound forever on a mutable question.
     # Both leave the merge and both survive a re-crawl; only a reader can tell them
     # apart, and now can.
-    marked = sum(1 for source in claiming if supersede(source, name, reason=MISREAD))
+    marked = sum(1 for source in claiming if supersede(source, name, by="agent", reason=MISREAD))
     # Blanked before the recompute, not assigned after: `upsert.resolve` returns
     # the existing value when no claim participates, so a field whose every claim
     # is ruled out stays empty without this code choosing a value.

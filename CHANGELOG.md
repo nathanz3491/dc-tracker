@@ -12,6 +12,23 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **No decision holds forever.** A ruling took a citation's claim out of the merge
+  with no end and no date, and the answer key's corrections were cited undated, so
+  the rule that stops a year-old source winning on weight never reached them and they
+  outranked every later news article for good. Every ruling now records when and by
+  whom (migration 0056). A new free nightly step, `tracker logic expire`, reopens a
+  decision when a first-hand sentence published after it reports that the figure
+  *changed* — "from $12 billion to $18 billion", "raised to $50 billion", "delayed to
+  2028", a later stage. A reopened answer is not scored, applied or trained on, and
+  its citation is set aside, until `answers load --replace` records it again; a
+  `superseded` ruling lifts when the report goes back to its figure; a `misread`
+  never lifts. Answer claims now carry the day they were recorded, so they age like
+  any other source. A timer and a repeat were measured and rejected: of 627 rulings
+  whose figure was printed again after the ruling, the forty read were echoes, such
+  as Hyperion's 2024 "$10 billion" in a November 2026 article. On the 2026-11-13
+  database the first run dated 91 answer claims, moved no stored value and reopened
+  one answer (Project Camellia's stage).
+
 - **A campus an authority turned down now reads `denied`.** A stage could only say a
   campus was paused or cancelled, so a county voting down the rezoning — where the
   developer may still appeal or sue, as King of Prussia's did within weeks — was

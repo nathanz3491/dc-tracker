@@ -98,7 +98,7 @@ def test_a_ruling_on_a_claim_the_key_holds_right_is_lifted(session):
         },
     )
     right = next(s for s in project.sources if s.url.endswith("/new"))
-    supersede(right, "mw_planned", reason="misread")
+    supersede(right, "mw_planned", reason="misread", by="operator")
     session.commit()
     recompute_from_sources(session, project)
     assert project.mw_planned == 1500.0

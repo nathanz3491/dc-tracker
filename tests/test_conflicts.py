@@ -317,8 +317,8 @@ def test_a_refusal_writes_nothing(session):
 def test_superseding_twice_is_a_no_op(session):
     project = _contested(session)
     source = project.sources[0]
-    assert conflicts.supersede(source, "investment_usd") is True
-    assert conflicts.supersede(source, "investment_usd") is False
+    assert conflicts.supersede(source, "investment_usd", by="operator") is True
+    assert conflicts.supersede(source, "investment_usd", by="operator") is False
     assert "investment_usd" in (source.unconfirmed_fields or "")
     # `fields` keeps it, and that is not an oversight: the column means "a verbatim
     # quote supports this", and the 2024 article really did say $10 billion. This is
@@ -336,7 +336,7 @@ def test_a_superseded_claim_survives_a_re_read_of_the_same_article(session):
     """
     project = _contested(session)
     older = next(s for s in project.sources if "gov.example" in s.url)
-    conflicts.supersede(older, "investment_usd")
+    conflicts.supersede(older, "investment_usd", by="operator")
     session.commit()
 
     _hyperion(
@@ -360,7 +360,7 @@ def test_a_ruling_does_not_follow_a_re_read_onto_another_value(session):
     """
     project = _contested(session)
     older = next(s for s in project.sources if "gov.example" in s.url)
-    conflicts.supersede(older, "investment_usd")
+    conflicts.supersede(older, "investment_usd", by="operator")
     session.commit()
 
     _hyperion(
@@ -379,7 +379,7 @@ def test_a_ruling_does_not_follow_a_re_read_onto_another_value(session):
 def test_lifting_a_ruling_lets_the_claim_back_and_leaves_a_measured_reason(session):
     project = _contested(session)
     source = project.sources[0]
-    conflicts.supersede(source, "investment_usd", reason="misread")
+    conflicts.supersede(source, "investment_usd", reason="misread", by="operator")
     assert conflicts.lift_ruling(source, "investment_usd") is True
     assert "investment_usd" not in (source.unconfirmed_fields or "")
     assert conflicts.lift_ruling(source, "investment_usd") is False, "nothing left to lift"

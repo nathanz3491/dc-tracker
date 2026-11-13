@@ -166,6 +166,9 @@ def load(session: Session, answers: Iterable[Answer], *, replace: bool = False) 
         ):  # fmt: skip
             setattr(row, name, getattr(answer, name))
         row.recorded_at = utcnow()
+        # Recorded again is checked again: a reopened answer holds from today.
+        row.reopened_on = None
+        row.reopened_by = None
     session.flush()
     return report
 
@@ -274,6 +277,8 @@ class Score:
     statuses: tuple[str, ...]
     fields: dict[str, FieldScore]
     absent: list[int]
+    #: Answers of `statuses` a later report reopened (`expiry`), not scored.
+    reopened: int = 0
 
     @property
     def total(self) -> FieldScore:
@@ -283,14 +288,20 @@ class Score:
         return out
 
 
-def answers(session: Session, statuses: tuple[str, ...] = ("verified",)) -> list[AnswerKey]:
-    return list(
-        session.scalars(
-            select(AnswerKey)
-            .where(AnswerKey.status.in_(statuses))
-            .order_by(AnswerKey.project_id, AnswerKey.field)
-        )
-    )
+def answers(
+    session: Session, statuses: tuple[str, ...] = ("verified",), *, reopened: bool = False
+) -> list[AnswerKey]:
+    """The answers of `statuses`, without those a later report reopened unless asked.
+
+    A reopened answer (`AnswerKey.reopened_on`, `expiry`) is one the key no longer
+    knows to be true: a report published after it was recorded says the field
+    changed. Scoring it, applying it or training on it would assert what nobody has
+    checked since, so every caller leaves it out by default.
+    """
+    query = select(AnswerKey).where(AnswerKey.status.in_(statuses))
+    if not reopened:
+        query = query.where(AnswerKey.reopened_on.is_(None))
+    return list(session.scalars(query.order_by(AnswerKey.project_id, AnswerKey.field)))
 
 
 def score(
@@ -306,6 +317,7 @@ def score(
     absent, not as wrong: a merge folds rows, and the score should not punish it.
     """
     out = Score(statuses=statuses, fields={name: FieldScore() for name in FIELDS}, absent=[])
+    out.reopened = sum(1 for a in answers(session, statuses, reopened=True) if a.reopened_on)
     for answer in answers(session, statuses):
         if rows is None:
             project = session.get(Project, answer.project_id)

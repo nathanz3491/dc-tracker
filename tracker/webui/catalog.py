@@ -350,6 +350,8 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # The same ruling `logic resolve` offers from its menu, by hand, for one
             # claim a person has already read and found wrong.
             "logic rule-out",
+            # The decisions a later report says no longer hold, reopened. Free.
+            "logic expire",
             "audit resolve",
             "logic conflicts",
             "risks confirm",

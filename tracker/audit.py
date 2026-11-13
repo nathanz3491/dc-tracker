@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -320,6 +321,10 @@ def fmt_value(value: Any) -> str:
     return str(value)
 
 
+#: Who chose the action now running (`apply_action`), for the rulings it writes.
+_ACTING: ContextVar[str] = ContextVar("audit_acting", default="operator")
+
+
 def _rule_against(
     session: Session, project: Project, field: str, sources: list[Any], why: str
 ) -> str:
@@ -343,7 +348,7 @@ def _rule_against(
     from tracker.upsert import recompute_from_sources
 
     was = getattr(project, field)
-    marked = sum(1 for source in sources if supersede(source, field))
+    marked = sum(1 for source in sources if supersede(source, field, by=_ACTING.get()))
     setattr(project, field, None)
     session.flush()
     recompute_from_sources(session, project)
@@ -1195,10 +1200,21 @@ class Resolution:
         }
 
 
-def apply_action(session: Session, project: Project, finding: UnitFinding, key: str) -> str:
-    """Run the chosen edit and return what it changed."""
+def apply_action(
+    session: Session, project: Project, finding: UnitFinding, key: str, *, by: str = "operator"
+) -> str:
+    """Run the chosen edit and return what it changed.
+
+    `by` is who chose it, written beside any claim the edit rules out
+    (`conflicts.supersede`). The actions share one call shape, so it travels in
+    :data:`_ACTING` rather than through each of them.
+    """
     action = next(a for a in actions_for(finding.code) if a.key == key)
-    return action.apply(session, project, finding)
+    token = _ACTING.set(by)
+    try:
+        return action.apply(session, project, finding)
+    finally:
+        _ACTING.reset(token)
 
 
 def record(project: Project, code: str, what: str, *, by: str, detail: str = "") -> None:
@@ -1300,7 +1316,7 @@ def settle(session: Session, project: Project, question: Question, asked: Asked)
     if question.free is not None:
         key, why = question.free
         got.stage, got.key, got.reason, got.confidence = "arithmetic", key, why, 1.0
-        got.changed = apply_action(session, project, finding, key)
+        got.changed = apply_action(session, project, finding, key, by="rule")
         record(project, finding.code, got.changed, by="rule", detail=why)
         return got
 
@@ -1309,7 +1325,7 @@ def settle(session: Session, project: Project, question: Question, asked: Asked)
         return got
     if question.operator:
         got.stage, got.key, got.confidence = "operator", question.operator, 1.0
-        got.changed = apply_action(session, project, finding, question.operator)
+        got.changed = apply_action(session, project, finding, question.operator, by="operator")
         record(project, finding.code, got.changed, by="operator")
         return got
 
@@ -1321,7 +1337,7 @@ def settle(session: Session, project: Project, question: Question, asked: Asked)
     if verdict.acted:
         got.stage, got.key = "model", verdict.key
         got.reason, got.confidence = verdict.reason, verdict.confidence
-        got.changed = apply_action(session, project, finding, verdict.key)
+        got.changed = apply_action(session, project, finding, verdict.key, by="model")
         record(
             project,
             finding.code,
@@ -1338,7 +1354,7 @@ def settle(session: Session, project: Project, question: Question, asked: Asked)
             if second.acted:
                 got.stage, got.key = "model-after-search", second.key
                 got.reason, got.confidence = second.reason, second.confidence
-                got.changed = apply_action(session, project, finding, second.key)
+                got.changed = apply_action(session, project, finding, second.key, by="model")
                 record(
                     project,
                     finding.code,

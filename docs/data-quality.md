@@ -481,6 +481,15 @@ value is also stated by newer citations. On 2026-11-11, 27 verified answers were
 wrong, and most had been corrected by `answers apply` on 11-01 and re-asserted by
 articles read since.
 
+**An answer holds until a later report says the field changed.** It is true as of
+the day it was recorded, and its claim now carries that day, so it grows stale beside
+a source a year newer like any other. When a first-hand sentence published after it
+reports a change ("raised to $50 billion", "delayed to 2028", a later stage), the
+nightly `tracker logic expire` reopens it: it is no longer scored, applied or trained
+on, and its own citation is set aside, until `answers load --replace` records it
+again. A figure merely printed again is not a change — the news repeats old figures
+for years. See `docs/workflows/logic.md`.
+
 Reading those 27 rows gave the rules that followed: a construction sentence about a
 power plant, or about construction not yet started, no longer sets a campus's stage;
 a later expansion's ceiling is not the planned capacity; two more directories count as

@@ -371,7 +371,7 @@ def _fleet(session) -> list[Project]:
     abilene = session.get(Project, ids[0])
     # A ruling as well as a refusal: the unquoted 1 GW figure decided against.
     loser = next(s for s in abilene.sources if s.url.endswith("abilene-1gw"))
-    supersede(loser, "mw_planned")
+    supersede(loser, "mw_planned", by="operator")
     session.flush()
     recompute_from_sources(session, abilene)
     session.commit()
@@ -562,7 +562,7 @@ def test_every_kind_of_write_leaves_the_statements_current(session):
 
     # A ruling against a citation's tranches (`logic rule-out ID blocks`).
     first = next(s for s in abilene.sources if s.url.endswith("abilene-1-2gw"))
-    blocks_mod.rule_out(first, reason="misread")
+    blocks_mod.rule_out(first, reason="misread", by="operator")
     session.flush()
     blocks_mod.rebuild(session, abilene)
     recompute_from_sources(session, abilene)

@@ -270,6 +270,13 @@ class Source(Base):
     #: above. NULL on every source written before migration 0023, which is what
     #: `tracker backfill parties` exists to make harmless.
     parties: Mapped[str | None] = mapped_column(Text)
+    #: JSON object, field -> {on, by}: when a ruling in `unconfirmed_reasons` was made
+    #: and who made it (migration 0056). Beside the reason rather than inside it,
+    #: because a dozen readers compare the reason to a string. It describes a ruling
+    #: only while the reason beside it is still a decision (`conflicts.ruling_of`):
+    #: a re-read that drops the ruling leaves this entry behind, harmlessly. NULL on
+    #: every ruling made before 2026-11-14 (`conflicts.DATED_FROM`).
+    rulings: Mapped[str | None] = mapped_column(Text)
 
     project: Mapped[Project] = relationship(back_populates="sources")
 
@@ -789,6 +796,15 @@ class AnswerKey(Base):
     note: Mapped[str | None] = mapped_column(Text)
     method: Mapped[str] = mapped_column(Text, nullable=False)
     recorded_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    #: Set when a report published after `recorded_at` says the field changed
+    #: (`expiry`, migration 0056): the key no longer knows the answer, so it is not
+    #: scored, not applied, and its citation stops outranking newer articles until
+    #: somebody checks it again (`answers load --replace` clears both).
+    reopened_on: Mapped[dt.date | None] = mapped_column(Date)
+    #: The citation whose sentence reported the change.
+    reopened_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("source.id", ondelete="SET NULL")
+    )
 
     __table_args__ = (
         UniqueConstraint("project_id", "field", name="uq_answer_key_project_field"),

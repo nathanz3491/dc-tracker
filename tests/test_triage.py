@@ -511,13 +511,15 @@ def test_a_misread_relabels_a_claim_previously_filed_as_superseded(session, row)
     from tracker.conflicts import MISREAD, SUPERSEDED, supersede
 
     _project, campus, _building = row
-    assert supersede(campus, "mw_built", reason=SUPERSEDED)
+    assert supersede(campus, "mw_built", reason=SUPERSEDED, by="operator")
     session.flush()
 
-    assert supersede(campus, "mw_built", reason=MISREAD), "a relabel must not be skipped"
+    assert supersede(campus, "mw_built", reason=MISREAD, by="operator"), (
+        "a relabel must not be skipped"
+    )
     assert _json.loads(campus.unconfirmed_reasons)["mw_built"] == MISREAD
     # Still idempotent against its own reason.
-    assert not supersede(campus, "mw_built", reason=MISREAD)
+    assert not supersede(campus, "mw_built", reason=MISREAD, by="operator")
 
 
 # --- the ruling has to be readable back as an answer -------------------------
@@ -636,7 +638,7 @@ def test_a_claim_filed_as_superseded_can_still_be_relabelled_a_misread(session, 
     from tracker.conflicts import MISREAD, SUPERSEDED, supersede
 
     project, campus, _building = row
-    assert supersede(campus, "mw_built", reason=SUPERSEDED)
+    assert supersede(campus, "mw_built", reason=SUPERSEDED, by="operator")
     session.flush()
 
     acted, _sentence, refusal = triage.apply_rule_out(

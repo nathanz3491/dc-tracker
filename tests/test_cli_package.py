@@ -83,6 +83,7 @@ COMMANDS = {
     "logic",
     "logic check",
     "logic conflicts",
+    "logic expire",
     "logic resolve",
     "logic rule-out",
     "losses",

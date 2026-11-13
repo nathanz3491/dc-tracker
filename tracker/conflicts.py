@@ -45,11 +45,12 @@ they said, and the row still equals what its citations imply.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy.orm import Session
 
@@ -421,11 +422,81 @@ def _challenge(dispute: Dispute, chosen: Option, reason: str, *, extractor: Any)
 # --- writing -----------------------------------------------------------------
 
 
-def supersede(source: Source, field: str, *, reason: str = SUPERSEDED) -> bool:
+#: The day rulings began to be dated (migration 0056). A ruling with no date was made
+#: on or before it, so `tracker.expiry` treats it as made on this day: the latest it
+#: can have been made, which lets only reports published since reopen it.
+DATED_FROM: Final = dt.date(2026, 11, 14)
+
+
+@dataclass(frozen=True)
+class Ruling:
+    """A decision standing on one citation's claim: what, when, and whose."""
+
+    reason: str
+    #: None for a ruling made before rulings were dated (:data:`DATED_FROM`).
+    on: dt.date | None
+    by: str | None
+
+    @property
+    def made(self) -> dt.date:
+        """The day to measure later reports against: `on`, else :data:`DATED_FROM`."""
+        return self.on or DATED_FROM
+
+
+def _object(text: str | None) -> dict:
+    try:
+        out = json.loads(text or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
+def ruling_of(source: Any, key: str) -> Ruling | None:
+    """The decision on this citation's `key` (a field, or `blocks.RULED_OUT`), if any.
+
+    The reason in `unconfirmed_reasons` decides whether there is one; `rulings` only
+    dates it, and is trusted only while that reason is still a decision — a re-read
+    that dropped the ruling leaves its old entry behind.
+    """
+    from tracker.upsert import DECIDED_REASONS
+
+    reason = _object(getattr(source, "unconfirmed_reasons", None)).get(key)
+    if reason not in DECIDED_REASONS:
+        return None
+    entry = _object(getattr(source, "rulings", None)).get(key)
+    entry = entry if isinstance(entry, dict) else {}
+    try:
+        on = dt.date.fromisoformat(str(entry.get("on"))[:10]) if entry.get("on") else None
+    except ValueError:
+        on = None
+    return Ruling(reason=reason, on=on, by=entry.get("by") or None)
+
+
+def note_ruling(source: Any, key: str, *, by: str) -> None:
+    """Date a ruling just written on `key`, and name who made it."""
+    from tracker.models import utcnow
+
+    entries = _object(getattr(source, "rulings", None))
+    entries[key] = {"on": utcnow().date().isoformat(), "by": by}
+    source.rulings = json.dumps(entries, sort_keys=True, ensure_ascii=False)
+
+
+def _forget_ruling(source: Any, key: str) -> None:
+    entries = _object(getattr(source, "rulings", None))
+    if entries.pop(key, None) is not None:
+        source.rulings = (
+            json.dumps(entries, sort_keys=True, ensure_ascii=False) if entries else None
+        )
+
+
+def supersede(source: Source, field: str, *, by: str, reason: str = SUPERSEDED) -> bool:
     """Rule one citation's claim about one field out of the merge. Idempotent.
 
     Two columns move: `unconfirmed_reasons` records *why*, and `unconfirmed_fields`
-    is what `claims_by_field` reads to demote the claim out of the merge.
+    is what `claims_by_field` reads to demote the claim out of the merge. A third,
+    `rulings`, records when and `by` whom (`note_ruling`): "operator", "agent",
+    "model", "rule", "answer key", "change report" — the same names the row's notes
+    use, so a decision there and here can be matched up.
 
     `reason` must be a member of `upsert.DECIDED_REASONS`, and which one matters to
     a reader even though it does not change what this function writes. `superseded`
@@ -463,6 +534,7 @@ def supersede(source: Source, field: str, *, reason: str = SUPERSEDED) -> bool:
 
     reasons[field] = reason
     source.unconfirmed_reasons = json.dumps(reasons, sort_keys=True, ensure_ascii=False)
+    note_ruling(source, field, by=by)
 
     unconfirmed = {f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()}
     unconfirmed.add(field)
@@ -493,6 +565,7 @@ def lift_ruling(source: Source, field: str) -> bool:
     source.unconfirmed_reasons = (
         json.dumps(reasons, sort_keys=True, ensure_ascii=False) if reasons else None
     )
+    _forget_ruling(source, field)
     quoted = {f.strip() for f in (source.fields or "").split(",") if f.strip()}
     if field in quoted:
         unconfirmed = {f.strip() for f in (source.unconfirmed_fields or "").split(",") if f.strip()}
@@ -515,7 +588,9 @@ def apply_outcome(session: Session, project: Project, outcome: Outcome) -> int:
         return 0
     losers = set(outcome.superseded)
     marked = sum(
-        1 for s in project.sources if s.url in losers and supersede(s, outcome.dispute.field)
+        1
+        for s in project.sources
+        if s.url in losers and supersede(s, outcome.dispute.field, by="model")
     )
     if marked:
         session.flush()
@@ -524,16 +599,20 @@ def apply_outcome(session: Session, project: Project, outcome: Outcome) -> int:
 
 
 __all__ = [
+    "DATED_FROM",
     "FIELD_NOTES",
     "MAX_CALLS_PER_FIELD",
     "MIN_CONFIDENCE",
     "Dispute",
     "Option",
     "Outcome",
+    "Ruling",
     "SolveReport",
     "apply_outcome",
     "disputes",
     "lift_ruling",
+    "note_ruling",
+    "ruling_of",
     "solve",
     "supersede",
 ]
