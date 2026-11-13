@@ -311,6 +311,20 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Four ways a real sentence still became the wrong figure.** Each came from the
+  2026-11-11 night: DataBank Red Oak held "total campus financing to $2.65 billion",
+  Google Monrovia held the $737 million its utility will spend on generation and grid
+  "for a 390-MW data center", Roswell's plan became the "potential scaling to 4 GW",
+  and Vantage Lighthouse's 1,300 MW, stated by five articles, gave way to one freshly
+  read "nearly 1 gigawatt". A running financing total is now financing, the utility's
+  infrastructure for a campus covers more than the campus, a possible scaling is a
+  ceiling like a possible expansion, and between sources of the same weight an exact
+  figure ranks ahead of a round one its sentence hedges ("nearly", "about"), unless
+  another sentence states that figure exactly. "Paying $X" is a purchase price like "paid $X" (`crawl.money_kind`,
+  `crawl.wider_kind`, `crawl.stated_roughly`, `upsert.rank_claims`,
+  `upsert.rough_claims`). Stored claims take the readings at the next
+  `backfill scope`, the ranking at the next re-derive.
+
 - **A ruling no longer follows a citation onto a value it was not made against.**
   When a citation was ruled out — superseded, or misread — and its article was read
   again, the ruling stayed on the field whatever the new reading said. Seven verified

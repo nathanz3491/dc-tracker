@@ -2083,7 +2083,7 @@ _PURCHASE_MONEY = re.compile(
     r"\bfor\s+"
     + _ABOUT
     + _MONEY
-    + r"|\b(?:paid|pays|purchase price of|sale price of)\s+"
+    + r"|\b(?:paid|pays|paying|purchase price of|sale price of)\s+"
     + _ABOUT
     + _MONEY
     + r"|"
@@ -2094,10 +2094,13 @@ _PURCHASE_MONEY = re.compile(
 #: A loan or a financing round: the borrowed share of a cost, not the cost. Bonds are
 #: deliberately not here — a county's industrial revenue bonds are usually issued for
 #: the project's whole capital cost, as the vehicle for its tax abatement.
+#:
+#: "Financing to $X" is a running total: "this brings the total Red Oak campus
+#: financing to $2.65 billion" was DataBank Red Oak's stored investment on 2026-11-12.
 _FINANCING_MONEY = re.compile(
     _MONEY
     + r"(?:\s+(?:in|of))?(?:\s+[\w-]+){0,2}?\s+(?:financing|loans?|credit facility|debt)\b"
-    + r"|\b(?:loan|financing|credit facility) (?:of|worth|totaling|totalling)\s+"
+    + r"|\b(?:loans?|financing|credit facility) (?:of|worth|totaling|totalling|to)\s+"
     + _ABOUT
     + _MONEY
     + r"|\b(?:secured|raised|raises|obtained)\s+"
@@ -2223,6 +2226,17 @@ _ENERGY_OBJECT = re.compile(
     r"|\b(?:clean|nuclear) energy campus\b"
 )
 
+#: The utility's side of the bill: generation, storage or grid built *for* the data
+#: center. "AES will acquire or build new generation, storage and grid infrastructure
+#: for a 390-MW data center ... at an estimated project cost of about $737 million"
+#: became Google Monrovia's investment on 2026-11-11. Only with "for", "to serve" or
+#: "serving" after it: a campus budget that merely includes grid upgrades says
+#: "including" or "with".
+_INFRASTRUCTURE_FOR_IT = re.compile(
+    r"\b(?:generation|grid|transmission|storage|electric(?:al)?|utility)\b[\w ,&-]{0,40}?"
+    r"\binfrastructure (?:for|to serve|serving) (?:a|an|the)\b"
+)
+
 #: For megawatts only the last of those: a sentence about a data center's demand says
 #: "with direct access to energy infrastructure" as often as not.
 _MW_ENERGY_OBJECT = re.compile(r"\b(?:clean|nuclear) energy campus\b")
@@ -2253,10 +2267,13 @@ _MW_IS_PLANT = re.compile(
 #: A later expansion's ceiling, not the plan: "a clear expansion path to 8GW+", "a
 #: 1,000-megawatt base case with potential expansion to 1,500 megawatts". Matched only
 #: directly before the figure. "Designed to scale to 1 gigawatt" is how a plan is
-#: often stated, so "scale to" is not here.
+#: often stated, so bare "scale to" is not here — only scaling that is a possibility:
+#: "100-200 MW of power at launch, with potential scaling to 4 GW" set Roswell's plan
+#: to 4,000 MW on 2026-11-11.
 _EXPANSION_CEILING = re.compile(
-    r"\b(?:expansion path|potential expansion|potential to expand|expandable|"
-    r"could (?:expand|grow)|future expansion|further expansion|eventual expansion|"
+    r"\b(?:expansion path|potential expansion|potential to (?:expand|scale|grow)|expandable|"
+    r"potential(?:ly)? scaling|could (?:expand|grow|scale)|possible expansion|"
+    r"option to expand|future expansion|further expansion|eventual expansion|"
     r"room to (?:expand|grow))\s+to\s+(?:about |approximately |roughly |more than |over |up to )?$"
 )
 
@@ -2343,13 +2360,67 @@ def wider_kind(quote: str | None, value: Any, field: str) -> str | None:
         if _MANY_SITES.search(clause):
             return "covers_more"
         if field == "investment_usd":
-            if _ENERGY_OBJECT.search(clause) or (
-                _PLANT.search(clause) and not _SUPPLIER.search(clause)
+            if (
+                _ENERGY_OBJECT.search(clause)
+                or _INFRASTRUCTURE_FOR_IT.search(clause)
+                or (_PLANT.search(clause) and not _SUPPLIER.search(clause))
             ):
                 return "covers_more"
         elif _MW_IS_PLANT.match(after) or _MW_ENERGY_OBJECT.search(clause):
             return "covers_more"
     return None
+
+
+#: Words that make the figure after them an approximation: "computing capacity of
+#: nearly 1 gigawatt". Only for a round figure (`_significant_digits` ≤ 2):
+#: "approximately $1.234 billion" is a sum of seven building filings, as precise as
+#: the article could make it. Bounds are not here. "Up to" is how plans are stated
+#: ("planned capacity of up to 525 megawatts"), and a floor is as often the better
+#: figure as the worse: on the 2026-11-13 copy, demoting "more than" handed Rowan
+#: Temple's "more than $3 billion in planned investment" to an older "$700 million
+#: data center" as readily as it lifted Cologix's $1 billion over "exceeding $274
+#: million".
+_ROUGHLY = re.compile(
+    r"(?:\b(?:nearly|almost|about|around|roughly|approximately|approx\.?|some|close to|"
+    r"just (?:under|over|shy of))\s+|~\s*)$"
+)
+
+
+def _significant_digits(amount: float) -> int:
+    """How many digits a figure was stated with: 1,200 → 2, 1.234 billion → 4."""
+    digits = f"{amount:.6g}".split("e")[0].replace(".", "").replace("-", "")
+    return len(digits.strip("0")) or 1
+
+
+@lru_cache(maxsize=65536)
+def stated_roughly(quote: str | None, value: Any, field: str) -> bool:
+    """Whether the sentence gives the claimed figure only roughly.
+
+    "Four data centers with computing capacity of nearly 1 gigawatt" claims 1,000 MW
+    for Vantage Lighthouse; five other articles say 1,300. All weigh the same, so the
+    article read last decided, and on 2026-11-11 that was the approximation
+    (`upsert.rank_claims` now ranks an exact figure ahead of a rough one of the same
+    weight, unless another sentence states the rough one exactly). Only for the
+    figure claimed (within 5%), like `wider_kind`, and only for investment and
+    megawatts; a date's coarseness is its `date_precision`.
+    """
+    if not quote or value is None or isinstance(value, bool):
+        return False
+    try:
+        claimed = float(value)
+    except (TypeError, ValueError):
+        return False
+    if claimed <= 0:
+        return False
+    text = " ".join(str(quote).lower().split())
+    figures = [
+        (amount, before)
+        for amount, before, _ in _clause_figures(text, field)
+        if abs(amount - claimed) <= 0.05 * claimed
+    ]
+    return bool(figures) and all(
+        _ROUGHLY.search(before) and _significant_digits(amount) <= 2 for amount, before in figures
+    )
 
 
 def _events(raw: dict[str, Any], article_text: str, url: str) -> list[EventRecord]:

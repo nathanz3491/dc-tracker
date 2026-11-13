@@ -650,9 +650,15 @@ def rank_claims(out: dict[str, list[_Claim]], *, settings: Any = None) -> dict[s
     # its 2016 press releases (weight 3) beat 2026 trade press (weight 2) on
     # capacity, tenant and date — Aligned's DFW-02 read 30 MW and Sabre, its 2017
     # tenant, on 2026-10-21.
+    #
+    # Between weight and recency, an exact figure ranks ahead of one its sentence only
+    # approximates (`rough_claims`): Vantage Lighthouse's "nearly 1 gigawatt", read
+    # last, beat five articles saying 1,300 MW on 2026-11-11. A heavier source's
+    # approximation still wins, and a year-old exact figure is stale before this.
     by_publication = _prefer_publication_date(settings)
-    for claims_list in out.values():
+    for name, claims_list in out.items():
         stale = stale_claims(claims_list)
+        rough = rough_claims(name, claims_list)
         claims_list.sort(
             key=lambda c: (
                 not c.decided_against,
@@ -661,12 +667,54 @@ def rank_claims(out: dict[str, list[_Claim]], *, settings: Any = None) -> dict[s
                 not c.tertiary,
                 id(c) not in stale,
                 c.weight,
+                id(c) not in rough,
                 c.recency(by_publication=by_publication),
                 c.url,
             ),
             reverse=True,
         )
     return out
+
+
+def rough_claims(name: str, claims: list[_Claim]) -> set[int]:
+    """`id()`s of the investment or capacity claims stated only roughly.
+
+    "Roughly", "nearly", "about" before a round figure — `crawl.stated_roughly`. Not
+    when another live claim states the same
+    figure exactly: Metrobloks Southfield's newest article said "roughly $1.5
+    billion", three others said $1.5 billion outright, and marking the newest one
+    rough handed the field to a lone "$500 million needed" on the 2026-11-13 copy.
+    The approximation was never the problem there; the figure was agreed.
+    """
+    if name != "investment_usd" and name not in _CAPACITY_FIELDS:
+        return set()
+    from tracker.ingest.crawl import stated_roughly
+
+    marked = {id(c) for c in claims if stated_roughly(c.quote, c.value, name)}
+    if not marked:
+        return marked
+    exact = [
+        c.value
+        for c in claims
+        if id(c) not in marked
+        and not c.decided_against
+        and c.confirmed
+        and isinstance(c.value, (int, float))
+    ]
+    return {
+        id(c)
+        for c in claims
+        if id(c) in marked and not any(_same_figure(c.value, v) for v in exact)
+    }
+
+
+def _same_figure(a: Any, b: Any) -> bool:
+    """Two numeric claims within 5% of each other."""
+    try:
+        x, y = float(a), float(b)
+    except (TypeError, ValueError):
+        return False
+    return abs(x - y) <= 0.05 * max(abs(x), abs(y))
 
 
 #: How much older than another claim of the same standing a claim's article must be
