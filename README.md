@@ -267,10 +267,13 @@ nights before it (`--watch 30` redraws every 30 seconds; `--json` for scripts).
 `scripts/overnight.sh --status` prints the raw round lines from any other shell, with or
 without a venv, and `scripts/overnight.sh --help` lists every option (the same as
 `python -m tracker.overnight run --help`). Each round runs the free phases, then `audit` (a T1 gate, and cheap),
-`risks`, the logic and duplicate agents, and — in the first two rounds only
+`risks`, the logic and duplicate agents, and — in the first two rounds
 (`--enrich-rounds`) — `enrich`, the most expensive rung and the only one that can move
 a row held at T1 by `fields_present`, pointed at the rows below T2 (`enrich --t2`); the
-second round takes rows the first did not ask about (`enrich --fresh`).
+second round takes rows the first did not ask about (`enrich --fresh`). A fixed night
+goes on enriching fresh rows in later rounds while the pass before filled at least
+five values, instead of stopping with hours and money unspent, and re-reads a second
+batch of the 25 likeliest-wrong values in round 2.
 Before it, a smaller enrich pass looks for the opening date and planned capacity of
 campuses being built or permitted that lack one (`--pipeline`, default 45 campuses
 and 180 articles), largest first: without a date a campus is missing from the

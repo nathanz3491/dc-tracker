@@ -532,7 +532,9 @@ as the model scoring how right the row is rather than how wrong the claims are; 
 `rule_out_claims` schema now says which it means. The bar itself is unchanged.
 
 The nightly loop scores every stored MW, investment and online date before round 1
-(free), runs `logic resolve --suspects 25` once in round 1, and at the end of the night
+(free), runs `logic resolve --suspects 25` in round 1 — and on a fixed night the next 25
+in round 2 (on 2026-11-13 the first 25 changed 8 values for ¥0.87) — and at the end of
+the night
 files what the passes decided about the ranked values — changed, kept, or left alone
 with a reason — beside the signals each value had when it was ranked
 (`data/runs/suspect-outcomes.jsonl`), then refits the score on the answer key. The

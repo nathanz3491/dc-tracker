@@ -548,6 +548,8 @@ ROUND_TWO = [
     ("audit", "resolve", "--no-ask", "--limit", "60"),
     ("risks", "confirm", "--limit", "40"),
     ("logic", "resolve", "--limit", "60"),
+    # The next 25 likeliest-wrong values, on a fixed night (`steps.SECOND_SUSPECTS`).
+    ("logic", "resolve", "--suspects", "25", "--limit", "25"),
     ("tranches", "review", "--limit", "20"),
     ("enrich", "--select", "45", "--pipeline", "--budget", "180", "--fresh"),
     ("enrich", "--select", "75", "--t2", "--target", "0", "--budget", "300", "--fresh"),

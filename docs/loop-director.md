@@ -97,7 +97,9 @@ whether its estimates can be trusted is visible within a week.
   the twins, the free phase) are refused. The plan's schema does not offer the rule
   reader, and the referee refuses it if a plan names it anyway.
 - **Once a night**: the news, the rule reader, the twins, the suspects, reread,
-  recheck. A frame step that has already run is not placed again.
+  recheck. A frame step that has already run is not placed again. (A fixed night
+  re-reads a second batch of suspects in round 2, and a night that falls back to the
+  fixed schedule may too, up to what a fixed night runs.)
 - **Ranges.** Every size and budget is clamped to its kind's range
   (`steps.KINDS`). An enrich step with no budget gets four articles a row, the fixed
   schedule's ratio.

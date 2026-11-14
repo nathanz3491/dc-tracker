@@ -88,11 +88,15 @@ THE PHASE ORDER IS THE ARGUMENT. The news first, then cheapest and most-blocking
             there is: every one of the 283 rows sitting at T1 is held there by
             `fields_present` alone. Those rows are not wrong, they are empty, and
             nothing above this line can move one. It runs in the first TWO rounds
-            only (`--enrich-rounds`), the second on rows the first did not ask
+            (`--enrich-rounds`), the second on rows the first did not ask
             about (`enrich --fresh`): what it reads changes when articles are
             ingested, not when a merge or a ruling lands, and on the nights of
             2026-09-24 to 09-29, asking the same rows again, it was 86% of the
-            bill, round after round, for one new fact.
+            bill, round after round, for one new fact. Since 2026-11-15 a fixed
+            night goes on past the second round, always on rows not yet asked,
+            while the pass before filled `steps.PASS_YIELD` values: the three
+            fixed nights before stopped at their fixed point with 4-5 hours and
+            up to ¥6 unspent, their second passes having filled 5, 17 and 34.
             It picks rows with `--t2` — the ones below T2 for missing fields,
             fewest missing first — where `--target 0` alone had sorted the
             FULLEST rows first and spent every round on rows already past the bar.
@@ -393,7 +397,8 @@ class Options:
     nest: int = 20
     # Values the suspicion score ranks most likely wrong, re-read by the logic agent
     # in round 1 (`logic resolve --suspects`): the top of the ranking and a random
-    # fifth. Each answer lands in the verdict log the score is retrained from.
+    # fifth. Each answer lands in the verdict log the score is retrained from. A fixed
+    # night re-reads the next batch in round 2 (`steps.SECOND_SUSPECTS`).
     suspects: int = 25
     # The first enrich pass: campuses being built or permitted that lack an online
     # date or planned capacity, largest first, asked only those two fields (`enrich
@@ -407,7 +412,9 @@ class Options:
     # Round 2 takes the rows round 1 did not ask about (`enrich --fresh`). Grouping the
     # news watch's searches by company (v6.5.1) freed about 500 searches a night, and
     # on 11-03 enrich still left ¥29.63 and seven hours unused: 681 rows below T2
-    # had fields worth asking about and round 1 reached 75.
+    # had fields worth asking about and round 1 reached 75. After these rounds a fixed
+    # night keeps passing, on fresh rows, while the last pass filled
+    # `steps.PASS_YIELD` values (`Night.paying`).
     enrich_rounds: int = 2
     discover: int = 1350
     # Have a model read the queued headlines first and set aside what cannot be campus
@@ -519,7 +526,7 @@ def parser() -> argparse.ArgumentParser:
         type=int,
         default=d.suspects,
         help="values the suspicion score ranks most likely wrong, re-read in round 1 "
-        "(default 25; 0 turns it off)",
+        "and, on a fixed night, the next batch in round 2 (default 25; 0 turns it off)",
     )
     a(
         "--nest",
@@ -555,8 +562,8 @@ def parser() -> argparse.ArgumentParser:
         "--enrich-rounds",
         type=int,
         default=d.enrich_rounds,
-        help="enrich in the first N rounds only, each after the first on rows not yet "
-        "asked about tonight (default 2)",
+        help="enrich in the first N rounds, each after the first on rows not yet asked "
+        "about tonight; a fixed night goes on while a pass fills 5 values (default 2)",
     )
     a(
         "--discover",
@@ -1343,10 +1350,27 @@ class Night:
     # --- the fixed schedule ---------------------------------------------------------------
 
     def fixed_round(self, number: int) -> bool:
-        plan = steps_mod.fixed_round(self.options, number)
+        plan = steps_mod.fixed_round(self.options, number, paid=self.paying())
         if self.director is not None:
             plan = [s for s in plan if self.fixed_allowed(s, fallback=True)]
         return self.run_fixed(plan, number)
+
+    def paying(self) -> frozenset[str]:
+        """The enrich kinds whose last pass tonight filled enough values to earn another.
+
+        Read from the step records, so a pass is judged on what it changed, not on what
+        it was asked: `steps.PASS_YIELD` values or more, the command exiting cleanly,
+        and fewer than `steps.FIXED_PASSES` passes of the kind so far.
+        """
+        out = set()
+        for kind in steps_mod.SELECTING:
+            passes = [r for r in self.records if r.kind == kind]
+            if not passes or len(passes) >= steps_mod.FIXED_PASSES:
+                continue
+            last = passes[-1]
+            if not last.failed and (last.result or 0) >= steps_mod.PASS_YIELD:
+                out.add(kind)
+        return frozenset(out)
 
     def run_fixed(self, plan: list[Step], number: int) -> bool:
         """The fixed steps in order; on a fixed night the director predicts beside them."""
@@ -1358,13 +1382,17 @@ class Night:
         return False
 
     def fixed_allowed(self, step: Step, *, fallback: bool = False) -> bool:
-        """After a director ran part of the night: no once-a-night step twice, no third
-        enrich pass, and a second one only on rows not yet asked today."""
+        """After a director ran part of the night: no once-a-night step past what a fixed
+        night runs of it (the suspects twice, `steps.SECOND_SUSPECTS`; the rest once),
+        no third enrich pass, and a second one only on rows not yet asked today."""
         kind = steps_mod.KINDS[step.kind]
         if fallback:
             step.origin = "fallback"
-        if kind.once and self.tonight.totals.get(step.kind, 0) > 0:
-            return False
+        if kind.once:
+            ran = self.tonight.totals.get(step.kind, 0)
+            allowed = steps_mod.defaults_per_night(self.options).get(step.kind, step.size)
+            if ran and ran + step.size > allowed:
+                return False
         if step.kind in steps_mod.SELECTING:
             passes = self.tonight.passes.get(step.kind, 0)
             if passes >= referee.SELECTING_PASSES:

@@ -104,7 +104,12 @@ the bill on the nights of 2026-09-24 to 09-29, and why it was cut to one round. 
 on both the pipeline and the T2 pass: grouping the news watch's searches by company
 freed about 500 searches a night, and on 11-03 enrich left ¥29.63 and seven hours
 unused while 681 rows below T2 still had fields worth asking about and round 1 reached
-75 (`attempts.asked_since`).
+75 (`attempts.asked_since`). Since 2026-11-15 a fixed night goes on past round 2, each
+pass again `--fresh`, while the pass before it filled at least five values
+(`steps.PASS_YIELD`, at most six passes of a kind, `Night.paying`): the three fixed
+nights before stopped at their fixed point with 4-5 hours and up to ¥6 unspent after
+second passes that had filled 5, 17 and 34 values. A pass that fills fewer ends it, and
+the rounds after it go stale and stop the night as before.
 
 ## `--basics`: the fields that say what a project is
 
@@ -428,7 +433,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Options, defaults, target defaulting, lock | `tracker/cli/enrich.py` — `enrich` |
 | Round loop and stop reasons | `tracker/ingest/enrich.py` — `run` |
 | Batch budget, one-time sweep | `tracker/ingest/enrich.py` — `run_many`, `sweep_archives`, `ArchiveSweep`, `will_harvest`; `tracker/ingest/discover.py` — `RecentWalkFetcher`, `RememberingFetcher`, `walk_cache`, `WALK_FRESH`, `run` (the walk it keeps) |
-| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/attempts.py` — `asked_since`; `tracker/overnight.py` — `enrich_rounds`; `tracker/night/steps.py` — `fixed_round`, `commands` (`pipeline`, `enrich`, `rows`); `tracker/night/referee.py` — `review_step`, `SELECTING_PASSES`, `ROWS_STEPS`; `tracker/agent.py` — `_director_note`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
+| Row selection order | `tracker/ingest/enrich.py` — `select_projects`, `select_pipeline`, `PIPELINE_PHASES`, `PIPELINE_FIELDS`, `pursuable`, `t2_gaps`, `DEFAULT_TARGET_FIELDS`; `tracker/attempts.py` — `asked_since`; `tracker/overnight.py` — `enrich_rounds`, `Night.paying`; `tracker/night/steps.py` — `fixed_round`, `PASS_YIELD`, `FIXED_PASSES`, `commands` (`pipeline`, `enrich`, `rows`); `tracker/night/referee.py` — `review_step`, `SELECTING_PASSES`, `ROWS_STEPS`; `tracker/agent.py` — `_director_note`; `tracker/gaps.py` — `t2_gaps`, `unpublished`, `for_project`, `_NOT_BUILT_PHASES` |
 | Harvesters | `tracker/ingest/enrich.py` — `harvest_queue`, `harvest_retry`, `harvest_archive`, `harvest_search`, `harvest_refresh`, `_derive`; `tracker/ingest/search.py` — `CachedProvider`, `cached` |
 | Ignore-list filtering | `tracker/ingest/enrich.py` — `Round.urls`; `tracker/policy.py` |
 | Reading, and not re-reading | `tracker/ingest/enrich.py` — `run(reread=, focus=)`, `focus_route`, `Round.refused_new`, `_origins`; `tracker/keys.py` — `names_this_row`; `tracker/ingest/crawl.py` — `run(existing_only=, origins=)`, `record_url(origin=)`, `_origin`, `unchanged_reads`, `focus_note`, `extract_one`; `tracker/llm.py` — `without_thinking` |

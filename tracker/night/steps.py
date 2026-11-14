@@ -575,15 +575,33 @@ def env(step: Step) -> dict[str, str]:
     return out
 
 
-def fixed_round(o: Any, number: int) -> list[Step]:
+#: A fixed night runs another enrich or pipeline pass after its first `enrich_rounds`
+#: while the pass before it filled at least this many values. Each later pass takes
+#: rows not asked today (`--fresh`), so this is never the same rows asked again — the
+#: September waste the two-round limit was written against. Measured 2026-11-14: the
+#: second passes of the three fixed nights before filled 5, 17 and 34 values, and each
+#: night then stopped at its fixed point with hours and yuan unspent (11-13: 281
+#: minutes and ¥5.95), because no round after the second could move a count.
+PASS_YIELD: Final = 5
+#: Passes of one selecting kind a fixed night runs at most, the first two included.
+FIXED_PASSES: Final = 6
+#: The round of a fixed night that re-reads a second batch of the likeliest-wrong
+#: values: the next `--suspects` after round 1's. On 2026-11-13 round 1's 25 changed
+#: 8 values for ¥0.87, the cheapest correction any step makes.
+SECOND_SUSPECTS: Final = 2
+
+
+def fixed_round(o: Any, number: int, paid: frozenset[str] = frozenset()) -> list[Step]:
     """The fixed schedule's round `number`, step by step — `Night.run_round` as it was.
 
     The order is the argument the `tracker.overnight` docstring makes: the news first
     (round 1), the rule reader right after it (round 1: it reads the pages the news
     just saved), the twin pass, the free phase, duplicates ahead of every phase that
-    pays to read a row, audit, risks, logic, the suspects (round 1), tranches, the two
-    enrich passes (the first `enrich_rounds` rounds, `--fresh` after the first), then
-    reread and recheck (round 1).
+    pays to read a row, audit, risks, logic, the suspects (rounds 1 and
+    :data:`SECOND_SUSPECTS`), tranches, the enrich passes (the first `enrich_rounds`
+    rounds, `--fresh` after the first, and after those while `paid` names the kind:
+    its last pass tonight filled :data:`PASS_YIELD` values), then reread and recheck
+    (round 1).
 
     The rule reader has its own switch (`--conditions`), not the news's: it reads the
     pages saved over the last two days, so a night without discovery still has
@@ -611,13 +629,14 @@ def fixed_round(o: Any, number: int) -> list[Step]:
     out.append(Step("audit", size=o.audit))
     out.append(Step("risks", size=o.risks))
     out.append(Step("logic", size=o.findings))
-    if number == 1 and o.suspects > 0:
+    if number in (1, SECOND_SUSPECTS) and o.suspects > 0:
         out.append(Step("suspects", size=o.suspects))
     out.append(Step("tranches", size=o.nest))
     fresh = number > 1
-    if number <= o.enrich_rounds and o.pipeline > 0:
+    busy = number <= o.enrich_rounds
+    if o.pipeline > 0 and (busy or "pipeline" in paid):
         out.append(Step("pipeline", size=o.pipeline, budget=o.pipeline_budget, fresh=fresh))
-    if o.do_enrich and number <= o.enrich_rounds:
+    if o.do_enrich and (busy or "enrich" in paid):
         out.append(Step("enrich", size=o.enrich, budget=o.enrich_budget, fresh=fresh))
     if number == 1 and o.reread > 0:
         out.append(Step("reread", size=o.reread))
@@ -641,7 +660,7 @@ def defaults_per_night(o: Any) -> dict[str, int]:
         "audit": o.audit * 2,
         "risks": o.risks * 2,
         "logic": o.findings * 2,
-        "suspects": o.suspects,
+        "suspects": o.suspects * 2,
         "tranches": o.nest * 2,
         "pipeline": o.pipeline * rounds,
         "enrich": o.enrich * rounds,
@@ -681,10 +700,13 @@ __all__ = [
     "AFTER_LOGIC",
     "EFFORTS",
     "EFFORT_RANK",
+    "FIXED_PASSES",
     "KINDS",
     "NOTE_CHARS",
     "NOTE_ENV",
+    "PASS_YIELD",
     "SEARCHES_KEPT",
+    "SECOND_SUSPECTS",
     "SELECTING",
     "TWINS",
     "TWIN_DAYS",

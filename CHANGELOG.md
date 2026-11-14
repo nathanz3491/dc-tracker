@@ -12,6 +12,16 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **Fixed nights keep working while the work pays.** The nights that run the fixed
+  schedule (every other night) enriched in their first two rounds only, then repeated
+  cheap steps that found nothing until two rounds without progress stopped them: the
+  three before 2026-11-14 ended with 4-5 hours and up to ¥6 unspent, while their second
+  enrich passes had filled 5, 17 and 34 values and hundreds of rows below T2 were left.
+  A fixed night now runs another enrich pass, always on rows not yet asked that night,
+  whenever the pass before filled at least five values (six passes of a kind at most),
+  and re-reads a second batch of the 25 likeliest-wrong values in round 2 — on 11-13
+  the first batch corrected 8 for ¥0.87. A night whose director fails runs the same.
+
 - **No decision holds forever.** A ruling took a citation's claim out of the merge
   with no end and no date, and the answer key's corrections were cited undated, so
   the rule that stops a year-old source winning on weight never reached them and they
