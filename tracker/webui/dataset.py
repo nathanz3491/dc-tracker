@@ -111,6 +111,8 @@ _REASON_NOTES: dict[str, str] = {
     "money spent building the site — never the campus's investment",
     "covers_more": "quoted, but a figure for more than this campus — several campuses, a "
     "county's total, or a power plant with it — never the campus's value",
+    "build_out": "quoted, but the date the whole campus is finished, not the date it first "
+    "comes online — never the campus's online date",
 }
 
 

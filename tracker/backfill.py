@@ -595,10 +595,12 @@ def _ordered_fields(names: set[str]) -> str | None:
 
 def _reading(name: str, quote: str, value: Any) -> str | None:
     """What a stored figure's sentence says it is, when that is not this campus's."""
-    from tracker.ingest.crawl import money_kind, wider_kind
+    from tracker.ingest.crawl import money_kind, online_kind, wider_kind
 
     if name == "investment_usd":
         return money_kind(quote, value) or wider_kind(quote, value, name)
+    if name == "expected_online":
+        return online_kind(quote, value)
     return wider_kind(quote, value, name)
 
 

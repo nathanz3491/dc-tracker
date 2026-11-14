@@ -490,6 +490,11 @@ UNCONFIRMED_REASONS: Final[tuple[str, ...]] = (
     #: the campus — "a $22.3 billion energy infrastructure campus", "an 800 megawatt
     #: power plant" (`crawl.wider_kind`).
     "covers_more",
+    #: `expected_online` only. Quoted and verified, and the date the whole campus is
+    #: finished, not the date it first comes online: "the entire campus is currently
+    #: scheduled for completion by June 2036" became Homer City's online date on
+    #: 2026-11-13 (`crawl.online_kind`).
+    "build_out",
 )
 
 #: The `investment_usd` refusals that keep a figure out of the campus's investment
@@ -508,6 +513,7 @@ MONEY_REFUSALS: Final[frozenset[str]] = frozenset(
 READING_REFUSALS: Final[dict[str, frozenset[str]]] = {
     "investment_usd": MONEY_REFUSALS | {"covers_more"},
     "mw_planned": frozenset({"covers_more"}),
+    "expected_online": frozenset({"build_out"}),
 }
 
 # --- the claim envelope ----------------------------------------------------

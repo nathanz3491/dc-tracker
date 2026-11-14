@@ -790,7 +790,30 @@ built *for* or *to serve* the campus counts that way — a campus budget that in
 grid upgrades is still the campus's. A later expansion's ceiling is read the same way:
 "a clear expansion path to 8GW+", "potential expansion to 1,500 megawatts" and
 "potential scaling to 4 GW" are not the capacity being planned, though "designed to
-scale to 1 gigawatt" is, because that is how a plan is often stated.
+scale to 1 gigawatt" is, because that is how a plan is often stated. Since 2026-11-15
+three more: a fuel-cell plant's capacity ("up to 2.45 GW of installed Bloom fuel cell
+capacity" set Project Jupiter's plan), a company's operations in a place ("its
+Southaven operations could amount to an over $45 billion investment" set MACROHARDRR's
+investment; for money only, and only with a place or kind named — "the facility's
+operations" is the campus), and Epoch AI's directory pages, whose "capital cost" beside
+"an estimated ... H100-equivalents" is its model's estimate (18 stored figures). A
+hedged budget of the campus's own ("could reach up to $900 million") is still its
+budget.
+
+**The whole campus finished is not its online date.** `expected_online` is when a
+campus first comes online. "The entire campus is currently scheduled for completion by
+June 2036" became Homer City's on 2026-11-13. `crawl.online_kind` refuses a date whose
+own words — since the year before it in the sentence — finish the whole: the entire
+campus or facility, full build-out, all phases, the last building. Not when the first
+part is named between them ("1.2GW at full buildout, with an initial phase ... by
+October 2027"), and not "fully operational", which is how one building opens. On the
+2026-11-15 database it refused 5 dates and moved 4, every one read.
+
+**A stop dated before the campus was announced is another project's.**
+`upsert.hold_out_early_stops` leaves out a paused, cancelled or denied claim whose own
+sentence dates it in an earlier month than the campus's first quoted announcement:
+"Tract's $14 billion project in Arizona was withdrawn in May 2024" had cancelled the
+Buckeye park announced that August.
 
 **An exact figure outranks an approximate one from a source of the same weight.**
 Between sources that weigh the same, the merge used to keep the figure from the
@@ -1080,7 +1103,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties`, `split_names`, `same_company_names`, `known_keys` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
-| Money that is not spending on the site, and figures for more than the campus | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FINANCING_MONEY`, `_OTHER_MONEY`, `wider_kind`, `_clause_figures`, `_INFRASTRUCTURE_FOR_IT`, `_EXPANSION_CEILING`, `stated_roughly`, `_ROUGHLY`, `construction_not_of_the_campus`; `tracker/vocab.py` — `MONEY_REFUSALS`, `READING_REFUSALS`; `tracker/upsert.py` — `_not_this_figure`, `_fallbacks_of_refused`, `rank_claims`, `rough_claims`; `tracker/backfill.py` — `regate_scope`, `_regate_money`, `regate_phases`; `tracker/capex.py` — `_demoted_investment` |
+| Money that is not spending on the site, and figures for more than the campus | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FINANCING_MONEY`, `_OTHER_MONEY`, `wider_kind`, `_clause_figures`, `_INFRASTRUCTURE_FOR_IT`, `_OPERATIONS`, `_MW_IS_PLANT`, `_EXPANSION_CEILING`, `stated_roughly`, `_ROUGHLY`, `online_kind`, `_BUILD_OUT`, `_FIRST_PART`, `construction_not_of_the_campus`; `tracker/vocab.py` — `MONEY_REFUSALS`, `READING_REFUSALS` (`build_out`); `tracker/upsert.py` — `_not_this_figure`, `_fallbacks_of_refused`, `rank_claims`, `rough_claims`, `hold_out_early_stops`; `tracker/backfill.py` — `regate_scope`, `_regate_money`, `regate_phases`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
 | A filing's date: SEC's record, never its page | `tracker/ingest/edgar.py` — `parse_filing_url`, `FilingDates`, `dates_of`; `tracker/ingest/crawl.py` — `run` (`filing_dates=`), `_filing_dates`, `_dated`; `tracker/upsert.py` — `upsert_record` (`read_dates=`); `tracker/dates.py` — `_ask_sec`, `_undated_filings`; `tracker/cli/quality.py` — `_backfill_dates` |
 | A month, quarter or half written as 1 January; a season or hedge read as its year | `tracker/normalize.py` — `period_named_in_quote`, `_named_before`, `_MONTH_THEN_YEAR`, `_QUARTER_THEN_YEAR`, `_HALF_THEN_YEAR`, `_HEDGE_THEN_YEAR`, `precision_in_quote`; `tracker/delays.py` — `period_end`; `tracker/gapfill.py` — `_fact_axes`; `tracker/ingest/crawl.py` — `build_records`, after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |

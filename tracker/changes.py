@@ -60,6 +60,7 @@ _NO_SENTENCE: dict[str, str] = {
     "financing": "a loan or financing round, not the cost of the site",
     "not_spending": "a tax incentive, revenue or economic impact, not spending on the site",
     "covers_more": "a figure for more than this campus",
+    "build_out": "when the whole campus is finished, not when it first comes online",
 }
 
 

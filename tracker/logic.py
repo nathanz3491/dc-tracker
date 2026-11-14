@@ -1011,6 +1011,7 @@ def check_collisions(project: Project) -> list[Collision]:
         Policy,
         claim_value,
         claims_by_field,
+        hold_out_early_stops,
         hold_out_kilowatt_misreads,
         resolve_field,
         settle_capacity,
@@ -1024,7 +1025,7 @@ def check_collisions(project: Project) -> list[Collision]:
     # kilowatts read as megawatts are held out, and running never exceeds planned.
     # Checked against the claims alone, every row either rule moves would read as
     # drifted and be "repaired" straight back across it every night.
-    by_field, _ = hold_out_kilowatt_misreads(claims_by_field(sources))
+    by_field, _ = hold_out_kilowatt_misreads(hold_out_early_stops(claims_by_field(sources)))
     settled = dict(
         zip(
             ("mw_planned", "mw_built"),

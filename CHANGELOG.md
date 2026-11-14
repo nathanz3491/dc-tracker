@@ -328,6 +328,20 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Five more readings the 2026-11-13 night got wrong.** Homer City's online date was
+  the year the *whole campus* is finished ("scheduled for completion by June 2036");
+  Project Jupiter's plan was its fuel-cell plant ("2.45 GW of installed Bloom fuel cell
+  capacity"); MACROHARDRR's investment was everything xAI runs in the town ("its
+  Southaven operations could amount to an over $45 billion investment"); QTS Richmond's
+  was Epoch AI's modelled capital cost; and Tract's Buckeye park was "cancelled" by a
+  sentence about another Tract project withdrawn three months before Buckeye was
+  announced. Each is now read as what it is: a whole-campus completion is not an online
+  date (unless the sentence gives the year to a first phase), fuel cells are a power
+  plant, a company's operations in a place cover more than one campus, Epoch's
+  directory figures are estimates, and a stop dated before the campus was announced is
+  another project's. On a copy of the 11-15 database the answer key went from 205 to
+  208 of 228 with none lost; 8 stored values moved, every one read by hand.
+
 - **Four ways a real sentence still became the wrong figure.** Each came from the
   2026-11-11 night: DataBank Red Oak held "total campus financing to $2.65 billion",
   Google Monrovia held the $737 million its utility will spend on generation and grid

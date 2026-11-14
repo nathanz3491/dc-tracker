@@ -2066,7 +2066,11 @@ _SPECULATIVE_MONEY = re.compile(
     r"(?:local )?(?:media|news outlets?) (?:has |have )?(?:reported|suggest\w*)|"
     r"(?:research|consulting|consultancy|analytics) firm|"
     r"economic impact (?:study|analysis|report)|"
-    r"rumou?r\w*|assuming)\b[^.;$]{0,160}?" + _MONEY
+    r"rumou?r\w*|assuming|"
+    # Epoch AI's directory pages, which never name Epoch: "It hosts an estimated 243k
+    # H100-equivalents of AI compute ... at a capital cost of $9.0 B" is its model's
+    # estimate (QTS Richmond, 2026-11-13).
+    r"h100[- ]equivalents?)\b[^.;$]{0,160}?" + _MONEY
 )
 
 #: "about", "roughly", "more than": the words a reporter puts between a verb and its
@@ -2217,6 +2221,13 @@ _MANY_SITES = re.compile(
     r"|\b\w+ county investment\b"
 )
 
+#: A company's operations in a place are everything it runs there: "its Southaven
+#: operations could amount to an over $45 billion investment" became MACROHARDRR's
+#: investment on 2026-11-13, one building of xAI's Southaven site with its power plant.
+#: For money only, and with a place or kind named: "expanding the facility's
+#: operations ... could draw 260 megawatts" is one campus's demand.
+_OPERATIONS = re.compile(r"\b(?:its|their|the company's|\w+'s) (?:[a-z]+ ){1,2}operations\b")
+
 #: The object is an energy project with a data center in it, whatever else the
 #: clause says: "a $22.3 billion energy infrastructure campus", "a natural
 #: gas-powered energy and data center campus".
@@ -2259,9 +2270,12 @@ _SUPPLIER = re.compile(
 #: Dam"), so for megawatts only the figure's own noun decides.
 _MW_IS_PLANT = re.compile(
     r"^(?:\s+(?:of|in|from))?(?:\s+(?:new|natural|natural-gas|gas|gas-fired|nuclear|on-site|onsite|"
-    r"combined-cycle|solar|wind|operational|behind-the-meter|an|a|the))*\s+"
+    r"combined-cycle|solar|wind|operational|behind-the-meter|installed|an|a|the))*\s+"
     r"(?:power plant|power station|generating station|generation|generating capacity|turbines?|"
-    r"microgrid)\b"
+    # Fuel cells with up to three words of maker and fuel between: "2.45 GW of
+    # installed Bloom fuel cell capacity" set Project Jupiter's plan on 2026-11-13.
+    # Only here: "draws 2.45 gigawatts from a private microgrid" is the campus's demand.
+    r"microgrid|(?:[a-z][\w-]*\s+){0,3}fuel[- ]cells?)\b"
 )
 
 #: A later expansion's ceiling, not the plan: "a clear expansion path to 8GW+", "a
@@ -2363,6 +2377,7 @@ def wider_kind(quote: str | None, value: Any, field: str) -> str | None:
             if (
                 _ENERGY_OBJECT.search(clause)
                 or _INFRASTRUCTURE_FOR_IT.search(clause)
+                or _OPERATIONS.search(clause)
                 or (_PLANT.search(clause) and not _SUPPLIER.search(clause))
             ):
                 return "covers_more"
@@ -2504,6 +2519,64 @@ def _past_year(before: str, year: int | None) -> bool:
     if year is None:
         return False
     return any(int(y) < year for y in _YEAR.findall(before))
+
+
+#: The whole campus finished, not its first building online: "the entire campus is
+#: currently scheduled for completion by June 2036", "full build-out by 2032", "the
+#: last of the four buildings by the end of 2027". Not "fully operational", which is
+#: how a one-building project states its opening.
+_BUILD_OUT = re.compile(
+    r"\b(?:(?:entire|whole|full|final) (?:campus|project|site|facility|development|build[- ]?out|"
+    r"buildout)|"
+    r"fully (?:built[- ]out|built|developed)|full (?:build[- ]?out|buildout)|"
+    r"(?:build[- ]?out|buildout) (?:is |will be )?(?:complete|finished)|"
+    r"all (?:\w+ )?(?:phases|buildings)|final phase|last (?:of the \w+ (?:\w+ )?)?(?:phase|building)s?|"
+    # "...the first in 2026 and the last by the end of 2027"; not "the last quarter".
+    r"the last (?:one )?(?:by|in|to)\b)"
+)
+#: How far before its year a build-out phrase may stand.
+_BUILD_OUT_REACH = 90
+
+
+#: The first part of a campus, named between a build-out and its year.
+_FIRST_PART = re.compile(
+    r"\b(?:initial|first|opening|phase (?:1|one|i)\b|first phase|first building)"
+)
+
+
+@lru_cache(maxsize=65536)
+def online_kind(quote: str | None, value: Any) -> str | None:
+    """`build_out` when the sentence dates the whole campus's completion, or None.
+
+    `expected_online` is when a campus first comes online. "The entire campus is
+    currently scheduled for completion by June 2036" is when its last building does,
+    and became Homer City's online date on 2026-11-13. Read like `wider_kind`: only
+    for the year claimed, and only when every mention of that year is a completion
+    of the whole — "the first building in 2027 and the entire facility by 2028"
+    gives 2027 to the first building and refuses only 2028.
+    """
+    if not quote or value is None:
+        return None
+    year = str(value)[:4]
+    if not year.isdigit():
+        return None
+    text = " ".join(str(quote).lower().split())
+    mentions = [m.start() for m in re.finditer(rf"\b{year}\b", text)]
+
+    def finished(at: int) -> bool:
+        # The words since the year before this one: "full buildout ... around 2038, with
+        # the first building targeted for 2028" gives the build-out to 2038 alone.
+        before = re.split(r"\b20\d\d\b", _clause_before(text, at))[-1]
+        found = list(_BUILD_OUT.finditer(before))
+        if not found or len(before) - found[-1].end() > _BUILD_OUT_REACH:
+            return False
+        # "1 GW at full buildout, with initial energization targeted for June 2028": the
+        # build-out sizes the campus, and the year is the first phase's.
+        return not _FIRST_PART.search(before[found[-1].end() :])
+
+    if mentions and all(finished(at) for at in mentions):
+        return "build_out"
+    return None
 
 
 @lru_cache(maxsize=65536)
@@ -3531,6 +3604,10 @@ def build_records(
             kind := wider_kind(quotes.get("mw_planned"), kept["mw_planned"], "mw_planned")
         ):
             reasons["mw_planned"] = kind
+        if "expected_online" in kept and (
+            kind := online_kind(quotes.get("expected_online"), kept["expected_online"])
+        ):
+            reasons["expected_online"] = kind
         unconfirmed = set(reasons)
 
         risks, risk_notes = _risks(raw, result.markdown, result.url)

@@ -836,6 +836,43 @@ def _host(url: str | None) -> str:
     return match.group(1) if match else (url or "a source")
 
 
+def hold_out_early_stops(by_field: dict[str, list[_Claim]]) -> dict[str, list[_Claim]]:
+    """A stop its own sentence dates before the campus was first announced, held out.
+
+    "Tract's $14 billion project in Arizona was withdrawn in May 2024" set Tract's
+    Buckeye park (#1619), announced in August 2024, to cancelled on 2026-11-13: the
+    sentence was about an earlier Tract project. A campus cannot have stopped before
+    anybody announced it, so a paused, cancelled or denied claim whose `as_of` falls in
+    an earlier month than the earliest quoted announcement leaves the merge, the way a
+    ruled-out claim does. Only the sentence's own date counts: an article published
+    later about a stop is the usual case, and says nothing about which campus it was.
+    """
+    stops = [
+        c
+        for c in by_field.get("phase", [])
+        if c.value in PHASE_TERMINAL and not c.decided_against and c.as_of
+    ]
+    if not stops:
+        return by_field
+    announced = [
+        str(c.value)[:7]
+        for c in by_field.get("first_announced", [])
+        if c.confirmed and not c.decided_against and c.value
+    ]
+    if not announced:
+        return by_field
+    first = min(announced)
+    early = {id(c) for c in stops if str(c.as_of)[:7] < first}
+    if not early:
+        return by_field
+    out = dict(by_field)
+    out["phase"] = [
+        _dataclass_replace(c, decided_against=True) if id(c) in early else c
+        for c in by_field["phase"]
+    ]
+    return out
+
+
 def hold_out_kilowatt_misreads(
     by_field: dict[str, list[_Claim]],
 ) -> tuple[dict[str, list[_Claim]], list[str]]:
@@ -2317,7 +2354,9 @@ def upsert_record(
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------
-    by_field, unit_notes = hold_out_kilowatt_misreads(claims_by_field(list(project.sources)))
+    by_field, unit_notes = hold_out_kilowatt_misreads(
+        hold_out_early_stops(claims_by_field(list(project.sources)))
+    )
     unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
@@ -3094,7 +3133,9 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     moved and the prose explaining them did not. Only the two ingest-only families
     survive untouched — see :data:`_INGEST_ONLY_NOTES`.
     """
-    by_field, unit_notes = hold_out_kilowatt_misreads(claims_by_field(list(project.sources)))
+    by_field, unit_notes = hold_out_kilowatt_misreads(
+        hold_out_early_stops(claims_by_field(list(project.sources)))
+    )
     unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
