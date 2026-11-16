@@ -429,6 +429,47 @@ effort for that one night; it runs at `high` again (`overnight.sh --judgement-ef
 The other two came from enrich's agent being asked about every empty field of a row
 chosen for one T2 gap; under `--t2` it is now asked about that gap alone.
 
+## The spot check: is what the loop writes right?
+
+```bash
+tracker checks                               # share judged right, by field, kind, night
+tracker checks show [YYYY-MM-DD]             # one night's sample, with each answer
+tracker checks mark 42 wrong --note "county total"
+tracker checks draw --against <snapshot.db>  # the loop runs this; once per night
+```
+
+**Nothing else measures it.** The quote check says a sentence exists, not that it is
+about this campus. The answer key below is a regression check: it says a night broke
+none of the values somebody already verified. Those sit on the rows people corrected
+hardest, applying the key rewrote the very values it scores, and a night can write
+80 values elsewhere and still report "0 stopped being right". Asking a second model
+would be the loop judging itself again. The only measure with ground truth behind it
+is a person reading a fair sample of what the loop wrote.
+
+**Fair means random.** At the end of each night the loop takes the night's changes to
+stage, planned and built capacity, investment, the two dates and the customer, and
+draws 15 of them uniformly at random, seeded by the night's date so a re-run draws the
+same ones. A night already drawn is never redrawn, so a judged sample cannot be
+swapped for a fresh one. Not the suspicious ones and not the big ones: a sample chosen
+by any rule measures that rule. The blocker summary and the Census county are left
+out — on 2026-11-15, 15 of the 80 changes were rewordings of a blocker, and a uniform
+draw would spend a fifth of the checker's time on them.
+
+**One question per change.** For a value set or changed, *is the new value right for
+this campus?*; for a value emptied, *was the old value wrong, so emptying it was
+right?*. Each row keeps the value before and after, and the sentence and citation
+behind it, as they were when drawn, so a later night moving the row cannot change
+what was judged. Answers are *right*, *wrong* or *unsure*; unsure (the article is
+gone, the truth is not published) is counted apart and left out of the share.
+
+**What the number means.** The share right among the judged, with its 95% Wilson
+interval, estimates the share right across all the night's changes to those fields.
+Fifteen a night is about ten minutes of reading; after a week, about a hundred
+answers put the interval within roughly ±9 points. It is reported in every morning
+report (last 7 nights and since the first sample) and on the console's Admin page,
+where admins answer. It measures the *changes*, not the whole database: values the
+loop has not touched are not in it.
+
 ## The answer key
 
 ```bash

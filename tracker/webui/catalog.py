@@ -288,6 +288,11 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # check on a value's sentence would fix, lose and empty.
             "answers why",
             "answers try",
+            # Beside `answers`: the share of a random sample of each night's changes a
+            # person judged right — the measure of what the loop writes, which a fixed
+            # answer key cannot be.
+            "checks",
+            "checks show",
             # Beside `answers`: which stored values are likeliest wrong, ranked for
             # the night's re-check, and one row's view from both models.
             "suspect",
@@ -399,6 +404,9 @@ GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "backfill",
             # Stores verified answers; a batch is checked whole before any is written.
             "answers load",
+            # The nightly loop draws a sample; a person's answer to one is recorded.
+            "checks draw",
+            "checks mark",
             "export",
             "watch add",
             "watch rm",

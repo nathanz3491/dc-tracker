@@ -24,7 +24,15 @@ If you have forgotten your password, sign out and use **Forgot password?** on th
 
 ## For administrators
 
-Accounts with administrator rights see an **Admin** button next to their name. The Admin page has two parts.
+Accounts with administrator rights see an **Admin** button next to their name. The Admin page has three parts.
+
+### Spot check
+
+Each night the tracker picks 15 of the values it changed that night, at random, for a person to judge. Each shows the campus, the value before and after, the sentence and article behind the new value, and one question: *is this value right for this campus?* — or, for a value that was emptied, *was the old value wrong, so emptying it was right?* Answer **Right**, **Wrong** or **Can't tell**, with a line of why if you like; a second answer replaces the first, and your name is recorded with it.
+
+Judge the value against the article and what you know of the campus, not only against the quoted sentence: a real sentence about the wrong thing — a county's total, a land price, another phase — is exactly what this is for. The panel shows the share judged right over the last seven nights and since the first sample, with its 95% interval. *Can't tell* is counted apart and is not in the share. Pick an earlier night from the list beside the title.
+
+The share is an estimate of how much of what the nightly loop writes is right. Nothing else measures that: the verified answers the tracker scores itself against are a fixed set of campuses, so they show whether a night broke something already checked, not whether its new values are right.
 
 ### Waiting for approval
 

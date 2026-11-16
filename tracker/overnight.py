@@ -1758,6 +1758,12 @@ class Night:
         log.say("what the night changed")
         if self.first_snapshot is not None and self.first_snapshot.is_file():
             self.tracker("changes", "--against", self.first_snapshot)
+            # Fifteen of those changes, drawn at random for a person to judge, and the
+            # score so far. The answer key above only says the night broke nothing
+            # already verified; this is the one measure of whether what it wrote is
+            # right. See tracker/spotcheck.py.
+            log.say("a sample for a person to check")
+            self.tracker("checks", "draw", "--against", self.first_snapshot)
         else:
             log.line("    no snapshot from before round 1 to compare against")
         log.line()

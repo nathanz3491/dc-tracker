@@ -571,6 +571,8 @@ def _report(snap: Path) -> list[tuple[str, ...]]:
         ("suspect", "train", "--snapshots", str(snap.parent)),
         ("news", "report", "--since", STARTED_UTC),
         ("changes", "--against", str(snap)),
+        # Fifteen of the changes drawn for a person to judge (`tracker.spotcheck`).
+        ("checks", "draw", "--against", str(snap)),
     ]
 
 

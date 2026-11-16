@@ -57,8 +57,11 @@ wrong citations out of the merge. It never assigns a field: a scalar is a cache 
 the claim set, so an assignment is undone by the next `backfill derive`, and
 superseding the claim is what survives. `--no-agent` gives you the keyboard,
 `--auto` the mechanical repairs only. `tracker answers` scores the stored values
-against a verified answer key, the one measurement here of whether a value is
-*true* rather than quoted; `--against <snapshot>` lists every answer a change moved.
+against a verified answer key, which says whether a change broke a value somebody
+had already verified; `--against <snapshot>` lists every answer a change moved.
+Whether the values the nightly loop *writes* are right is `tracker checks`: each
+night 15 of its changes are drawn at random and a person judges them on the
+console's Admin page, and the share judged right is reported with its interval.
 
 Two of those commands now check their own work before writing. `sync` and `ingest
 crawl` consult a model at the one moment a duplicate can be prevented rather than
@@ -313,8 +316,9 @@ decisions wrong. Before its report the loop puts back any value lost with no rul
 behind it, such as a re-read that left a field out while the article still states
 it (`tracker losses --restore`, see `docs/data-quality.md`). The morning report ends
 with every value the night changed, each with the sentence behind it
-(`tracker changes`), and `tracker logic rule-out` takes back a claim a person finds
-wrong. No decision holds forever: each ruling records when and by whom, and the free
+(`tracker changes`), then draws 15 of them at random for a person to judge
+(`tracker checks draw`), and `tracker logic rule-out` takes back a claim a person
+finds wrong. No decision holds forever: each ruling records when and by whom, and the free
 step's `tracker logic expire` reopens a verified answer or a superseded ruling once a
 report published after it says the figure changed.
 

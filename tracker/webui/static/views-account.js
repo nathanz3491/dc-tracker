@@ -15,6 +15,8 @@
  *     (`tracker/apikeys.py`); disabling an account switches its keys off.
  */
 
+import { ChecksPanel } from "/static/views-checks.js";
+
 const html = htm.bind(React.createElement);
 const { useState, useEffect, useCallback } = React;
 const NS = window.MeridianDesignSystem_6e9015 || {};
@@ -437,6 +439,7 @@ export function AdminView({ data, api }) {
   return html`
     <div class="dc-view dc-rise" style=${{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)",
                                             gap: 16, padding: "22px 26px 60px" }}>
+      <${ChecksPanel} api=${api} />
       <${Heading} figure="admin" title="Accounts" />
       <${Notice} tone="danger">${state.error}<//>
       <${Waiting} rows=${accounts.filter((a) => a.status === "pending")} act=${act} />

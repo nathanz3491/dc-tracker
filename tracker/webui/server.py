@@ -1643,6 +1643,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._own_keys()
         if route == "/api/admin/users":
             return self._admin_users()
+        if route == "/api/admin/checks":
+            return self._admin_checks(query)
         self._error(404, f"no route {route!r}")
 
     def do_POST(self) -> None:
@@ -1727,6 +1729,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._admin_tranche("rule", body)
             if parsed.path == "/api/admin/tranches/undo":
                 return self._admin_tranche("undo", body)
+            if parsed.path == "/api/admin/checks/mark":
+                return self._admin_check_mark(body)
             if parsed.path == "/api/infer":
                 return self._infer(body)
             if parsed.path == "/api/overview":
@@ -2353,6 +2357,69 @@ class Handler(BaseHTTPRequestHandler):
         log.info("console: %s ruled #%s %s: %s", who, project_id, key, done)
         self._json({"ok": True, "project_id": project_id, "key": key, "done": done})
 
+    def _admin_checks(self, query: dict[str, list[str]]) -> None:
+        """One night's spot check and the score so far (`tracker.spotcheck`).
+
+        Admins only, like every page that judges the data: the score is only worth
+        anything if the people answering are the ones trusted to know. `night` picks a
+        night; the latest by default.
+        """
+        from tracker import spotcheck
+
+        wanted = (query.get("night") or [""])[0]
+        try:
+            night = dt.date.fromisoformat(wanted) if wanted else None
+        except ValueError:
+            return self._error(400, "night must be YYYY-MM-DD")
+        with self.console.read_session() as session:
+            if self._admin(session) is None:
+                return self._error(403, "the spot check is for admins")
+            held = spotcheck.nights(session)
+            night = night or (held[0] if held else None)
+            checks = (
+                [spotcheck.as_dict(c) for c in spotcheck.listing(session, night)] if night else []
+            )
+            today = dt.date.today()
+            week = spotcheck.score(session, since=today - dt.timedelta(days=7))
+            ever = spotcheck.score(session)
+        self._json(
+            {
+                "nights": [n.isoformat() for n in held],
+                "night": night.isoformat() if night else None,
+                "checks": checks,
+                "week": spotcheck.tally_dict(week.total),
+                "ever": spotcheck.tally_dict(ever.total),
+                "by_field": {k: spotcheck.tally_dict(v) for k, v in sorted(ever.by_field.items())},
+            }
+        )
+
+    def _admin_check_mark(self, body: dict[str, Any]) -> None:
+        """An admin's answer to one spot check, recorded under their name."""
+        from tracker import spotcheck
+
+        check_id, verdict, note = body.get("id"), body.get("verdict"), body.get("note") or ""
+        if not isinstance(check_id, int) or isinstance(check_id, bool):
+            return self._error(400, "id must be a check id")
+        if not isinstance(verdict, str) or not isinstance(note, str):
+            return self._error(400, "verdict and note must be strings")
+        try:
+            with self.console.write_session() as session:
+                admin = self._admin(session)
+                if admin is None:
+                    return self._error(403, "the spot check is for admins")
+                who = (admin.name or "").strip() or admin.email.split("@", 1)[0]
+                try:
+                    check = spotcheck.mark(session, check_id, verdict, by=who, note=note)
+                except spotcheck.CheckError as exc:
+                    return self._error(400, str(exc))
+                got = spotcheck.as_dict(check)
+        except OperationalError as exc:
+            if not _database_busy(exc):
+                raise
+            return self._error(503, "the database is busy writing; try again in a moment")
+        log.info("console: %s judged check #%s %s", who, check_id, verdict)
+        self._json({"ok": True, "check": got})
+
     def _admin_act(self, action: str, body: dict[str, Any]) -> None:
         """One change to one account, by an admin.
 
@@ -2905,6 +2972,19 @@ class Handler(BaseHTTPRequestHandler):
             "answers": "every account in full, and the unredeemed invites",
             "reads": "the account table",
             "note": "Admins only. Never a password hash.",
+        },
+        "GET /api/admin/checks": {
+            "answers": "one night's spot check — changed values drawn at random for a person "
+            "to judge — and the share judged right so far",
+            "reads": "the spot_check table",
+            "note": "Admins only. `?night=YYYY-MM-DD`, the latest by default. The same as "
+            "`tracker checks show` and `tracker checks`.",
+        },
+        "POST /api/admin/checks/mark": {
+            "answers": "records an admin's answer to one spot check",
+            "writes": True,
+            "note": "Admins only. Body: {id, verdict, note?}; `verdict` one of right, wrong, "
+            "unsure. A second answer replaces the first. The same as `tracker checks mark`.",
         },
         "POST /api/admin/users/update": {
             "answers": "changes one account's email, name or whole-database reach",

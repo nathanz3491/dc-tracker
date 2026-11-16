@@ -832,6 +832,49 @@ class AnswerKey(Base):
         return f"<AnswerKey p={self.project_id} {self.field}={self.value!r} {self.status}>"
 
 
+class SpotCheck(Base):
+    """One of a night's changed values, drawn at random for a person to judge.
+
+    Migration 0057. The answer key says whether a night broke a known value; this is
+    the only measure of whether the values the night wrote are right (`tracker.spotcheck`).
+    `before`/`after` are JSON text as drawn, so editing the row later cannot change what
+    was judged; `verdict` is NULL until somebody answers.
+    """
+
+    __tablename__ = "spot_check"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    night: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("project.id", ondelete="SET NULL")
+    )
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    field: Mapped[str] = mapped_column(Text, nullable=False)
+    before: Mapped[str | None] = mapped_column(Text)
+    after: Mapped[str | None] = mapped_column(Text)
+    url: Mapped[str | None] = mapped_column(Text)
+    quote: Mapped[str | None] = mapped_column(Text)
+    via: Mapped[str | None] = mapped_column(Text)
+    why: Mapped[str | None] = mapped_column(Text)
+    drawn_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    verdict: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    checked_by: Mapped[str | None] = mapped_column(Text)
+    checked_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint("night", "project_id", "field", name="uq_spot_check_night_project_field"),
+        CheckConstraint(
+            "verdict IS NULL OR " + sql_in("verdict", ("right", "wrong", "unsure")),
+            name="ck_spot_check_verdict",
+        ),
+        Index("ix_spot_check_night", "night"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<SpotCheck {self.night} p={self.project_id} {self.field} {self.verdict}>"
+
+
 class Company(Base):
     """One company, under the key every row is already filed by.
 

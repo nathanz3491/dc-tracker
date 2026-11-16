@@ -12,6 +12,18 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **A person now judges a random sample of what each night writes.** Nothing
+  measured whether the values the loop writes are right. The answer key only says a
+  night broke none of 228 values already verified — values on the rows corrected
+  hardest, which applying the key itself rewrote — so a night could write 80 values
+  elsewhere and still report "0 stopped being right". At the end of every night the
+  loop now draws 15 of its changes to stage, capacity, investment, dates and customer
+  at random (`tracker checks draw`, migration 0057), and admins answer each on the
+  console's Admin page: is the new value right for this campus, or was the emptied
+  one wrong? The share judged right, with its 95% interval, is in each morning report
+  and in `tracker checks`. Random, so it estimates the whole night's changes and not
+  whichever ones a rule found suspicious; drawn once per night and never redrawn.
+
 - **Fixed nights keep working while the work pays.** The nights that run the fixed
   schedule (every other night) enriched in their first two rounds only, then repeated
   cheap steps that found nothing until two rounds without progress stopped them: the

@@ -145,6 +145,12 @@ app.add_typer(tranches_app)
 answers_app = typer.Typer(name="answers", invoke_without_command=True)
 app.add_typer(answers_app)
 
+#: The nightly spot check (migration 0057, `tracker.spotcheck`): bare `tracker checks`
+#: scores the samples a person has judged; `draw` takes a night's sample, `show` lists
+#: one night's, `mark` records an answer.
+checks_app = typer.Typer(name="checks", invoke_without_command=True)
+app.add_typer(checks_app)
+
 #: The suspicion score (`tracker.suspect`): bare `tracker suspect` lists tonight's
 #: ranking; `score` makes it, `train` refits both models, `row` shows one row's view.
 suspect_app = typer.Typer(name="suspect", invoke_without_command=True)
