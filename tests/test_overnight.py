@@ -560,7 +560,8 @@ ROUND_TWO = [
 
 def _report(snap: Path) -> list[tuple[str, ...]]:
     return [
-        ("losses", "--against", str(snap), "--restore"),
+        # Listed, never put back: a newer reading may have dropped a value on purpose.
+        ("losses", "--against", str(snap)),
         # The rules matched once more, to the campuses as the last round left them.
         ("conditions", "match"),
         ("clean",),

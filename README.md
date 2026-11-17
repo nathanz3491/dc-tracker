@@ -312,9 +312,10 @@ A round counts as progress only when a count falls below the lowest it has been 
 night, so counts that wobble up and back down end the night instead of prolonging
 it. The per-item judgements run at `high` effort (`--judgement-effort`), or on the
 local model with `--local-judgement`; one night at `low` made two of its three audit
-decisions wrong. Before its report the loop puts back any value lost with no ruling
-behind it, such as a re-read that left a field out while the article still states
-it (`tracker losses --restore`, see `docs/data-quality.md`). The morning report ends
+decisions wrong. Before its report the loop lists every value lost with no ruling
+behind it, such as a re-read that left a field out (`tracker losses`); it puts none
+back by itself, because a newer reading may drop a value on purpose — see
+`docs/data-quality.md`. The morning report ends
 with every value the night changed, each with the sentence behind it
 (`tracker changes`), then draws 15 of them at random for a person to judge
 (`tracker checks draw`), and `tracker logic rule-out` takes back a claim a person

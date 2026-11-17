@@ -345,38 +345,39 @@ measured on this corpus: if judgement gets visibly worse, pin
 `TRACKER_DEEPSEEK_REASONING_MODEL` back to a pro model for one overnight round
 and compare.
 
-## A value is never lost without a ruling
+## A value is never lost unseen
 
-A re-read used to replace an article's citation wholesale, so a field the new reading
-did not repeat vanished with it: the quote, the value, and the row's figure. Traced
-over 10-18 to 10-28, 161 values went from set to empty. 75 of them a ruling cleared,
-and those are decisions. The other 81 nobody decided: a second reading of the same
-article left the field out, 42 times with a sentence on file that stated the value
-outright, and 33 times under the same prompt, which is the model answering
-differently, not the article changing. Each one dropped its row out of T2.
+A re-read replaces an article's citation wholesale, so a field the new reading did not
+repeat goes with it: the quote, the value, and the row's figure. Traced over 10-18 to
+10-28, 161 values went from set to empty. 75 of them a ruling cleared, and those are
+decisions. The other 81 nobody decided: a second reading of the same article left the
+field out, 42 times with a sentence on file that stated the value outright.
 
-Two rules now hold, one inside the write and one outside it:
+**Each night lists them; nothing puts them back by itself** (`tracker losses`,
+`tracker.losses`). Whatever code emptied a value, the question is only what happened
+to its evidence. If the citation still claims the field, a ruling or the merge set it
+aside, and it is left alone. If the citation is gone, a merge or a person removed it.
+If the citation stopped claiming it, the stored copy of the article says whether the
+sentence is still there; with no copy, it is listed and not guessed. The loop runs
+`tracker losses` once, before its report. `--restore` puts the listed claims back and
+re-derives each row, so the merge chooses the figure as on every write — for a person
+who has read the list.
 
-- **A reading may add evidence, never quietly take it back** (`upsert.omitted_quietly`,
-  `upsert.reinstate`). When a re-read does not claim a field at all, the earlier
-  reading's quoted claim is kept, with its sentence, its envelope and any ruling on it,
-  as long as the article still contains that sentence (`crawl.still_states`). An
-  article edited to drop the sentence still withdraws the claim. A field the new
-  reading does claim, even as 待确认, is the new reading's answer, so a gate that has
-  grown stricter is never undone. The row's notes say `kept <field> = <value> from an
-  earlier reading of this article`.
-- **The night checks itself against its snapshot** (`tracker losses`, `tracker.losses`).
-  Whatever code emptied a value, the question is only what happened to its evidence.
-  If the citation still claims the field, a ruling or the merge set it aside, and it is
-  left alone. If the citation is gone, a merge or a person removed it. If the citation
-  stopped claiming it, the stored copy of the article decides: still there, the claim
-  is put back and the row re-derived, so the merge chooses the figure as on every
-  write; gone, the article withdrew it; no copy, it is listed and not guessed. The loop
-  runs `tracker losses --restore` once, before its report.
+**Why not automatically.** From 10-30 to 11-16 two rules did it without a person: a
+re-read kept any field it omitted while the article still held the sentence, and the
+night ran `losses --restore`. Both were switched off on 11-17. A newer reading may
+leave a field out *because* it no longer trusts the sentence — a stricter gate, a
+better prompt — and nothing tells that from a model answering differently twice. The
+two values the restore would first have put back were a "2GW added in Kansas City"
+headline stored as megawatts built and a ranking blog's 1,289 MW. The re-read rule
+kept 32 distinct values, 21 of which still decided a row's figure on 11-17 — among
+them a projection for Colossus 2 as Colossus's online date, a joint-venture stake as
+an investment and an estimate from an unsigned memorandum — and a kept value never appears as a change, so no review saw them. Now a dropped value
+shows in `tracker changes` and can be drawn for the spot check.
 
 ```bash
-tracker losses --against <snapshot.db>             # what would be put back
-tracker losses --against <snapshot.db> --restore   # put it back
+tracker losses --against <snapshot.db>             # what was dropped with no ruling
+tracker losses --against <snapshot.db> --restore   # put it back, after reading the list
 ```
 
 ## Reading what a night changed

@@ -116,6 +116,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A value a newer reading drops is no longer put back by itself.** Since 10-30 a
+  re-read kept any field it left out while the article still held the sentence, and
+  each night ended by restoring values lost with no ruling. But a newer reading may
+  drop a value *because* it no longer trusts the sentence, and nothing could tell that
+  from a model answering differently twice. The re-read rule kept 32 distinct values;
+  21 still decide a row's figure, among them a projection for Colossus 2 as Colossus's
+  online date, a joint-venture stake as a campus's investment and an estimate from an
+  unsigned memorandum. A kept value never shows as a change, so no review saw them.
+  The nightly restore itself put back nothing after 10-30, but the two values it would
+  first have restored (a "2GW added" headline as megawatts built, a ranking blog's
+  1,289 MW) were both wrong.
+  A re-read now replaces its citation as before, so a dropped value shows in the
+  night's changes and can be drawn for the spot check, and `tracker losses` lists the
+  night's unruled drops without restoring them; `--restore` is for a person who has
+  read the list. The 21 kept values still on rows stay until somebody judges them.
+
 - **The nightly re-reads aim at wrong values a little better, and the score is now
   tested on what the agent finds.** The suspicion score picks the 25 stored values the
   agent re-reads each night. It was measured on two label sets that share no campus:

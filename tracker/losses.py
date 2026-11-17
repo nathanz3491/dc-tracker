@@ -7,8 +7,16 @@ of the same article did not repeat the field, the citation was replaced, and the
 went with it, 42 times with a sentence on file that stated it outright. Each one
 dropped its row out of T2 and cost a search to climb back.
 
-`upsert.omitted_quietly` closes the path that did that. This is the net under it,
-built so it does not depend on knowing the path: whatever code empties a value, the
+**It lists; a person restores.** From 10-30 to 11-16 the nightly loop ran it with
+`--restore`, and a re-read kept any field it omitted while the article still held the
+sentence. Both were switched off: a newer reading may leave a field out *because* it no
+longer trusts the sentence, which neither can tell from a model answering differently
+twice. Before the first night, the two values it would have put back were a "2GW
+added" headline stored as megawatts built and a ranking blog's capacity. The loop now
+runs it without `--restore`, so the morning report lists what went; `--restore` is for
+a person who has read that list.
+
+It does not depend on knowing the path: whatever code empties a value, the
 question here is only whether the evidence for it was **withdrawn** or **decided
 against**. Compared field by field with the snapshot the nightly loop takes before
 round 1:
