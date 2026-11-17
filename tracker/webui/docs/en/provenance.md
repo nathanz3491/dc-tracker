@@ -26,6 +26,8 @@ Values are read out of articles by a language model. A model can misread, misatt
 
 A value that passes all three is **quoted**. One that fails is kept as **待确认**.
 
+A 待确认 value is kept on its source, never used as the campus's own. For stage, capacity, investment, the announcement and online dates and the customer, a field no quoted claim states is left empty (a stage reads *announced*), and the 待确认 claim is listed in the field's evidence, where a reader can still weigh it. Until 17 November 2026 it filled the field when nothing better did.
+
 ## Two kinds of 待确认
 
 A 待确认 value is unconfirmed for one of two very different reasons, and they need opposite responses:
@@ -49,7 +51,7 @@ Hovering a value opens a small card with:
 Each campus is rebuilt from what all its sources say, never edited by hand a little at a time. When sources disagree on a field, the tracker chooses in this order:
 
 1. A claim that has been ruled out — found to be about something else, or replaced by a later statement — no longer counts.
-2. A quoted claim beats a 待确认 one.
+2. A quoted claim beats a 待确认 one — and for a campus's own figures, dates, stage and customer, a 待确认 claim never decides the field at all.
 3. A figure for the whole campus beats a figure for one building.
 4. A first-hand source beats a directory or wiki, which only fills gaps.
 5. A statement published more than a year before another of the same standing no longer wins for coming from a weightier source: a builder's 2016 press release does not outrank this year's report. The date is the one the sentence gives for the figure when it gives one, else the article's.

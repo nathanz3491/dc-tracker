@@ -797,6 +797,7 @@ class Statements:
             _weight,
             is_placeholder,
             rank_claims,
+            unsupported,
         )
         from tracker.upsert import DECIDED_REASONS as decided
         from tracker.vocab import PART_FIELDS
@@ -813,6 +814,7 @@ class Statements:
             weight = 0 if placeholder else _weight(source.source_type)
             for row in rows:
                 entry = _envelope(row)
+                confirmed = not placeholder and not row.doubted
                 out.setdefault(row.field, []).append(
                     _Claim(
                         _claimed(row),
@@ -820,9 +822,10 @@ class Statements:
                         source.fetched_at,
                         source.source_type,
                         source.url,
-                        confirmed=not placeholder and not row.doubted,
+                        confirmed=confirmed,
                         published_at=getattr(source, "published_at", None),
-                        decided_against=row.reason in decided,
+                        decided_against=row.reason in decided
+                        or unsupported(row.field, confirmed=confirmed, placeholder=placeholder),
                         tertiary=tertiary,
                         part=row.field in PART_FIELDS and entry.get("scope") == "building",
                         floor=row.field in _CAPACITY_FIELDS and _axis(entry, "bound") == "at_least",

@@ -338,6 +338,13 @@ programme-wide total quoted in an article about one campus — sends you to corr
 a figure you already have. Going looking for a citation for that one would find
 one, and it would still be the wrong number.
 
+**Kept on the citation, not stored on the campus** (2026-11-17). Kept used to mean
+both: an unconfirmed claim stayed on its citation *and* filled the campus's field
+whenever nothing quoted stated it, shown amber and summed like any value. For the
+seven fields a campus's value must come from a citation it now does only the first
+(`upsert.unsupported`): 403 values on 363 campuses moved on the day it shipped, 386 of
+them to empty. See `docs/data-quality.md`, "A value no sentence states is not stored".
+
 `listing_date` is the same kind of case for a date. Directory and tracker pages
 print dates of their own — "Canceled · first reported Oct 7, 2026", "Data updated
 Oct 2026", "Last updated: September 2026", "(accessed October 19, 2026)" — and the
@@ -414,7 +421,10 @@ Two definitional choices are load-bearing. `NOT_APPLICABLE` counts as complete �
 `mw_built` on an announced project is correctly null, and a 12-of-12 bar failed 97%
 of rows, which is a target nobody can use. And 待确认 counts as *backed*: the gate
 declaring it could not confirm a value is the gate **working**, so only
-`confirmed_without_quote` fails the condition.
+`confirmed_without_quote` fails the condition. Since 2026-11-17 that applies to few
+values: a 待确认 claim no longer fills stage, capacity, investment, the two dates or
+the customer, so a row missing a quoted one of those is short of the field, not
+backed. That moved 142 rows below T2 on the day.
 
 Two more were added on 2026-10-05, when 439 rows sat at T1 short of a field and the
 nightly enrich lifted about one a night — 0 of 15 rows gained a T2 field on 10-04,

@@ -2,7 +2,7 @@
 
 Every field a campus has, what it means, and how the tracker chooses its value when sources disagree. Column names are as they appear in [Projects](projects); the name in `code` is the field's internal name, used on a [project's page](project-page).
 
-Before a field's own rule applies, every field follows the same order: a ruled-out claim no longer counts, a quoted claim beats a 待确认 one, a whole-campus figure beats one building's, and a first-hand source beats a directory. See [Where a value came from](provenance).
+Before a field's own rule applies, every field follows the same order: a ruled-out claim no longer counts, a quoted claim beats a 待确认 one (which never fills a campus's own field), a whole-campus figure beats one building's, and a first-hand source beats a directory. See [Where a value came from](provenance).
 
 ## The twelve tracked fields
 

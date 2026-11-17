@@ -12,6 +12,20 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A value no sentence states is no longer stored as a campus's own.** A claim the
+  quote check could not confirm — no sentence offered, one not in the article, or one
+  that does not state the value — was a last resort: when nothing quoted stated the
+  field, it became the stored value, read and summed like any other. The first spot
+  check drew two such changes in fifteen; Amazon's Bridgefield went from 121.62 MW to
+  a 50 MW its only sentence did not state. For stage, capacity, investment, the two
+  dates and the customer such a claim now stays on its citation, shown in the field's
+  evidence with its reason, and decides nothing; the field is empty (a stage reads
+  *announced*) until a quoted source states it, and the clearing is noted on the row.
+  On a copy of production it changes 403 values on 363 campuses — 386 emptied,
+  172 of them announcement dates and 114 stages — and the rows at T2 fall from 697 to
+  555, because those rows had counted a value nothing stated. They return to the
+  nightly enrich's queue. The rule that held out an unquoted figure a thousand times a
+  quoted one as kilowatts is retired with it: it only acted on unquoted figures.
 - **The spot check shows how a value was reached.** A capacity summed from tranches
   shows one tranche's sentence, which read as stating another figure (Flexential's
   15.25 MW beside "2.25 megawatts"); the route is now printed above it.

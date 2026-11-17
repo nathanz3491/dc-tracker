@@ -10,7 +10,7 @@ Tell whoever gave you access, with the campus's number and the field. Nobody can
 
 ## What does 待确认 mean?
 
-"To be confirmed": the value was read from an article, but no sentence could be found that states it. It may well be right; the tracker could not prove it. See [Where a value came from](provenance).
+"To be confirmed": the value was read from an article, but no sentence could be found that states it. It may well be right; the tracker could not prove it, so it is shown in the field's evidence and not used as the campus's value. See [Where a value came from](provenance).
 
 ## Why is this field empty?
 

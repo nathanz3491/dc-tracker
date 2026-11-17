@@ -476,6 +476,41 @@ tranche's sentence, which on its own reads as stating another figure — Flexent
 15.25 MW beside a sentence saying 2.25 MW. The check shows the route ("the sum of 2
 tranches: …") above the sentence, so the arithmetic can be judged as arithmetic.
 
+## A value no sentence states is not stored
+
+The evidence gate has always kept a value it could not confirm rather than delete
+it — no quote offered, a quote not in the article, or one that does not state the
+value — marked 待确认 on its citation. Until 2026-11-17 such a claim was also a last
+resort for the campus: when nothing quoted stated the field, it became the stored
+value, shown amber, and read and summed like any other. The first spot check drew two
+of them in fifteen; Amazon's Bridgefield went from 121.62 MW to a 50 MW its only
+sentence did not state.
+
+Now, for the seven fields a campus's value must come from a citation (stage, planned
+and built capacity, investment, the two dates, customer — `upsert.CLAIM_OWNED_FIELDS`),
+an unconfirmed claim leaves the merge as a ruled-out one does (`upsert.unsupported`).
+It stays on its citation with its reason, where the evidence list still shows it and a
+re-read that finds the sentence brings it back. A field nothing quoted states is empty;
+a stage falls back to *announced*. The clearing is written into the row's notes.
+
+Measured on a copy of production on 2026-11-17, against the same copy re-derived by
+the code before the change:
+
+| | before | after |
+|---|---|---|
+| values changed | — | 403 on 363 campuses |
+| emptied | — | 386 (first-announced 172, stage 114, online date 41, investment 16, built 15, planned 14, customer 10) |
+| moved to a quoted or tranche value instead | — | 17 |
+| stored values carrying a sentence | 86.5% of 5,076 | 91.4% of 4,809 |
+| rows at T2 or better | 697 | 555 |
+| rows at T3 | 278 | 223 |
+
+The fall in T2 is the point, not a cost: those rows counted a value nothing stated as
+present. They are below T2 again, so the nightly enrich puts them back in its queue
+and searches for a sentence. The kilowatt rule (an unquoted figure a thousand times a
+quoted one held out as kilowatts read as megawatts) was retired with this: it only
+ever acted on unquoted figures, which no longer take part.
+
 ## The answer key
 
 ```bash

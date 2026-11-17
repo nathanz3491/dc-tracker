@@ -226,6 +226,27 @@ CLAIM_OWNED_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+
+def unsupported(name: str, *, confirmed: bool, placeholder: bool = False) -> bool:
+    """Whether a claim on `name` is out of the merge for want of a sentence.
+
+    A claim the evidence gate could not confirm — no quote offered, a quote that is
+    not in the article, or one that does not state the value — used to be a last
+    resort: it set a claim-owned field whenever nothing quoted did, shown as 待确认.
+    A last resort is still the stored value, read and summed as one, and the first
+    nightly spot check (2026-11-16) drew two such changes out of fifteen: Amazon's
+    Bridgefield replaced 121.62 MW with a 50 MW its own sentence does not state.
+    On 2026-11-17, 456 values on 406 of 1,423 campuses stood on nothing but such a
+    claim. So for :data:`CLAIM_OWNED_FIELDS` an unconfirmed claim leaves the merge as
+    a ruled-out one does, and stays on its citation with its reason, where a reader
+    can still find it and a better reading can confirm it.
+
+    A placeholder is exempt: the shipped seed file's claims are unconfirmed by
+    construction and exist to fill a smoke-test row (see `claims_by_field`).
+    """
+    return name in CLAIM_OWNED_FIELDS and not confirmed and not placeholder
+
+
 _PHASE_RANK = {name: i for i, name in enumerate(PHASE_PROGRESSION)}
 
 
@@ -559,6 +580,7 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
         for name, value in claims.items():
             if name not in WRITABLE_FIELDS or value is None:
                 continue
+            confirmed = not placeholder and name not in unconfirmed
             out.setdefault(name, []).append(
                 _Claim(
                     value,
@@ -566,9 +588,10 @@ def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str,
                     s.fetched_at,
                     s.source_type,
                     s.url,
-                    confirmed=not placeholder and name not in unconfirmed,
+                    confirmed=confirmed,
                     published_at=getattr(s, "published_at", None),
-                    decided_against=name in decided,
+                    decided_against=name in decided
+                    or unsupported(name, confirmed=confirmed, placeholder=placeholder),
                     tertiary=tertiary,
                     part=name in parts,
                     floor=name in _CAPACITY_FIELDS and _axis_in(meta, name, "bound") == "at_least",
@@ -777,7 +800,10 @@ def contenders(claims: list[_Claim]) -> list[_Claim]:
     1. **A claim a decision ruled against is out**, whatever is left — see
        :data:`DECIDED_REASONS`.
     2. **Quote-backed beats unquoted.** A 待确认 claim is a last resort, used only
-       when nothing confirmed states the field.
+       when nothing confirmed states the field — and for a campus's own
+       :data:`CLAIM_OWNED_FIELDS` not even that: `claims_by_field` has already ruled
+       it out (:func:`unsupported`). It still applies to a tranche's status and the
+       other fields resolved here.
     3. **The whole site beats one building.** A campus capacity or investment whose
        own sentence gives it to one building or phase fills the campus column only
        when nothing describes the whole site. It answers a different question —
@@ -802,15 +828,6 @@ def contenders(claims: list[_Claim]) -> list[_Claim]:
         live = [c for c in live if not c.tertiary]
     return live
 
-
-#: How far apart two capacity figures for one campus must be for the larger to be its
-#: kilowatts read as megawatts: about a thousand times, with room either side for a
-#: figure rounded or stated for a slightly different part of the site.
-KILOWATT_RATIO: tuple[float, float] = (500.0, 2000.0)
-
-#: The smallest figure that can be such a misread. Below a gigawatt, a rival a
-#: thousand times smaller would be under a megawatt, which no campus here reports.
-KILOWATT_FLOOR_MW: float = 1000.0
 
 _CAPACITY_FIELDS: tuple[str, ...] = ("mw_planned", "mw_built")
 
@@ -871,63 +888,6 @@ def hold_out_early_stops(by_field: dict[str, list[_Claim]]) -> dict[str, list[_C
         for c in by_field["phase"]
     ]
     return out
-
-
-def hold_out_kilowatt_misreads(
-    by_field: dict[str, list[_Claim]],
-) -> tuple[dict[str, list[_Claim]], list[str]]:
-    """Capacity claims that are a campus's kilowatts read as megawatts, held out.
-
-    Englewood (#72) read "18 MW planned, 6,750 MW running" on the console: Flexential's
-    own page and a digest gave its figures in kilowatts (18,000; 11,250 and 6,750), the
-    extraction stored them as megawatts, and a 待确认 figure fills a field whenever
-    nothing confirmed states it. Such a figure can never be confirmed — the evidence
-    gate accepts a megawatt figure only from a sentence that says MW or GW -- so the
-    rule is narrow: an unconfirmed figure of at least `KILOWATT_FLOOR_MW` that is
-    about a thousand times (`KILOWATT_RATIO`) a *confirmed* figure for the same
-    campus stops deciding either capacity field. Marked decided-against for this
-    merge only, never written to the citation, so a re-read starts clean; returned
-    with one note per figure held out.
-    """
-    confirmed = [
-        number
-        for name in _CAPACITY_FIELDS
-        for claim in by_field.get(name, [])
-        if claim.confirmed
-        and not claim.decided_against
-        and (number := _mw(claim.value)) is not None
-    ]
-    if not confirmed:
-        return by_field, []
-    low, high = KILOWATT_RATIO
-    out = dict(by_field)
-    notes: list[str] = []
-    for name in _CAPACITY_FIELDS:
-        claims = by_field.get(name)
-        if not claims:
-            continue
-        kept: list[_Claim] = []
-        for claim in claims:
-            number = _mw(claim.value)
-            rival = (
-                next((u for u in confirmed if low <= number / u <= high), None)
-                if number is not None
-                and number >= KILOWATT_FLOOR_MW
-                and not claim.confirmed
-                and not claim.decided_against
-                else None
-            )
-            if rival is None:
-                kept.append(claim)
-                continue
-            kept.append(_dataclass_replace(claim, decided_against=True))
-            notes.append(
-                f"{name} {_fmt_mw(number)} MW from {_host(claim.url)} held out: "
-                f"{number / rival:,.0f} times the {_fmt_mw(rival)} MW a quoted source gives — "
-                "kilowatts read as megawatts"
-            )
-        out[name] = kept
-    return out, notes
 
 
 def _support(claim: _Claim) -> int:
@@ -1171,7 +1131,9 @@ def resolve(
     A claim a *decision* ruled against leaves the merge entirely, before that rule
     runs. The two are different questions: 待确认 measures the evidence, and an
     unquoted value is a last resort that still beats nothing, which is why the filter
-    above is conditional on a confirmed rival existing. `superseded` records that a
+    above is conditional on a confirmed rival existing. (For a campus's own
+    :data:`CLAIM_OWNED_FIELDS` it no longer beats nothing: :func:`unsupported` rules
+    it out before it gets here.) `superseded` records that a
     human or the conflict solver ruled the figure out, and it has to hold even when
     it is the only claim left — otherwise "no source we trust states this" resolves
     straight back to the figure nobody trusts. That was why clearing a capacity never
@@ -2305,9 +2267,7 @@ def upsert_record(
     session.flush()
 
     # --- Recompute every field from all claims ------------------------------
-    by_field, unit_notes = hold_out_kilowatt_misreads(
-        hold_out_early_stops(claims_by_field(list(project.sources)))
-    )
+    by_field = hold_out_early_stops(claims_by_field(list(project.sources)))
     unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
@@ -2362,7 +2322,7 @@ def upsert_record(
 
     # --- Notes: conflicts, path disclosures, duplicate proposals ------------
     derived, conflict_fields = _conflict_notes(by_field)
-    derived.extend(f"{NOTE_PREFIX} {line}" for line in unit_notes + capacity_notes)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in capacity_notes)
     # Path disclosures and duplicate proposals are contributed, not derived: they
     # are facts about a particular citation or a particular unresolved ambiguity,
     # and must survive a later record for the same project.
@@ -3084,9 +3044,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     moved and the prose explaining them did not. Only the two ingest-only families
     survive untouched — see :data:`_INGEST_ONLY_NOTES`.
     """
-    by_field, unit_notes = hold_out_kilowatt_misreads(
-        hold_out_early_stops(claims_by_field(list(project.sources)))
-    )
+    by_field = hold_out_early_stops(claims_by_field(list(project.sources)))
     unstated = _unstated(project, by_field)
     for name in WRITABLE_FIELDS:
         if name in DERIVED_FIELDS:
@@ -3135,7 +3093,7 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     apply_h200_equivalent(project, by_field)
 
     derived, conflict_fields = _conflict_notes(by_field)
-    derived.extend(f"{NOTE_PREFIX} {line}" for line in unit_notes + capacity_notes)
+    derived.extend(f"{NOTE_PREFIX} {line}" for line in capacity_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in block_notes)
     derived.extend(f"{NOTE_PREFIX} {line}" for line in party_notes)
     project.notes = _merge_notes(

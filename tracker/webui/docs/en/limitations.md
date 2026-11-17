@@ -4,7 +4,7 @@ What the tracker cannot do, or does imperfectly. Each one changes how far you sh
 
 ## About the evidence
 
-- **Many values are not yet quote-backed.** A large share of stored values are 待确认: read from an article, but not backed by a checked sentence. They are labelled, and left out of confidence, but they are in the table. Use **Quoted only** in [Projects](projects) when that matters.
+- **A figure nobody could quote leaves a field empty.** A value read from an article but not backed by a checked sentence is 待确认: kept in the field's evidence, never used as a campus's stage, capacity, investment, dates or customer. Many fields are empty for that reason rather than because nothing was ever said. A few other values can still be 待确认; use **Quoted only** in [Projects](projects) when that matters.
 - **Promotional figures pass straight through.** A developer's own announcement can be quoted exactly and still be optimistic. Nothing is checked against an outside record such as a utility filing.
 - **Syndicated stories count more than once.** The same press release reprinted by several outlets looks like several independent sources, which can raise [confidence](confidence) without real corroboration.
 - **A person's sign-off never expires.** A campus checked by a person keeps a confidence of 3 even as the news moves on.

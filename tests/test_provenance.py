@@ -181,7 +181,11 @@ def test_source_index_matches_the_export_ordering(session):
 
 
 def test_unconfirmed_value_carries_no_exact_quote(session):
-    """待确认 means nothing quotable backs it. It must not acquire one."""
+    """待确认 means nothing quotable backs it. It must not acquire one.
+
+    The merge no longer stores such a value (`upsert.unsupported`), so the row
+    carries it here as a hand edit would.
+    """
     project = build(
         session,
         [
@@ -193,6 +197,8 @@ def test_unconfirmed_value_carries_no_exact_quote(session):
             )
         ],
     )
+    assert provenance(project, "mw_built") is None
+    project.mw_built = 315.0
     result = provenance(project, "mw_built")
     assert result.tier == UNCONFIRMED
     assert result.quote_is_exact is False

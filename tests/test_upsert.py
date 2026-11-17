@@ -1842,7 +1842,10 @@ def test_an_unconfirmed_value_is_stored_but_not_counted_as_a_fact(session):
     project = session.scalars(select(Project)).one()
     source = project.sources[0]
 
-    assert project.investment_usd == 5_000_000_000, "kept, not destroyed"
+    # Kept on its citation, not destroyed — and not the campus's value either, since
+    # 2026-11-17 (`upsert.unsupported`).
+    assert json.loads(source.claims)["investment_usd"] == 5_000_000_000, "kept, not destroyed"
+    assert project.investment_usd is None, "a value no sentence states is not stored"
     assert "investment_usd" not in (source.fields or ""), "must not count as a fact"
     assert "investment_usd" in (source.unconfirmed_fields or ""), "must be flagged"
     assert "mw_planned" in (source.fields or "")
@@ -1897,14 +1900,15 @@ def test_an_unconfirmed_value_cannot_win_a_max_policy_either(session):
     assert project.mw_built == 10.0, "MAX must ignore the unconfirmed higher value"
 
 
-def test_an_unconfirmed_value_fills_a_field_nothing_else_covers(session):
-    """The whole point: a flagged candidate beats a hole."""
+def test_an_unconfirmed_value_leaves_a_field_nothing_else_covers_empty(session):
+    """It used to: a flagged candidate beat a hole. A hole is honest; a value no
+    sentence states is read and summed as though one did (`upsert.unsupported`)."""
     upsert_record(
         session,
         rec(sources=[unconfirmed_source(expected_online="2027-01-01", mark=("expected_online",))]),
     )
     project = session.scalars(select(Project)).one()
-    assert project.expected_online is not None
+    assert project.expected_online is None
 
 
 def test_an_unconfirmed_value_does_not_raise_confidence(session):

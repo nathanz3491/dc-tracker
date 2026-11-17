@@ -1,9 +1,10 @@
 """Planned and running capacity that agree everywhere they are shown (2026-10-21).
 
-The client saw Englewood at "18 MW planned, 6,750 MW running". Two rules close it:
-a megawatt figure about a thousand times a quoted one for the same campus is
-kilowatts and stops counting, and running capacity never exceeds planned. Both are
-applied when a row is derived, and the drift check expects exactly what they store.
+The client saw Englewood at "18 MW planned, 6,750 MW running". The digest's
+kilowatts-as-megawatts were unquoted, and since 2026-11-17 an unquoted figure never
+sets a campus's capacity (`upsert.unsupported`); running capacity never exceeds
+planned. Both are applied when a row is derived, and the drift check expects exactly
+what they store.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from tracker.ingest.records import IngestRecord, SourceRecord
 from tracker.logic import check_collisions
 from tracker.upsert import (
     _Claim,
-    hold_out_kilowatt_misreads,
     recompute_from_sources,
     settle_capacity,
     upsert_record,
@@ -25,49 +25,6 @@ T0 = dt.datetime(2026, 5, 1, 12, 0, 0)
 
 def _claim(value, *, confirmed=True, url="https://example.test/a", tertiary=False):
     return _Claim(value, 2, T0, "trade_press", url, confirmed=confirmed, tertiary=tertiary)
-
-
-# --- kilowatts read as megawatts --------------------------------------------------
-
-
-def test_an_unquoted_figure_a_thousand_times_a_quoted_one_is_kilowatts():
-    by_field = {
-        "mw_planned": [_claim(18.0), _claim(18000.0, confirmed=False, url="https://flex.test/")],
-        "mw_built": [_claim(6750.0, confirmed=False, url="https://digest.test/")],
-    }
-    # 6,750 is 600 times the quoted 11.25 beside it, inside the band.
-    by_field["mw_planned"].append(_claim(11.25, url="https://dcf.test/"))
-    held, notes = hold_out_kilowatt_misreads(by_field)
-    assert [c.decided_against for c in held["mw_planned"]] == [False, True, False]
-    assert [c.decided_against for c in held["mw_built"]] == [True]
-    assert len(notes) == 2
-    assert "18,000 MW from flex.test held out" in notes[0]
-    assert "kilowatts read as megawatts" in notes[0]
-
-
-def test_a_quoted_gigawatt_campus_is_never_read_as_kilowatts():
-    """A 1.2 MW pilot quoted beside Abilene's quoted 1,200 MW proves nothing."""
-    by_field = {"mw_planned": [_claim(1200.0), _claim(1.2)]}
-    held, notes = hold_out_kilowatt_misreads(by_field)
-    assert not any(c.decided_against for c in held["mw_planned"]) and notes == []
-
-
-def test_without_a_quoted_figure_nothing_is_held_out():
-    by_field = {"mw_planned": [_claim(18.0, confirmed=False), _claim(18000.0, confirmed=False)]}
-    held, notes = hold_out_kilowatt_misreads(by_field)
-    assert notes == [] and not any(c.decided_against for c in held["mw_planned"])
-
-
-def test_a_figure_under_a_gigawatt_or_outside_the_band_is_left_alone():
-    by_field = {
-        "mw_planned": [
-            _claim(0.9),
-            _claim(900.0, confirmed=False),  # under the floor
-            _claim(5000.0, confirmed=False),  # 5,556 times 0.9: outside the band
-        ]
-    }
-    _, notes = hold_out_kilowatt_misreads(by_field)
-    assert notes == []
 
 
 # --- running never exceeds planned ------------------------------------------------
@@ -197,7 +154,6 @@ def test_englewood_reads_its_quoted_capacity_and_nothing_running(session):
     project = session.get(Project, pid)
     recompute_from_sources(session, project)
     assert (project.mw_planned, project.mw_built) == (18.0, None)
-    assert "kilowatts read as megawatts" in project.notes
     drift = [c for c in check_collisions(project) if c.stored_disagrees]
     assert drift == []
 
