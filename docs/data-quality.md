@@ -471,6 +471,11 @@ report (last 7 nights and since the first sample) and on the console's Admin pag
 where admins answer. It measures the *changes*, not the whole database: values the
 loop has not touched are not in it.
 
+**Each value shows how it was reached.** A capacity summed from tranches carries one
+tranche's sentence, which on its own reads as stating another figure — Flexential's
+15.25 MW beside a sentence saying 2.25 MW. The check shows the route ("the sum of 2
+tranches: …") above the sentence, so the arithmetic can be judged as arithmetic.
+
 ## The answer key
 
 ```bash

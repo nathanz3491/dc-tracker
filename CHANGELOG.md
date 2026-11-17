@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Changed
+
+- **The spot check shows how a value was reached.** A capacity summed from tranches
+  shows one tranche's sentence, which read as stating another figure (Flexential's
+  15.25 MW beside "2.25 megawatts"); the route is now printed above it.
+
 ### Added
 
 - **A person now judges a random sample of what each night writes.** Nothing

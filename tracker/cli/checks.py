@@ -137,6 +137,10 @@ def show_cmd(
         answer = r["verdict"] or "[yellow]not answered[/yellow]"
         console.print(f"\n  #{r['id']}  {answer}  {escape(r['label'][:70])}")
         console.print(f"    {escape(r['question'])}")
+        if r["via"]:
+            # A total of tranches shows one tranche's sentence; without the route the
+            # sentence reads as stating a different figure (Flexential, 2026-11-16).
+            console.print(f"    [dim]reached through {escape(r['via'])}[/dim]")
         if r["quote"]:
             console.print(f"    [dim]“{escape(' '.join(r['quote'].split())[:240])}”[/dim]")
         elif r["kind"] != "emptied":

@@ -195,6 +195,23 @@ def test_draw_show_mark_and_score_from_the_command_line(tmp_path: Path):
     assert (total["wrong"], total["open"]) == (1, 2)
 
 
+def test_show_names_the_route_beside_a_borrowed_sentence(tmp_path: Path):
+    """Flexential's 15.25 MW was two tranches' sum shown with one tranche's 2.25 MW
+    sentence, which read as a sentence stating another figure."""
+    path = tmp_path / "tracker.db"
+    engine, _ = init_db(path)
+    with session_scope(engine) as s:
+        project = _campus(s)
+        route = "the sum of 2 tranches: 'first phase' 2.25 MW, 'Plano' 13 MW"
+        change = _change(project.id, "mw_planned", after=15.25, quote="adds 2.25 MW", via=route)
+        spotcheck.draw(s, Changes(values=[change]), NIGHT)
+    engine.dispose()
+
+    shown = runner.invoke(app, ["--db", str(path), "checks", "show"], env={"COLUMNS": "200"})
+    assert shown.exit_code == 0, shown.output
+    assert "reached through the sum of 2 tranches" in shown.output
+
+
 # --- the console's Admin page ---------------------------------------------------------
 
 

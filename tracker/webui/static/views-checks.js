@@ -59,6 +59,7 @@ function Check({ c, api, onSaved }) {
         <span class="dc-num" style=${quiet}>${c.what}: ${c.before_text} → ${c.after_text}</span>
       </div>
       <div style=${{ fontSize: 14 }}>${c.question}</div>
+      ${c.quote && c.via && html`<div style=${quiet}>Reached through ${c.via}.</div>`}
       ${c.quote
         ? html`<blockquote style=${{ margin: 0, paddingLeft: 10, borderLeft: "2px solid var(--border)",
                                      fontSize: 13, color: "var(--muted-foreground)" }}>“${c.quote}”</blockquote>`
