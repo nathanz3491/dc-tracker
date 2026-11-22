@@ -69,6 +69,13 @@ from tracker.normalize import canonical_url, looks_english
 
 log = logging.getLogger(__name__)
 
+#: Why searching stopped when Serper's prepaid credit runs out. Raised as
+#: `QuotaExhausted`, the night's own search-cap signal, so every caller stops
+#: searching and carries on without, as it does when the night's searches are spent.
+SERPER_CREDIT_GONE = (
+    "Serper's search credit is used up; no more searches until it is topped up at serper.dev"
+)
+
 SEARCH_KEY_HELP = """Web search is not configured. Pick one backend and add its key to .env.
 
   Serper  — easiest. Google's index, one variable, and the signup states
@@ -611,9 +618,45 @@ class SerperProvider:
             )
         self._sent += 1
 
+    #: How long a "no credit left" answer is believed by every command, in seconds.
+    #: The night runs each step as a command of its own, and each would otherwise
+    #: send a search to learn what the last one learned; an hour also means a top-up
+    #: made during the night is noticed within the hour.
+    CREDIT_GONE_FOR_S: float = 3600.0
+
+    @staticmethod
+    def _credit_mark() -> Path:
+        from tracker.config import cache_dir
+
+        return cache_dir("serper") / "_credit-gone"
+
+    @classmethod
+    def _credit_gone(cls) -> bool:
+        try:
+            age = time.time() - cls._credit_mark().stat().st_mtime
+        except OSError:
+            return False
+        return age < cls.CREDIT_GONE_FOR_S
+
+    @staticmethod
+    def _out_of_credit(response: httpx.Response) -> bool:
+        """Whether Serper's answer says the account's credit is used up.
+
+        Its own documentation and the answers recorded in the wild disagree on the
+        status — 402, or 400 or 403 with "Not enough credits" in the body — so the
+        body decides for the two that also mean other things. A 403 used to be read
+        as a wrong key whatever it said, and every later search in the night was sent
+        to be refused the same way.
+        """
+        if response.status_code == 402:
+            return True
+        return response.status_code in (400, 403) and "credit" in response.text.lower()
+
     def _post(self, endpoint: str, body: dict[str, Any]) -> httpx.Response:
         from tracker.llm import record_search
 
+        if self._credit_gone():
+            raise QuotaExhausted(SERPER_CREDIT_GONE + " (remembered from a search this hour)")
         self._spend_one()
         try:
             response = httpx.post(
@@ -630,6 +673,14 @@ class SerperProvider:
 
         if response.status_code == 429:
             raise QuotaExhausted("Serper credits are exhausted (HTTP 429).")
+        if self._out_of_credit(response):
+            try:
+                self._credit_mark().write_text(f"HTTP {response.status_code}", encoding="utf-8")
+            except OSError as exc:
+                log.debug("could not record that Serper's credit is gone: %s", exc)
+            raise QuotaExhausted(
+                f"{SERPER_CREDIT_GONE} (HTTP {response.status_code}: {response.text[:200]})"
+            )
         if response.status_code in (401, 403):
             raise SearchError(
                 f"Serper refused the request (HTTP {response.status_code}). Usually "

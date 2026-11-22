@@ -1213,3 +1213,45 @@ def test_a_url_two_templates_both_found_is_queued_once(session):
     assert report.queued == 1
     assert report.already_known == 0
     assert queued[0].feed == "search:rezoning:richland-la"
+
+
+@pytest.mark.parametrize("status", [400, 402, 403])
+def test_serper_out_of_credit_stops_searching_like_the_nights_cap(status):
+    """Serper's docs and its recorded answers disagree on the status; a 403 used to be
+    read as a wrong key, and every later search in the night was sent anyway."""
+    import respx as _respx
+
+    body = {"message": "Not enough credits", "statusCode": status}
+    provider = srch.SerperProvider(settings_with(serper_api_key="k"))
+    with _respx.mock() as router:
+        route = router.post(srch.SerperProvider.ENDPOINT).mock(
+            return_value=httpx.Response(status, json=body)
+        )
+        with pytest.raises(QuotaExhausted, match="credit is used up"):
+            provider.search("q")
+        # The next command of the night does not ask again within the hour.
+        with pytest.raises(QuotaExhausted, match="remembered"):
+            srch.SerperProvider(settings_with(serper_api_key="k")).search("q")
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_serper_403_that_is_not_about_credit_still_names_the_key():
+    respx.post(srch.SerperProvider.ENDPOINT).mock(
+        return_value=httpx.Response(403, json={"message": "Unauthorized."})
+    )
+    with pytest.raises(SearchError, match="TRACKER_SERPER_API_KEY") as caught:
+        srch.SerperProvider(settings_with(serper_api_key="k")).search("q")
+    assert not isinstance(caught.value, QuotaExhausted)
+
+
+def test_an_hour_old_credit_refusal_is_asked_about_again():
+    import os
+    import time
+
+    mark = srch.SerperProvider._credit_mark()
+    mark.write_text("HTTP 400", encoding="utf-8")
+    assert srch.SerperProvider._credit_gone()
+    old = time.time() - srch.SerperProvider.CREDIT_GONE_FOR_S - 60
+    os.utime(mark, (old, old))
+    assert not srch.SerperProvider._credit_gone()

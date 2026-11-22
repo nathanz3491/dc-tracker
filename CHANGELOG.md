@@ -442,6 +442,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **Running out of search credit stops the searching, and says so.** Serper answers
+  an empty account with 402, or with 400 or 403 and "Not enough credits" — its docs
+  and its recorded answers disagree. A 403 was read as a wrong key, and a 400 or 402
+  as one failed search, so the night went on sending every search it had planned,
+  each refused, and the log blamed the key. Any of the three that names credit now
+  ends searching the way the night's own search cap does: each step stops searching
+  and carries on with what it has, and the log reads "Serper's search credit is used
+  up". Every command believes it for an hour, so the night's later steps do not each
+  ask again, and a top-up is noticed within the hour.
 - **A plan filled in from tranches is never below what a source says runs.** When no
   source states a campus's plan, its tranches fill it in — and the tranches read are
   usually the ones still to come, so their sum could fall below the running figure a
