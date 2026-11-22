@@ -311,7 +311,10 @@ Three stages before anything is put to a model:
    smallest stated figure covering what runs, a running figure to one the plan
    covers. That settles by rule what `built_exceeds_planned` used to put to the
    agent each night. The check applies it before it compares, or every row it moved
-   would read as drifted and be "repaired" back across it each night.
+   would read as drifted and be "repaired" back across it each night. Since
+   2026-11-23 it also holds when no source states a plan and the tranches fill one
+   in: their sum is usually the buildings still to come, so it is raised to what
+   runs (Eagle Mountain's 80 MW of new buildings beside 133 MW running).
 2. **Answered by comparison, free.** Held to `audit.free_answer`'s bar: a read of
    data already stored, never a judgement between two sourced figures. Three codes
    clear it, and between them they were **448 of 536** resolvable findings — which
@@ -713,7 +716,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Collisions and the per-field policy | `tracker/logic.py` — `check_collisions`, `why_decided`, `decision`; `tracker/upsert.py` — `FIELD_POLICY`, `Policy`, `resolve_field`, `claims_by_field` (the order), `stale_claims`, `STALE_AFTER`, `_moving_again` |
 | Judgement and the evidence audit | `tracker/logic.py` — `examine`, `audit_evidence`, `parse_contradictions`, `parse_evidence_findings`, `AUDIT_VERDICTS`, `auditable_fields` |
 | Actions, and which codes have none | `tracker/logic.py` — `ACTIONS`, `_stating`, `resolvable`, `free_answer`, `FREE_CODES`, `_resolve_finished_obstacles`, `_reported_after_finish`, `_drop_derived_delays`, `_drop_restated_delays`, `_clear_built`, `record_decision`; `tracker/audit.py` — `_rule_against`; `tracker/upsert.py` — `_record_slippage`, `_later_date_is_newer_news`; `tracker/delays.py` — `restates`, `period_end` |
-| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `unsupported`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
+| Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `unsupported`, `settle_capacity`, `_cap_tranche_built`, `_raise_tranche_plan`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `lift_ruling`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD`; `tracker/answer_apply.py` — `plan`, `apply` |
 | The agent path | `tracker/triage.py` — `triage_findings`, `triage`, `investigate`, `conclude`, `finding_question`, `finding_subject`, `finding_evidence`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
 | One loop for every paid pass: per-item commit, failures, overlap, the money ceiling | `tracker/judged.py` — `run` (`retry_errors`), `startable`, `Done`, `RETRY_WAIT`, `BACKLOG`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |

@@ -430,6 +430,17 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A plan filled in from tranches is never below what a source says runs.** When no
+  source states a campus's plan, its tranches fill it in — and the tranches read are
+  usually the ones still to come, so their sum could fall below the running figure a
+  source does state. Meta's Eagle Mountain read 80 MW planned (two 40 MW buildings
+  under construction) beside 133 MW running, and Flexential's Plano 15 MW beside a
+  quoted 18 MW running. Both broke "running never exceeds planned" at every
+  re-derive, which logged four errors every round of every night since 11-19, and a
+  new campus read that way would have been refused at ingest. The rule already
+  applied when nothing covers what runs now applies after the tranches too: a campus
+  has at least what it runs, and the row's note says so. On a copy of production it
+  moves exactly those two plans (15.25 → 18 MW, 80 → 133 MW) and nothing else.
 - **Five more readings the 2026-11-13 night got wrong.** Homer City's online date was
   the year the *whole campus* is finished ("scheduled for completion by June 2036");
   Project Jupiter's plan was its fuel-cell plant ("2.45 GW of installed Bloom fuel cell

@@ -241,3 +241,45 @@ def test_with_no_running_figure_the_live_tranches_count_up_to_the_campus(session
     project = _tranches(session)
     got = _accounting_json(project)
     assert got["delivering"] == 1200.0
+
+
+def test_a_plan_only_the_tranches_supply_is_never_below_what_runs(session):
+    """Flexential Plano (#26): no plan stated, 18 MW running quoted, and the two
+    tranches read summing to 15 MW. It broke "running never exceeds planned" at
+    every re-derive; a campus has at least what it runs."""
+    from tracker import invariants
+    from tracker.ingest.records import BlockRecord
+    from tracker.models import Project
+
+    base = {"name": "Plano", "company": "Flexential", "city": "Plano", "state": "TX"}
+    record = IngestRecord(
+        project={**base, "country": "US"},
+        sources=[
+            SourceRecord(
+                url="https://example.test/plano",
+                source_type="trade_press",
+                fetched_at=T0,
+                excerpt="A.",
+                claims={**base, "mw_built": 18.0},
+                quotes={"mw_built": "an 18 MW critical load capacity"},
+                blocks=[
+                    BlockRecord(
+                        label="CoreWeave deployment",
+                        mw=13.0,
+                        status="planned",
+                        quotes={"mw": "a 13-megawatt deployment"},
+                    ),
+                    BlockRecord(
+                        label="first phase",
+                        mw=2.0,
+                        status="planned",
+                        quotes={"mw": "a first phase of 2 MW"},
+                    ),
+                ],
+            )
+        ],
+    )
+    project = session.get(Project, upsert_record(session, record).project_id)
+    assert (project.mw_planned, project.mw_built) == (18.0, 18.0)
+    assert "a campus has at least what it runs" in (project.notes or "")
+    assert list(invariants.campus_breaks(project, kind=invariants.HELD)) == []

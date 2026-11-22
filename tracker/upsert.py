@@ -1025,6 +1025,40 @@ def _cap_tranche_built(project: Project, built_from_claims: float | None) -> lis
     return [note]
 
 
+def _raise_tranche_plan(
+    project: Project, planned_from_claims: float | None, built_from_claims: float | None
+) -> list[str]:
+    """A plan only the tranches supplied is never less than what a source says runs.
+
+    :func:`settle_capacity` keeps running within planned, but it runs on the claims,
+    before `blocks.reconcile` fills an empty `mw_planned` from the tranches. When no
+    source states a plan, the tranches read are usually the ones still to come — the
+    new buildings in an article about an expansion — and their sum can fall below a
+    running figure a source does state: Meta's Eagle Mountain (#27) summed two
+    40 MW buildings under construction to an 80 MW plan beside the 133 MW Epoch AI
+    reads as running, and Flexential's Plano (#26) two tranches to 15 MW beside a
+    quoted 18 MW. Each broke "running never exceeds planned" at every re-derive,
+    logged as an error every round of every night. The rule `settle_capacity`
+    applies when nothing covers what runs applies here too: a campus has at least
+    what it runs.
+    """
+    if (
+        planned_from_claims is not None
+        or built_from_claims is None
+        or project.mw_planned is None
+        or project.mw_built is None
+        or project.mw_built <= project.mw_planned
+    ):
+        return []
+    note = (
+        f"mw_planned {_fmt_mw(project.mw_planned)} -> {_fmt_mw(project.mw_built)}: the tranches "
+        f"add up to less than the {_fmt_mw(project.mw_built)} MW running, so they describe "
+        "only part of the campus; a campus has at least what it runs"
+    )
+    project.mw_planned = project.mw_built
+    return [note]
+
+
 def _coerce_like(value: Any, template: Any) -> Any:
     """Bring a JSON-round-tripped claim back to the column's Python type."""
     if isinstance(template, _dt.datetime) and isinstance(value, str):
@@ -2317,9 +2351,10 @@ def upsert_record(
     from tracker import parties as parties_mod
 
     blocks_written = blocks_mod.rebuild(session, project)
-    built_from_claims = project.mw_built
+    planned_from_claims, built_from_claims = project.mw_planned, project.mw_built
     block_notes = blocks_mod.reconcile(project)
     capacity_notes += _cap_tranche_built(project, built_from_claims)
+    capacity_notes += _raise_tranche_plan(project, planned_from_claims, built_from_claims)
     # After the reconcile, which can move the phase.
     capacity_notes += drop_halted_online_date(project)
     # Parties after the block reconcile, because both may fill a null `customer`
@@ -3088,9 +3123,10 @@ def recompute_from_sources(session: Session, project: Project) -> list[str]:
     from tracker import parties as parties_mod
 
     blocks_mod.rebuild(session, project)
-    built_from_claims = project.mw_built
+    planned_from_claims, built_from_claims = project.mw_planned, project.mw_built
     block_notes = blocks_mod.reconcile(project)
     capacity_notes += _cap_tranche_built(project, built_from_claims)
+    capacity_notes += _raise_tranche_plan(project, planned_from_claims, built_from_claims)
     # After the reconcile, which can move the phase.
     capacity_notes += drop_halted_online_date(project)
     # **Parties before the block reconcile would be wrong, and after it is right.**
