@@ -38,23 +38,31 @@ and this module owns the rest, the same way for every pass:
   is recorded as `declines.ERROR`, held for the rest of the night only: a failed
   call says nothing about the question, so tomorrow it is worth asking again, but
   asking again tonight would pay to fail the same way.
-* **The money ceiling is asked about before each wave** (`spend.ceiling_reached`).
-  Once reached, nothing new starts and everything done is kept.
-* **The calls overlap, in waves.** A wave holds at most one item per project — both
-  rows of a duplicate pair count — and at most `workers` items. Its items are
-  prepared in input order, asked together, then applied and committed one by one in
-  input order, before the next wave is prepared. So each item's prompt is built
-  after every earlier item on the same project was applied — what the serial loop
-  guaranteed — and the ceiling can be overshot by one wave at most. With one worker
-  a wave is one item and this is exactly the serial loop.
+* **The money ceiling is asked about before each item starts**
+  (`spend.ceiling_reached`). Once reached, nothing new starts and everything done is
+  kept, so the overshoot is the calls already in flight, at most `workers`.
+* **The calls overlap, each worker taking the next item the moment it is free.** At
+  most `workers` questions are out at once, and never two on one project — both rows
+  of a duplicate pair count — until the earlier one is applied (:func:`startable`).
+  Items are prepared in input order as they start, and applied and committed one by
+  one in the order they started. So each item's prompt is built after every earlier
+  item on the same project was applied — what the serial loop guaranteed. With one
+  worker this is exactly the serial loop.
+
+  It used to go in waves: six asked together, the next six prepared only when all
+  six were applied. Every wave waited for its slowest answer, so the other five
+  workers sat idle for most of it — measured on three nights' ledgers, waves took
+  1.5 to 2.3 times as long as the same calls taken as workers came free, and a
+  connection that hung for ten minutes held its whole wave for ten minutes.
 
 **Why an agent pass reads through a session of its own.** The agent's evidence
 tools (`agent.evidence_toolkit`) look rows up while the model works, so they cannot
 be handed plain values in advance: `find_projects` searches the whole table. They
 only ever read, though, so with several workers each ask gets a fresh session on
 the same engine, closed when it ends. SQLite in WAL mode lets readers run beside the
-one writer, and because every earlier wave is committed before the next is prepared,
-such a session sees the rows its item is about exactly as the serial loop's would.
+one writer, and because every earlier item on the same rows is committed before an
+item is prepared, such a session sees the rows its item is about exactly as the
+serial loop's would.
 With one worker the ask reads through the caller's own session, unchanged — which
 is also what a dry run needs, since its writes are never committed for another
 session to see.
@@ -62,9 +70,11 @@ session to see.
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import logging
 from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -112,6 +122,13 @@ class Tokens:
         self.calls += 1
 
 
+#: How many workers' worth of answers may wait, received but not yet applied, behind
+#: an earlier answer that is slow to arrive. Answers are applied in the order their
+#: items started, so one slow call would otherwise idle every other worker until it
+#: returned; this many let the rest keep going, and bound what a crash in the
+#: meantime could lose to answers paid for and not yet committed.
+BACKLOG: int = 3
+
 #: Seconds to wait before a pass asks its failed calls again (`run(retry_errors=True)`).
 #: A provider answering "overloaded" (HTTP 429) usually recovers within a minute; 17
 #: of 241 suspect re-reads in ten nights were lost to it, each a slot the night had
@@ -148,26 +165,39 @@ class _Raised:
     error: BaseException
 
 
-def waves(
-    queue: Sequence[Any], projects: Callable[[Any], Iterable[int]], cap: int
-) -> tuple[list[Any], list[Any]]:
-    """The next wave from `queue`, and what is left: at most `cap` items, no project twice.
+@dataclass
+class _Started:
+    """An item whose question is out: on a worker, or answered and waiting its turn."""
 
-    An item that cannot join — a project already in the wave, or the wave full —
-    blocks its projects for every later item too, so no later item on one of its
-    projects jumps ahead of it. Per project, the order of `queue` is kept.
+    item: Any
+    key: tuple[str, str]
+    prepared: Any
+    touched: list[int]
+    future: Future
+
+
+def _touched(projects: Callable[[Any], Iterable[int]], item: Any) -> list[int]:
+    return sorted({int(p) for p in projects(item) if p is not None})
+
+
+def startable(
+    queue: Sequence[Any], projects: Callable[[Any], Iterable[int]], busy: Iterable[int]
+) -> int | None:
+    """Where in `queue` the next item to start is, or None while every one must wait.
+
+    An item may start when none of its projects is `busy` — asked about and not yet
+    applied. One that must wait blocks its projects for every later item too, so no
+    later item on one of its projects jumps ahead of it: per project, the order of
+    `queue` is kept, and each item's question is built after every earlier item on
+    the same rows was applied.
     """
-    wave: list[Any] = []
-    rest: list[Any] = []
-    busy: set[int] = set()
-    for item in queue:
-        touched = {int(p) for p in projects(item) if p is not None}
-        if len(wave) < max(1, cap) and not touched & busy:
-            wave.append(item)
-        else:
-            rest.append(item)
-        busy |= touched
-    return wave, rest
+    blocked = set(busy)
+    for at, item in enumerate(queue):
+        touched = set(_touched(projects, item))
+        if not touched & blocked:
+            return at
+        blocked |= touched
+    return None
 
 
 def run(
@@ -241,7 +271,7 @@ def run(
 
     from tracker import declines as _declines
 
-    wait = RETRY_WAIT if retry_wait is None else retry_wait
+    wait_s = RETRY_WAIT if retry_wait is None else retry_wait
     from tracker import declines
     from tracker.spend import ceiling_reached
 
@@ -336,7 +366,6 @@ def run(
 
     from tracker import labels
     from tracker.llm import spend_stage
-    from tracker.parallel import map_ordered
 
     def record(item: Any, before: labels.Held, done: Done) -> None:
         """The answer's effect on its rows, for the verdict log. Never raises."""
@@ -370,84 +399,139 @@ def run(
                 finish(key, failure)
         put_back.clear()
 
-    queue = chosen
-    while True:
-        stop = False
-        while queue:
-            why = ceiling_reached()
-            if why:
-                out.ceiling, out.unreached = why, list(queue)
-                stop = True
-                break
-            cap = max(1, workers)
-            if room is not None:
-                left = room()
-                if left is not None and left <= 0:
-                    out.stopped, out.unreached = "no room left", list(queue)
-                    stop = True
-                    break
-                if left is not None:
-                    cap = min(cap, left)
-            wave, queue = waves(queue, projects, cap)
+    queue = list(chosen)
+    cap = max(1, workers)
+    if cap > 1 and len(queue) > 1:
+        log.info("%s: %d item(s), %d at a time", label, len(queue), cap)
+    pool = (
+        ThreadPoolExecutor(max_workers=cap, thread_name_prefix=f"tracker-{label}")
+        if cap > 1
+        else None
+    )
 
-            ready: list[tuple[Any, tuple[str, str], Any]] = []
-            for item in wave:
-                # The key is taken here, after every earlier item was applied, so a
-                # decline names the question as it was asked and the evidence it was
-                # shown — a merge earlier in the run may have moved a pair to other rows.
-                key = ("", "")
-                try:
-                    if kind is not None:
-                        key = (subject(item), "")
-                        key = (key[0], fingerprint(item))
-                    prepared = prepare(item)
-                except Exception as exc:
-                    fail(item, key, exc, "prepare")
-                    continue
-                if isinstance(prepared, Done):
-                    finish(key, prepared)
-                    continue
-                ready.append((item, key, prepared))
+    def launch(prepared: Any) -> Future:
+        """Start one ask: on a worker, or here and now when there is one worker."""
+        if pool is not None:
+            return pool.submit(asked, prepared)
+        future: Future = Future()
+        future.set_result(asked(prepared))
+        return future
 
-            if not ready:
-                continue
-            with spend_stage(stage) if stage else contextlib.nullcontext():
-                for (item, key, prepared), answer in map_ordered(
-                    ready,
-                    lambda entry: asked(entry[2]),
-                    limit=min(workers, len(ready)),
-                    label=label,
-                ):
-                    if isinstance(answer, _Raised):
-                        if retry_errors and not retrying(item):
-                            put_back.append((item, key, answer))
+    def settle(started: _Started) -> None:
+        """Apply one answered item, on this thread, exactly as the serial loop did."""
+        item, key, prepared = started.item, started.key, started.prepared
+        answer = started.future.result()
+        if isinstance(answer, _Raised):
+            if retry_errors and not retrying(item):
+                put_back.append((item, key, answer))
+                return
+            fail(item, key, answer.error, "ask")
+            return
+        before = labels.held(session, projects(item)) if commit else {}
+        try:
+            done = apply(item, prepared, answer)
+        except Exception as exc:
+            fail(item, key, exc, "apply")
+            return
+        if retry_errors and done.decline == _declines.ERROR and not retrying(item):
+            put_back.append((item, key, done))
+            return
+        finish(key, done)
+        if commit:
+            record(item, before, done)
+
+    try:
+        with spend_stage(stage) if stage else contextlib.nullcontext():
+            while True:
+                stop = False
+                #: Asked and not yet applied, in the order they started. Applied in
+                #: that order, so a run's report reads the same however the calls
+                #: happened to finish.
+                pending: list[_Started] = []
+                #: The projects of everything in `pending`: none may start another.
+                busy: collections.Counter[int] = collections.Counter()
+                while queue or pending:
+                    # Fill every free worker. An answer that arrived but waits behind
+                    # an earlier one is not running, so it does not hold a worker —
+                    # but no more than BACKLOG workers' worth may wait, which bounds
+                    # what a crash could lose to answers paid for and not yet saved.
+                    # One worker: nothing starts until the last item is applied.
+                    while not stop and queue:
+                        running = sum(1 for p in pending if not p.future.done())
+                        if running >= cap or len(pending) >= (BACKLOG * cap if pool else 1):
+                            break
+                        why = ceiling_reached()
+                        if why:
+                            out.ceiling, out.unreached = why, list(queue)
+                            queue, stop = [], True
+                            break
+                        left = room() if room is not None else None
+                        # What is asked but not applied has not been counted against
+                        # the budget yet: wait for it before deciding.
+                        if left is not None and left - len(pending) <= 0:
+                            if not pending:
+                                out.stopped, out.unreached = "no room left", list(queue)
+                                queue, stop = [], True
+                            break
+                        at = startable(queue, projects, busy)
+                        if at is None:
+                            break
+                        item = queue.pop(at)
+                        # The key is taken here, after every earlier item on the same
+                        # rows was applied, so a decline names the question as it was
+                        # asked and the evidence it was shown — a merge earlier in the
+                        # run may have moved a pair to other rows.
+                        key = ("", "")
+                        try:
+                            if kind is not None:
+                                key = (subject(item), "")
+                                key = (key[0], fingerprint(item))
+                            prepared = prepare(item)
+                        except Exception as exc:
+                            fail(item, key, exc, "prepare")
                             continue
-                        fail(item, key, answer.error, "ask")
+                        if isinstance(prepared, Done):
+                            finish(key, prepared)
+                            continue
+                        touched = _touched(projects, item)
+                        pending.append(_Started(item, key, prepared, touched, launch(prepared)))
+                        busy.update(touched)
+                    if not pending:
+                        if stop or not queue:
+                            break
                         continue
-                    before = labels.held(session, projects(item)) if commit else {}
-                    try:
-                        done = apply(item, prepared, answer)
-                    except Exception as exc:
-                        fail(item, key, exc, "apply")
-                        continue
-                    if retry_errors and done.decline == _declines.ERROR and not retrying(item):
-                        put_back.append((item, key, done))
-                        continue
-                    finish(key, done)
-                    if commit:
-                        record(item, before, done)
-        if stop or not put_back:
-            settle_put_back()
-            break
-        # Every other item has been asked; the ones whose call failed get one more
-        # try, after a pause long enough for an overloaded provider to recover.
-        out.retried += len(put_back)
-        second.extend(item for item, _key, _failure in put_back)
-        queue = [item for item, _key, _failure in put_back]
-        put_back.clear()
-        if wait > 0:
-            time.sleep(wait)
+                    if not pending[0].future.done():
+                        # On the calls still out only: an answer already in would make
+                        # this return at once, and the loop would spin until the head's.
+                        wait(
+                            [p.future for p in pending if not p.future.done()],
+                            return_when=FIRST_COMPLETED,
+                        )
+                    while pending and pending[0].future.done():
+                        started = pending.pop(0)
+                        for project in started.touched:
+                            busy[project] -= 1
+                            if busy[project] <= 0:
+                                del busy[project]
+                        settle(started)
+                if stop or not put_back:
+                    settle_put_back()
+                    break
+                # Every other item has been asked; the ones whose call failed get one
+                # more try, after a pause long enough for an overloaded provider to
+                # recover.
+                out.retried += len(put_back)
+                second.extend(item for item, _key, _failure in put_back)
+                queue = [item for item, _key, _failure in put_back]
+                put_back.clear()
+                if wait_s > 0:
+                    time.sleep(wait_s)
+    finally:
+        if pool is not None:
+            # Answers still being worked on are paid for either way; waiting for them
+            # is the bounded loss `parallel.map_ordered` documents.
+            pool.shutdown(wait=True, cancel_futures=True)
     return out
 
 
-__all__ = ["Done", "Run", "Tokens", "run", "waves"]
+__all__ = ["Done", "Run", "Tokens", "run", "startable"]

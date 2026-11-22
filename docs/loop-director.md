@@ -152,8 +152,8 @@ unread, and the Texas governor-elect's moratorium reached 21 of 205 Texas projec
   per page from the record, and the round-1 check-in says it runs before the
   director's steps.
 - **The ceiling.** It is a paid step: the money ceiling is asked before it starts
-  (`spend ceiling reached … before conditions`) and inside it, before each wave of
-  pages.
+  (`spend ceiling reached … before conditions`) and inside it, before each page
+  starts.
 - **Which campuses a rule reaches** is code (`tracker conditions match`): matched again
   in every free phase after `derive`, and once more after the last round, so a campus
   the night placed, merged or moved to another stage is matched by morning. Free;

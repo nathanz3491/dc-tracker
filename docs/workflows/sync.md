@@ -272,7 +272,7 @@ Texas projects — only those a stock story happened to name.
   once (`tracker conditions read --limit`, the night's `--conditions`, default 150, `0`
   to skip). Round 1 only, right after the news step, because those are the pages it has
   just saved; behind the money ceiling like every paid step, and inside it before each
-  wave of pages.
+  page starts.
 * **It edits no campus.** A rule is kept only on the article's own sentences, and is a
   row of its own, kept apart from a campus's values, obstacles and tier.
 * **Which campuses a rule reaches is code, every round** (`tracker conditions match`,

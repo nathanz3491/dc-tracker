@@ -283,7 +283,7 @@ for and then lost: on a copy of production one row went from 36 superseded marks
 the loop every paid pass uses), so a dispute whose write raises is rolled back and the
 rest go on, and the night's money (`spend.ceiling_reached`) is asked about before each
 dispute. One project's disputes are asked one at a time: they all name that project,
-and the runner never puts two questions about one row in a wave.
+and the runner never has two questions about one row out at once.
 
 A settled field needs no bookkeeping to avoid re-asking. Applying an answer marks the
 losing claims `superseded`, which demotes them out of `confirmed`, and a dispute needs
@@ -312,8 +312,9 @@ raises is rolled back while the rest go on. The runs overlap — up to
 `TRACKER_LLM_CONCURRENCY` rows at once, one for a local model — each reading through a
 session of its own, since its evidence tools only read (`gapfill.investigate`); what
 it found is stored on the main thread, in input order (`gapfill.conclude`).
-`--token-budget` bounds how many rows a wave starts, at what a row has cost so far.
-The night's money is asked about before each wave and before each project of the
+`--token-budget` bounds how many rows start, at what a row has cost so far, counting
+the rows still out. The night's money is asked about before each row starts and before
+each project of the
 harvest (`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`); once it is spent the
 command starts nothing more, keeps what it did, and prints `spend ceiling reached`. A
 failed run is rolled back and asked again next round — it is not held for the night
@@ -440,7 +441,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Pages nothing can read go last | `tracker/ingest/enrich.py` — `run`; `tracker/ingest/discover.py` — `unreadable_test`, `readable_first`, `closed_domains` |
 | Settle stage | `tracker/ingest/enrich.py` — `_settle`, `settle_key`; `tracker/conflicts.py` — `disputes`, `solve`, `apply_outcome`; `tracker/declines.py`; `tracker/judged.py` — `run` |
 | Agent pass | `tracker/cli/enrich.py` — `_gapfill_batch(t2_only=)` and the fields it returns per row; `tracker/gapfill.py` — `fill_rows` (its landed/unlanded check, `room`), `question`, `investigate`, `conclude`, `apply_facts`, `_fact_axes`, `AGENT_WITHHELD`, `Filled.missed`, `TYPICAL_ROW_TOKENS`; `tracker/upsert.py` — `WITHHELD`, `_withheld`; `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS` |
-| The money ceiling, between projects and between waves | `tracker/spend.py` — `ceiling_reached`; `tracker/ingest/enrich.py` — `run_many`, `BatchReport.ceiling`; `tracker/judged.py` — `run` |
+| The money ceiling, between projects and before each row starts | `tracker/spend.py` — `ceiling_reached`; `tracker/ingest/enrich.py` — `run_many`, `BatchReport.ceiling`; `tracker/judged.py` — `run` |
 | Spend by stage | `tracker/llm.py` — `spend_stage`; `tracker/spend.py` |
 | The basic field set, and the free scan for it | `tracker/clean.py` — `BASIC_FIELDS`, `BASIC_SOURCED_FIELDS`, `basics_missing`, `basics_worklist`, `basic_fillable` |
 | Not asking twice | `tracker/attempts.py` — `exhausted`, `published_since`, `record`, `evidence_count` |

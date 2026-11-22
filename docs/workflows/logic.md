@@ -556,15 +556,18 @@ every paid pass uses). Each finding is committed as it lands, so a run stopped a
 row 40 keeps the first 39, and a database error while *applying* a ruling rolls back
 that finding rather than ending the batch — an `IntegrityError` on `phase` once killed
 the logic phase of three overnight rounds out of five after a single bad finding.
-Before each wave it asks whether the night's money is spent
+Before each finding starts it asks whether the night's money is spent
 (`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`); once it is, it starts nothing
 more, keeps what is done and prints `spend ceiling reached`.
 
 **The runs overlap.** With `TRACKER_LLM_CONCURRENCY` workers (1 for a local model),
-a wave of findings — never two about the same row — is prepared in order, its agent
-runs go out together, and the answers are applied and committed one by one in input
-order before the next wave is prepared. So every finding's question is built after
-every earlier finding about its row was applied, as in a serial run. The agent's
+each worker takes the next finding the moment it is free, never one about a row a
+finding still out is about (`judged.startable`); findings are prepared in order as they
+start, and the answers are applied and committed one by one in the order they started.
+So every finding's question is built after every earlier finding about its row was
+applied, as in a serial run. It used to go in waves of six, each waiting for its
+slowest answer before the next was prepared, which on three nights' ledgers took 1.5
+to 2.3 times as long. The agent's
 evidence tools read the database while it works and only ever read, so with more
 than one worker each run reads through a session of its own (`triage.investigate`);
 the writes stay on the main thread (`triage.conclude`).
@@ -713,7 +716,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Drift repair | `tracker/logic.py` — `resolve_drift`, `check_collisions`; `tracker/upsert.py` — `recompute_from_sources`, `unsupported`, `settle_capacity`, `_cap_tranche_built`; `tracker/blocks.py` — `settled_phase`, `lifting_blocks`, `phase_after_milestones`, `MILESTONE_PHASE`, `phase_after_blocks`, `raise_phase` |
 | Contested fields, the two calls, the write | `tracker/conflicts.py` — `disputes`, `solve`, `_challenge`, `supersede`, `lift_ruling`, `apply_outcome`, `MAX_CALLS_PER_FIELD`, `MIN_CONFIDENCE`, `SUPERSEDED`, `MISREAD`; `tracker/answer_apply.py` — `plan`, `apply` |
 | The agent path | `tracker/triage.py` — `triage_findings`, `triage`, `investigate`, `conclude`, `finding_question`, `finding_subject`, `finding_evidence`, `apply_rule_out`, `_claims_value`, `rule_out_tool`, `leave_alone_tool`, `RULEABLE_FIELDS`, `SYSTEM` |
-| One loop for every paid pass: per-item commit, failures, waves, the money ceiling | `tracker/judged.py` — `run` (`retry_errors`), `waves`, `Done`, `RETRY_WAIT`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |
+| One loop for every paid pass: per-item commit, failures, overlap, the money ceiling | `tracker/judged.py` — `run` (`retry_errors`), `startable`, `Done`, `RETRY_WAIT`, `BACKLOG`; `tracker/declines.py` — `split`, `pick`, `holds`, `ERROR`; `tracker/spend.py` — `ceiling_reached`, `ledger_spent`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling`, `_print_tally` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`, `MAX_STEPS`; `tracker/llm.py` — `without_thinking`; `tracker/ingest/search.py` — `CachedProvider` |
 | What a ruling cannot reach | `tracker/triage.py` — `can_rule_on`, `UNANSWERABLE_BY_RULING`, `has_live_claim`; `tracker/agent.py` — `_list_sources`, `_field_lines`, `_claims_line`, `PAGE_CHARS` |
 | The fixed menu and the keyboard walk | `tracker/logic.py` — `decide`, `TRIAGE_MIN_CONFIDENCE`; `tracker/cli/logic.py` — `_triage_by_agent`, `_triage_by_model`, `_triage` |

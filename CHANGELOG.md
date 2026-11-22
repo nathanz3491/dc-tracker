@@ -27,6 +27,20 @@ initial build of the v1 PRD.
   the same numbers. A reply that ever came back without its token counts is priced
   on an over-estimate rather than as free, and the rest of that run is sent whole.
   `TRACKER_DEEPSEEK_STREAM=false` puts every call back as it was.
+- **The night's model passes no longer wait for the slowest of every six answers.**
+  The conditions reader, `logic resolve`, the duplicate judge, `risks confirm`, `audit
+  resolve`, the tranche review and enrich's settle and agent steps asked their
+  questions in waves: six went out together and the next six were not prepared until
+  all six were answered and saved, so five workers sat idle behind whichever answer
+  was slowest. On three nights' ledgers waves took 1.5 to 2.3 times as long as the
+  same calls taken as workers came free — the conditions step about 45 minutes
+  of model time for 20 minutes of work. Now each worker takes the next question the
+  moment it is free. Nothing else moves: never two questions about one row at once,
+  each question still built after every earlier one on its rows was saved, answers
+  still saved one by one in the order they started, the money ceiling asked before
+  each question rather than each wave, and one worker is still exactly the serial
+  loop. At most three workers' worth of answers wait behind a slow one, which bounds
+  what a crash could lose.
 - **A value no sentence states is no longer stored as a campus's own.** A claim the
   quote check could not confirm — no sentence offered, one not in the article, or one
   that does not state the value — was a last resort: when nothing quoted stated the

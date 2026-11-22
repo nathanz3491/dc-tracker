@@ -191,24 +191,55 @@ def test_the_ceiling_line_is_printed_and_the_command_exits_zero(capsys):
     assert "spend ceiling reached" in out and "2" in out
 
 
-def test_a_wave_never_holds_two_items_of_one_project():
+def test_an_item_never_starts_beside_another_on_one_of_its_projects():
     pairs = [(1, 2), (2, 3), (4, 5), (1, 6), (7, 8)]
-    wave, rest = judged.waves(pairs, lambda pair: pair, cap=6)
-    assert wave == [(1, 2), (4, 5), (7, 8)]
-    assert rest == [(2, 3), (1, 6)]
-    seen = [p for pair in wave for p in pair]
-    assert len(seen) == len(set(seen))
+    busy = {1, 2}  # (1, 2) is out
+    at = judged.startable(pairs[1:], lambda pair: pair, busy)
+    assert pairs[1:][at] == (4, 5), "(2, 3) waits for (1, 2); (4, 5) is free"
+    assert judged.startable([(1, 6), (2, 9)], lambda pair: pair, busy) is None
 
 
-def test_a_deferred_item_blocks_its_projects_so_order_per_project_is_kept():
+def test_a_waiting_item_blocks_its_projects_so_order_per_project_is_kept():
     """(2, 3) waits for (1, 2); (3, 9) must then wait for (2, 3), though 3 is free."""
-    wave, rest = judged.waves([(1, 2), (2, 3), (3, 9)], lambda pair: pair, cap=6)
-    assert wave == [(1, 2)] and rest == [(2, 3), (3, 9)]
+    assert judged.startable([(2, 3), (3, 9)], lambda pair: pair, {1, 2}) is None
+    assert judged.startable([(2, 3), (3, 9), (5, 6)], lambda pair: pair, {1, 2}) == 2
 
 
-def test_a_wave_is_no_larger_than_the_workers():
-    wave, rest = judged.waves([1, 2, 3, 4, 5], lambda item: [item], cap=2)
-    assert wave == [1, 2] and rest == [3, 4, 5]
+def test_with_nothing_out_the_first_item_starts():
+    assert judged.startable([(1, 2), (2, 3)], lambda pair: pair, set()) == 0
+    assert judged.startable([], lambda pair: pair, set()) is None
+
+
+def test_a_free_worker_takes_the_next_item_without_waiting_for_the_slow_one(session):
+    """The wave design asked six, then waited for the slowest before preparing the
+    next six. Now a worker that finishes takes the next item at once: with two workers,
+    one slow item and four quick ones, the quick ones are all asked while the slow one
+    is still out."""
+    ids = [p.id for p in _projects(session, 5)]
+    quick_all_asked = threading.Event()
+    asked_while_slow: list[int] = []
+    slow_saw_them: list[bool] = []
+    lock = threading.Lock()
+
+    def ask(prepared, _db):
+        if prepared == ids[0]:
+            # Under waves this times out: nothing after the first wave starts until
+            # this answer is in.
+            slow_saw_them.append(quick_all_asked.wait(5))
+            return "ok"
+        with lock:
+            asked_while_slow.append(prepared)
+            if len(asked_while_slow) == 4:
+                quick_all_asked.set()
+        return "ok"
+
+    def apply(item, prepared, answer):
+        return judged.Done(result=item)
+
+    got = _pass(session, ids, ask=ask, apply=apply, workers=2)
+    assert slow_saw_them == [True], "every quick item went while the slow one was out"
+    assert sorted(asked_while_slow) == ids[1:]
+    assert got.results == ids, "and they are still applied in input order"
 
 
 def test_answers_are_applied_in_input_order_whatever_order_they_arrive(session, monkeypatch):
@@ -337,18 +368,49 @@ def test_a_dry_run_commits_and_remembers_nothing(engine, session):
 
 
 def test_room_bounds_how_many_start(session):
-    """A token budget: room for one more row, then none."""
+    """A token budget: room for one more row, then none once that row is paid for."""
     ids = [p.id for p in _projects(session, 3)]
-    left = iter([1, 0])
-    got = _pass(session, ids, workers=3, room=lambda: next(left))
+    applied: list[int] = []
+
+    def apply(item, prepared, answer):
+        applied.append(item)
+        return judged.Done(result=(item, answer))
+
+    got = _pass(session, ids, workers=3, apply=apply, room=lambda: 1 - len(applied))
     assert [r[0] for r in got.results] == ids[:1]
     assert got.stopped and got.unreached == ids[1:]
 
 
-def test_waves_are_formed_after_the_last_wave_was_applied(session):
+def test_room_counts_what_is_asked_and_not_yet_applied(session):
+    """Room for two: two start at once, and nothing more until they are applied."""
+    ids = [p.id for p in _projects(session, 5)]
+    applied: list[int] = []
+    out_at_once: list[int] = []
+    out = [0]
+    lock = threading.Lock()
+
+    def ask(prepared, _db):
+        with lock:
+            out[0] += 1
+            out_at_once.append(out[0])
+        time.sleep(0.05)
+        with lock:
+            out[0] -= 1
+        return "ok"
+
+    def apply(item, prepared, answer):
+        applied.append(item)
+        return judged.Done(result=(item, answer))
+
+    got = _pass(session, ids, workers=4, ask=ask, apply=apply, room=lambda: 2 - len(applied))
+    assert [r[0] for r in got.results] == ids[:2]
+    assert max(out_at_once) <= 2, "never more out than the budget has room for"
+
+
+def test_rows_are_asked_when_an_item_starts_after_the_merges_before_it(session):
     """A duplicate pair whose row was merged away is asked about the row that holds
-    it now — so which rows a pair touches is asked when its wave is formed, after
-    the merges before it, not once up front."""
+    it now — so which rows a pair touches is asked when it starts, after the merges
+    before it on those rows, not once up front."""
     a, b, c, d = (p.id for p in _projects(session, 4))
     folded: dict[int, int] = {}
     touched: list[tuple[tuple[int, int], list[int]]] = []

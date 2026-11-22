@@ -213,15 +213,15 @@ round re-paid for nearly the whole set at ~45,000-260,000 tokens a pair.
 pass uses). A real run commits after every pair. It used to be one transaction for the
 whole run, which held SQLite's write lock across every agent call — minutes at a time —
 while a console sign-in waited five seconds and failed. A pair whose write raises is
-rolled back and the run goes on, and the night's money is asked about before each wave
-of pairs (`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`): once spent, nothing new
+rolled back and the run goes on, and the night's money is asked about before each pair
+starts (`spend.ceiling_reached`, `TRACKER_SPEND_CEILING_CNY`): once spent, nothing new
 starts, everything done is kept, and the command prints `spend ceiling reached`.
 
 **The agent runs overlap** — up to `TRACKER_LLM_CONCURRENCY` at once, one for a local
-model — in waves that never hold two pairs naming one row. A wave is formed only after
-the previous one's merges are committed, and each pair's rows are read through the
-run's `folded` map, so a pair whose row an earlier pair merged away waits for that merge
-and is then asked about the row that holds it. The judge's evidence tools only read, so
+model — each worker taking the next pair the moment it is free, never a pair naming a
+row that a pair still out names (`judged.startable`). A pair's rows are read through the
+run's `folded` map when it starts, so a pair whose row an earlier pair merged away waits
+for that merge to be committed and is then asked about the row that holds it. The judge's evidence tools only read, so
 each concurrent run reads through a session of its own (`triage.pair_investigate`);
 the rails, the park and the merge stay on the main thread (`triage.pair_conclude`). A
 `--dry-run` asks one pair at a time, because a session of its own could not see the dry
@@ -478,7 +478,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Scoring a change to any of it | `scripts/eval_pairs.py`; `docs/duplicate-shapes.md` |
 | The question all three judges are asked | `tracker/triage.py` — `CONTRADICTIONS`, `PAIR_SYSTEM`, `PAIR_SYSTEM_BASE`; `tracker/prompts/duplicates-resolve-v3.txt` |
 | The agent path | `tracker/triage.py` — `settle_pairs`, `resolve_pairs`, `pair_triage`, `pair_prepare`, `pair_investigate`, `pair_conclude`, `pair_verdict_tools`, `_checked`, `pair_subject`, `pair_evidence` |
-| One loop for every paid pass: per-pair commit, failures, waves, the money ceiling | `tracker/judged.py` — `run`, `waves`, `Done`; `tracker/spend.py` — `ceiling_reached`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling` |
+| One loop for every paid pass: per-pair commit, failures, overlap, the money ceiling | `tracker/judged.py` — `run`, `startable`, `Done`; `tracker/spend.py` — `ceiling_reached`; `tracker/cli/_shared.py` — `_workers`, `_print_held`, `_print_ceiling` |
 | What one agent run may spend | `tracker/agent.py` — `run`, `TOOL_LIMITS`, `WRAP_UP_TURNS`; `tracker/llm.py` — `without_thinking` |
 | Not asking the same pair twice | `tracker/declines.py` — `split`, `pick`, `record`, `holds`, `citations`, `COOLDOWN_DAYS`, `TONIGHT_HOURS`, `ERROR`; migration `0025_model_decline` |
 | The merge itself | `tracker/merge.py` — `merge_projects`, `_move_events`, `_move_risks`, `_move_nesting`, `_move_tenure`; `tracker/upsert.py` — `fold_source`; `tracker/watchlist.py` — `repoint`; `tracker/answer_key.py` — `repoint` |
