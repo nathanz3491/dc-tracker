@@ -3862,7 +3862,10 @@ function TrancheRow({ sec, admin, projectId, others, onRuled }) {
             <i class="dc-tr-bar"><b style=${{ width: `${Math.min(100, (live / cap) * 100)}%`,
               background: `var(${state.tone})`, opacity: sec.capacity_confirmed ? 1 : 0.4 }} /></i>`}
     </span>
-    <span class="dc-tr-cust">${sec.customer || html`<span class="dc-quiet">—</span>`}</span>
+    <span class="dc-tr-cust">${sec.customer
+      ? html`${sec.customer}${sec.customer_confirmed === false && html`<span class="dc-quiet"
+          title="No sentence that names this tranche names its buyer"> 待确认</span>`}`
+      : html`<span class="dc-quiet">—</span>`}</span>
     <span class="dc-tr-when dc-num" style=${sec.overdue ? { color: "var(--warning)" } : undefined}>
       ${when ? `${sec.energized_on ? "since " : sec.overdue ? "was due " : ""}${fmtMonth(when)}` : "—"}</span>`;
   return notes.length || admin

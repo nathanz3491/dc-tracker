@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Final
 
-from tracker.blocks import _segments, mw_is_confirmed
+from tracker.blocks import _segments, customer_is_confirmed, mw_is_confirmed
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +121,8 @@ class Member:
     energized_on: Any = None
     expected_online: Any = None
     customer: str | None = None
+    #: A sentence naming this block names its buyer too (`blocks.customer_is_confirmed`).
+    customer_confirmed: bool = True
     #: `blocks.block_key` marked this label as naming a kind of thing without
     #: saying which campus — "Phase 1" with no parent.
     generic: bool = False
@@ -139,6 +141,7 @@ class Member:
             energized_on=getattr(block, "energized_on", None),
             expected_online=getattr(block, "expected_online", None),
             customer=getattr(block, "customer", None),
+            customer_confirmed=customer_is_confirmed(block),
             generic=bool(getattr(block, "generic", False)),
         )
 
@@ -443,6 +446,8 @@ class Section:
     capacity_conflict: tuple[float, ...] = ()
     verdict: str = "single"
     customer: str | None = None
+    #: False when no reading of this section quotes its buyer: shown as 待确认.
+    customer_confirmed: bool = True
     energized_on: Any = None
     expected_online: Any = None
     #: The tranche keys this section stands for, so a ruling on any of them
@@ -520,6 +525,8 @@ def sections(project_id: int, blocks: list[Any]) -> list[Section]:
             capacity, capacity_confirmed = None, False
 
         status = furthest_status([m.status for m in crowd])
+        named = [m for m in crowd if m.customer]
+        buyer = next((m for m in named if m.customer_confirmed), named[0] if named else None)
         ordinal = group.ordinal if group else None
         klass = group.klass if group else ""
         if not group:
@@ -546,8 +553,10 @@ def sections(project_id: int, blocks: list[Any]) -> list[Section]:
                 verdict=group.verdict if group else "single",
                 # One value each from whichever member states one. A section named
                 # four ways is one building, so its tenant and its dates are the
-                # building's, not each reading's.
-                customer=next((m.customer for m in crowd if m.customer), None),
+                # building's, not each reading's. A buyer some reading quotes is
+                # preferred to one no sentence names, and the second is marked.
+                customer=buyer.customer if buyer else None,
+                customer_confirmed=buyer.customer_confirmed if buyer else True,
                 energized_on=next((m.energized_on for m in crowd if m.energized_on), None),
                 expected_online=next((m.expected_online for m in crowd if m.expected_online), None),
                 block_keys=tuple(sorted({m.block_key for m in crowd})),

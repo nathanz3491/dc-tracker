@@ -442,6 +442,13 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A tranche's buyer that no sentence names is marked 待确认.** On the project page
+  and in `tracker show`, a tranche's customer read as plain fact whether or not the
+  sentence naming the tranche named its buyer — and 183 of the 331 tranches naming a
+  buyer on 2026-11-22 had no such sentence. It is now followed by 待确认, and where
+  two readings of one tranche name buyers, the quoted one is shown. Display only:
+  what the campus's customer and Capex credit count is unchanged (the export's
+  sections gain `customer_confirmed`, schema `tracker/13`).
 - **Running out of search credit stops the searching, and says so.** Serper answers
   an empty account with 402, or with 400 or 403 and "Not enough credits" — its docs
   and its recorded answers disagree. A 403 was read as a wrong key, and a 400 or 402

@@ -225,7 +225,10 @@ def _print_blocks(project: Project) -> None:
         if link is not None:
             shown = {"part_of": "part of", "same_as": "same as"}.get(link.relation, link.relation)
             label += f" [dim]({shown}{' ' + escape(link.target) if link.target else ''})[/dim]"
-        table.add_row(label, mw, status, escape(block.customer or NA), str(when or NA))
+        buyer = escape(block.customer or NA)
+        if block.customer and not blocks_mod.customer_is_confirmed(block):
+            buyer = f"[red]{buyer} 待确认[/red]"
+        table.add_row(label, mw, status, buyer, str(when or NA))
 
     # The residual lines, then the total. Without these the tranches visibly fail to
     # add up to `MW planned` — measured on 70 of 118 itemised projects — and a reader

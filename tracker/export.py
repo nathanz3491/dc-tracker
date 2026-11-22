@@ -109,7 +109,9 @@ CSV_COLUMNS: tuple[str, ...] = (
 #: company registry (migration 0043), the same as `parties[].key`, and
 #: `parties[].ended_on` / `parties[].ended_reason` for a role that has ended — a
 #: former tenant (migration 0044). Additive.
-JSON_SCHEMA_TAG = "tracker/12"
+#: 13 adds `sections[].customer_confirmed` — false when no reading of the section
+#: quotes its buyer, which is then shown as 待确认. Additive.
+JSON_SCHEMA_TAG = "tracker/13"
 
 FORMATS = ("md", "csv", "json", "html")
 
@@ -838,6 +840,7 @@ def _sections_json(project: Project) -> list[dict[str, Any]]:
             "parent": s.parent,
             "generic": s.generic,
             "customer": s.customer,
+            "customer_confirmed": s.customer_confirmed,
             "energized_on": iso(s.energized_on),
             "expected_online": iso(s.expected_online),
             # Whether the section's own date has passed with nothing running, read

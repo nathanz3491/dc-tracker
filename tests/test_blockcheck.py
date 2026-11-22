@@ -261,6 +261,33 @@ def test_sections_collapse_the_duplicate_namings():
     assert secs[0].aliases == ("Building 2 (ELN-02)",)
 
 
+def test_a_buyer_no_sentence_names_is_marked_and_a_quoted_one_preferred():
+    """183 of 331 tranche buyers had no sentence; the page showed them as plain fact."""
+    from tracker.blockcheck import sections
+
+    (unquoted,) = sections(
+        1,
+        [
+            Blk(
+                id=1,
+                label="Building 1",
+                mw=65.0,
+                customer="CoreWeave",
+                unconfirmed_fields="customer",
+            )
+        ],
+    )
+    assert (unquoted.customer, unquoted.customer_confirmed) == ("CoreWeave", False)
+    (two_readings,) = sections(
+        1,
+        [
+            Blk(id=1, label="Building 1", customer="Microsoft", unconfirmed_fields="customer"),
+            Blk(id=2, label="Building 1 (B1)", customer="Oracle"),
+        ],
+    )
+    assert (two_readings.customer, two_readings.customer_confirmed) == ("Oracle", True)
+
+
 def test_a_section_says_what_it_delivers_of_what_it_holds():
     """The question the flat list could not answer: 0 of 150, not just 150."""
     from tracker.blockcheck import sections

@@ -772,10 +772,24 @@ def mw_is_confirmed(block: Any) -> bool:
     discipline as `placeable`, applied to the other way a block's megawatts can be
     untrustworthy: not "we cannot tell whose it is" but "nothing said it".
     """
+    return _confirmed(block, "mw")
+
+
+def customer_is_confirmed(block: Any) -> bool:
+    """Whether a quote that names this block also names its buyer.
+
+    The buyer is gated like the capacity — a quote naming the block must state it
+    (`crawl._blocks`) — and kept as 待确认 when none does: 183 of the 331 tranches
+    naming a buyer on 2026-11-22. Shown so, wherever a tranche's buyer is shown.
+    """
+    return _confirmed(block, "customer")
+
+
+def _confirmed(block: Any, name: str) -> bool:
     raw = getattr(block, "unconfirmed_fields", None)
     if not raw:
         return True
-    return "mw" not in {part.strip() for part in raw.split(",")}
+    return name not in {part.strip() for part in raw.split(",")}
 
 
 # --- how the tranches nest -----------------------------------------------------
@@ -2169,6 +2183,7 @@ __all__ = [
     "blocks_by_key",
     "campus_like",
     "closes_cycle",
+    "customer_is_confirmed",
     "furthest_status",
     "is_generation",
     "is_type_word_only",
