@@ -62,6 +62,12 @@ initial build of the v1 PRD.
   235,000 of the 516,000 in the file (85 MB). A refused or failed request (403, 429,
   5xx) is still logged; a successful one is not, since nothing in it is news. `-v`
   shows them all again.
+- **A log written to a file has one line per message.** The terminal formatting laid
+  every message out to 200 columns and wrapped the rest onto lines of their own, so
+  in the night's log a failed page's URL and its error landed on separate lines that
+  grep found apart ("left alone for 30 minutes)" alone on a line). Written to a file
+  or a pipe, a message is now one line with its level in front, as before; at a
+  terminal nothing changes.
 - **A value no sentence states is no longer stored as a campus's own.** A claim the
   quote check could not confirm — no sentence offered, one not in the article, or one
   that does not state the value — was a last resort: when nothing quoted stated the

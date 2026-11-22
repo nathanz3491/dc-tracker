@@ -42,3 +42,31 @@ def test_verbose_takes_the_filter_off_again():
         assert not any(isinstance(f, _shared._FailedRequestsOnly) for f in logger.filters)
     finally:
         _shared._quiet_http_successes(False)
+
+
+def test_a_log_file_gets_one_line_per_message_whatever_its_length():
+    """Rich wrapped a long warning onto lines of its own at 200 columns, so grep found
+    the URL and its error apart."""
+    handler = _shared._log_handler(verbose=False)
+    assert not isinstance(handler, _shared.RichHandler), "stderr is not a terminal here"
+    url = "https://example.com/" + "a" * 300
+    record = logging.LogRecord(
+        "x", logging.WARNING, __file__, 1, "fetch failed for %s (%s)", (url, "HTTP 403"), None
+    )
+    text = handler.format(record)
+    assert text == f"WARNING  fetch failed for {url} (HTTP 403)"
+    assert "\n" not in text
+
+
+def test_a_message_of_several_lines_is_indented_under_its_first():
+    """So no line inside one can start like the loop's own lines, which the status
+    reader picks out by their first characters."""
+    from tracker import loopstatus
+
+    handler = _shared._log_handler(verbose=False)
+    record = logging.LogRecord(
+        "x", logging.ERROR, __file__, 1, "browser failed\n[2026-11-23 01:00:00] round 9", (), None
+    )
+    first, second = handler.format(record).split("\n")
+    assert first == "ERROR    browser failed"
+    assert second.startswith(" " * 9) and not loopstatus.wanted(second)

@@ -417,9 +417,39 @@ def main_callback(
         # incidental warning is noise to a script that only wants the payload.
         level=logging.DEBUG if verbose else (logging.ERROR if as_json else logging.INFO),
         format="%(message)s",
-        handlers=[RichHandler(console=err, show_time=False, show_path=verbose, markup=False)],
+        handlers=[_log_handler(verbose)],
     )
     _quiet_http_successes(not verbose)
+
+
+def _log_handler(verbose: bool) -> logging.Handler:
+    """Rich's handler at a terminal; one line per message anywhere else.
+
+    Rich lays a message out to the console's width — 200 columns when stderr is not
+    a terminal — and wraps what is longer onto indented lines of its own. In a file
+    that splits every long warning, a URL and its error, across lines that grep then
+    finds apart: the night's log printed "left alone for 30 minutes)" alone on a line,
+    the site it was about on the line before. Written to a file or a pipe, a message
+    is now one line, prefixed by its level exactly as Rich prints it.
+    """
+    if sys.stderr.isatty():
+        return RichHandler(console=err, show_time=False, show_path=verbose, markup=False)
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(_OneLineFormatter("%(levelname)-8s %(message)s"))
+    return handler
+
+
+class _OneLineFormatter(logging.Formatter):
+    """`LEVEL    message`, unwrapped; a message's own later lines indented under it.
+
+    Indented, as Rich indents them, so no line inside a message — a traceback, a
+    browser's call log — can begin the way the loop's own lines do (`[`, `--- `),
+    which is what `loopstatus` reads the log by.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        first, *rest = super().format(record).splitlines() or [""]
+        return "\n".join([first, *(f"{' ' * 9}{line}" for line in rest)])
 
 
 class _FailedRequestsOnly(logging.Filter):
