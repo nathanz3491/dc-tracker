@@ -272,7 +272,7 @@ class Settings(BaseSettings):
     #: away for anyone who measures it doing better.
     deepseek_judgement_effort: Literal["low", "high", "max"] = "high"
 
-    #: How long one API call may go without the reply, seconds.
+    #: How long one API call may take in all, seconds.
     #:
     #: It was a fixed 120, and a non-streamed reply arrives only when it is finished,
     #: so any call that reasoned for longer than two minutes was cut off — and every
@@ -281,7 +281,32 @@ class Settings(BaseSettings):
     #: fields failed like that, and 24 of the 54 retried failed again, the same
     #: fields each time. Ten minutes matches `ollama_timeout_s`; a call that is
     #: genuinely stuck still ends.
+    #:
+    #: A streamed call (:data:`deepseek_stream`) is held to this as a deadline; a
+    #: non-streamed one, which says nothing until it is done, as its read timeout.
     deepseek_timeout_s: float = Field(default=600.0, gt=0)
+
+    #: Stream API replies, so a dead connection shows itself in
+    #: :data:`deepseek_idle_timeout_s` instead of :data:`deepseek_timeout_s`.
+    #:
+    #: A non-streamed reply sends nothing until it is finished, so a connection the
+    #: proxy dropped looks exactly like a long answer: the call waited the full ten
+    #: minutes, three attempts in a row. It happened 9 to 31 times a night in
+    #: November 2026, and because a pass asks in waves of six, each wait held five
+    #: finished answers idle with it — on 2026-11-20 the conditions step sat 25
+    #: minutes on one page. A streamed reply sends a token every fraction of a second
+    #: while it is alive, so silence is a reliable sign it is not. The reply is put
+    #: back together into the non-streamed shape, so nothing downstream knows.
+    #: `false` sends every call whole, as before.
+    deepseek_stream: bool = True
+
+    #: How long a streamed reply may go without sending anything, seconds.
+    #:
+    #: Measured on OpenCode Go (2026-11-22): the first chunk arrives in under two
+    #: seconds and the rest follow continuously. Three minutes leaves room for a
+    #: provider queueing the request at a busy hour, and is still a third of the
+    #: ten-minute wait it replaces.
+    deepseek_idle_timeout_s: float = Field(default=180.0, gt=0)
 
     #: What a command that spends does when it starts in DeepSeek's peak hours
     #: (09:00-12:00 and 14:00-18:00 Beijing, Monday to Friday), when every call costs

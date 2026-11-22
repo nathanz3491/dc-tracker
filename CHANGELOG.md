@@ -12,6 +12,21 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **A model call on a dead connection gives up after three minutes of silence, not
+  ten.** Model replies were sent whole, so nothing arrived until an answer was
+  finished and a connection the proxy had dropped looked exactly like a long answer:
+  the call waited the full ten minutes, up to three times. That happened 9 to 31
+  times a night in the week to 2026-11-22, and because the night asks its questions
+  in waves of six, each wait held the five finished answers beside it too — on 11-20
+  the conditions step sat 25 minutes on one page and a rows step took 88 minutes.
+  Replies now stream: a live one sends something every fraction of a second, so three
+  minutes without a byte ends the attempt and it is asked again, while a long answer
+  still has the whole ten minutes. The chunks are put back together into the shape a
+  whole reply has — reasoning, tool calls and token counts included, checked against
+  OpenCode Go — so nothing that reads a reply changed, and the spend ledger records
+  the same numbers. A reply that ever came back without its token counts is priced
+  on an over-estimate rather than as free, and the rest of that run is sent whole.
+  `TRACKER_DEEPSEEK_STREAM=false` puts every call back as it was.
 - **A value no sentence states is no longer stored as a campus's own.** A claim the
   quote check could not confirm — no sentence offered, one not in the article, or one
   that does not state the value — was a last resort: when nothing quoted stated the

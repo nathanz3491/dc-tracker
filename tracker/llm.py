@@ -32,6 +32,14 @@ of what this file used to do:
   still strip the tags, so neither shape can leak a model's deliberation into a
   stored value or onto the page.
 
+**Every API call streams, and is read as though it had not.** A reply sent whole
+says nothing until it is finished, so a connection the proxy dropped could not be
+told from a long answer for ten minutes. Streamed, a live reply sends something every
+fraction of a second, and three minutes of silence (`deepseek_idle_timeout_s`) ends
+the attempt; :func:`assemble_stream` puts the chunks back into the whole-reply shape,
+token counts included, so no caller reads anything new. `deepseek_stream = false`
+turns it off.
+
 One platform, one host (``https://api.deepseek.com``), OpenAI-compatible.
 """
 
@@ -94,6 +102,11 @@ INSUFFICIENT_BALANCE = 402
 #: Per process, not stored anywhere: each `tracker` command the nightly loop runs
 #: asks DeepSeek once, so the first command after a top-up is back on it.
 _ON_RESERVE = threading.Event()
+
+#: Set when a streamed reply came back without its token counts, so the ledger
+#: could only estimate what it cost; every later call in the process is sent whole,
+#: which always carries them. Per process, like :data:`_ON_RESERVE`.
+_STREAM_OFF = threading.Event()
 
 #: Why a model call refused with no OpenCode Go key, under `reserve_when = always`.
 GO_ONLY_HELP = (
@@ -803,6 +816,128 @@ _THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 
 
+class StreamCut(httpx.TransportError):
+    """A streamed reply that ended, or broke off, before its last chunk.
+
+    A transport failure rather than an `LLMError`, so `_post` retries it like the
+    dropped connection it almost always is. Not in `_BROKEN_CONNECTION`: one reply
+    cut short says nothing about the other connections in the pool.
+    """
+
+
+def assemble_stream(
+    lines: Iterator[str], *, deadline: float | None = None, clock: Any = None
+) -> dict[str, Any]:
+    """An OpenAI-style stream, put back together in the shape a whole reply has.
+
+    `{"model", "choices": [{"message": {...}, "finish_reason"}], "usage"}` — the
+    content and the reasoning joined, each tool call's fragments joined by its index
+    — so `complete`, `converse` and the spend ledger read a streamed reply exactly as
+    they read a whole one. The token counts arrive in the last chunk when the request
+    asked for them (`stream_options.include_usage`); a reply without them comes back
+    with `usage` empty and the caller decides.
+
+    Raises :class:`StreamCut` for a stream that stops before saying it is finished,
+    or that carries an error part-way, and `httpx.ReadTimeout` past `deadline`.
+    """
+    content: list[str] = []
+    reasoning: list[str] = []
+    calls: dict[int, dict[str, Any]] = {}
+    finish: str | None = None
+    usage: dict[str, Any] = {}
+    model: str | None = None
+    ident: str | None = None
+    done = False
+    now = clock or time.monotonic
+    for raw in lines:
+        if deadline is not None and now() > deadline:
+            raise httpx.ReadTimeout("the reply ran past its deadline")
+        line = raw.strip()
+        # Blank lines separate events; a line starting ":" is a keep-alive comment.
+        if not line.startswith("data:"):
+            continue
+        body = line[len("data:") :].strip()
+        if body == "[DONE]":
+            done = True
+            break
+        try:
+            chunk = json.loads(body)
+        except ValueError as exc:
+            raise StreamCut(f"unreadable chunk in the reply: {body[:120]!r}") from exc
+        if not isinstance(chunk, dict):
+            continue
+        if chunk.get("error"):
+            raise StreamCut(f"the provider broke off the reply: {str(chunk['error'])[:300]}")
+        model = chunk.get("model") or model
+        ident = chunk.get("id") or ident
+        if isinstance(chunk.get("usage"), dict):
+            usage = chunk["usage"]
+        for choice in chunk.get("choices") or ():
+            if not isinstance(choice, dict) or choice.get("index", 0) != 0:
+                continue
+            delta = choice.get("delta") or {}
+            if delta.get("content"):
+                content.append(delta["content"])
+            if delta.get("reasoning_content"):
+                reasoning.append(delta["reasoning_content"])
+            for fragment in delta.get("tool_calls") or ():
+                index = fragment.get("index", len(calls))
+                call = calls.setdefault(
+                    index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                )
+                if fragment.get("id"):
+                    call["id"] = fragment["id"]
+                if fragment.get("type"):
+                    call["type"] = fragment["type"]
+                function = fragment.get("function") or {}
+                if function.get("name"):
+                    call["function"]["name"] += function["name"]
+                if function.get("arguments"):
+                    call["function"]["arguments"] += function["arguments"]
+            if choice.get("finish_reason"):
+                finish = choice["finish_reason"]
+    if not done and finish is None:
+        raise StreamCut("the reply stopped before it was finished")
+    message: dict[str, Any] = {"role": "assistant", "content": "".join(content)}
+    if reasoning:
+        message["reasoning_content"] = "".join(reasoning)
+    if calls:
+        message["tool_calls"] = [calls[i] for i in sorted(calls)]
+    return {
+        "id": ident,
+        "model": model,
+        "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+        "usage": usage,
+    }
+
+
+def estimated_usage(body: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """Token counts guessed from the text, for a reply that did not report them.
+
+    Three characters a token, which overstates English (about four) and leaves room
+    for the Chinese in a prompt; the prompt is counted as uncached. Overstating is
+    the safe side: these numbers are what the night's money ceiling is measured in.
+    """
+    sent = sum(
+        len(m.get("content") or "") if isinstance(m.get("content"), str) else 0
+        for m in body.get("messages") or ()
+        if isinstance(m, dict)
+    )
+    message = ((data.get("choices") or [{}])[0] or {}).get("message") or {}
+    said = len(message.get("content") or "") + len(message.get("reasoning_content") or "")
+    said += sum(
+        len((call.get("function") or {}).get("arguments") or "")
+        for call in message.get("tool_calls") or ()
+    )
+    prompt = sent // 3 + 1
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": said // 3 + 1,
+        "prompt_cache_miss_tokens": prompt,
+        "estimated": True,
+    }
+
+
 def _sse_delta(line: str) -> str:
     """The content fragment in one `data:` line of an OpenAI-style stream."""
     if not line.startswith("data:"):
@@ -1393,6 +1528,52 @@ class DeepSeekExtractor:
             return
         yield from self.stream(system=system, user=user, max_tokens=max_tokens)
 
+    def _streams(self) -> bool:
+        """Whether this call streams its reply (`Settings.deepseek_stream`)."""
+        return self.settings.deepseek_stream and not _STREAM_OFF.is_set()
+
+    def _send(
+        self,
+        client: httpx.Client,
+        streams: bool,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+    ) -> tuple[httpx.Response, dict[str, Any] | None]:
+        """One request: `(response, reply)`, the reply None when it is to be read off
+        the response — an error status, or a provider that answered whole.
+
+        Streamed, the client's read timeout is the silence allowed between chunks and
+        `deepseek_timeout_s` the deadline for the whole reply; sent whole, the read
+        timeout is the whole reply, because nothing arrives until it is done.
+        """
+        if not streams:
+            return client.post(url, json=body, headers=headers), None
+        streamed = {**body, "stream": True, "stream_options": {"include_usage": True}}
+        deadline = time.monotonic() + self.settings.deepseek_timeout_s
+        try:
+            with client.stream("POST", url, json=streamed, headers=headers) as response:
+                if response.status_code >= 400 or "text/event-stream" not in (
+                    response.headers.get("content-type", "")
+                ):
+                    response.read()
+                    return response, None
+                data = assemble_stream(response.iter_lines(), deadline=deadline)
+        except httpx.ReadTimeout as exc:
+            # httpx's own message is empty or generic; say which wait ran out.
+            idle = self.settings.deepseek_idle_timeout_s
+            why = str(exc) if "deadline" in str(exc) else f"nothing sent for {idle:.0f}s"
+            raise httpx.ReadTimeout(why) from exc
+        if not data.get("usage"):
+            data["usage"] = estimated_usage(body, data)
+            if not _STREAM_OFF.is_set():
+                log.warning(
+                    "a streamed reply came back without its token counts; the ledger "
+                    "estimates this one, and the rest of this run is sent whole"
+                )
+                _STREAM_OFF.set()
+        return response, data
+
     def _post(self, payload: dict[str, Any], *, attempts: int = 3) -> dict[str, Any]:
         _OUTAGE.check()
         last: Exception | None = None
@@ -1400,13 +1581,14 @@ class DeepSeekExtractor:
             # Inside the loop: another worker in this process may have moved it
             # onto the reserve while this one was waiting out a backoff.
             url, headers, body = self._route(payload)
-            client = api_client(self.settings.deepseek_timeout_s)
+            streams = self._streams()
+            client = api_client(
+                self.settings.deepseek_idle_timeout_s
+                if streams
+                else self.settings.deepseek_timeout_s
+            )
             try:
-                response = client.post(
-                    url,
-                    json=body,
-                    headers=headers,
-                )
+                response, streamed = self._send(client, streams, url, headers, body)
             except httpx.RequestError as exc:
                 last = exc
                 if isinstance(exc, _BROKEN_CONNECTION):
@@ -1440,7 +1622,7 @@ class DeepSeekExtractor:
                 if response.status_code >= 400:
                     raise self._refused(response)
                 _OUTAGE.answered()
-                data = response.json()
+                data = streamed if streamed is not None else response.json()
                 record_spend(self.settings, data, body["model"])
                 return data
             if attempt < attempts:
