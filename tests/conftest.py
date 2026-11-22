@@ -240,6 +240,8 @@ def _fast_and_keyless_settings(monkeypatch, tmp_path_factory):
 
     llm._ON_RESERVE.clear()
     llm._ROUTE_CHOSEN.clear()
+    # And streaming on: a reply without token counts turns it off for the process.
+    llm._STREAM_OFF.clear()
     # And no outage on record: it is per process too, and six failing-call tests
     # anywhere in the suite would otherwise make every later call fail fast.
     llm._OUTAGE.answered()

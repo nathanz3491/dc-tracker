@@ -28,6 +28,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1164,6 +1165,33 @@ class DeepSeekFetcher:
     #: the first page it fetched took the last of the balance.
     _EMPTY = threading.Event()
 
+    #: How long an empty balance is believed by every process, in seconds. The night
+    #: runs each step as a command of its own, so the per-process memory above made
+    #: every step ask once more and be refused once more: 4 to 9 refusals and as many
+    #: warnings a night through November 2026. Twelve hours spans a night with one
+    #: ask, and a balance topped up during the day is asked about again by the next.
+    EMPTY_FOR_S: Final = 12 * 3600.0
+
+    @staticmethod
+    def _empty_mark() -> Path:
+        from tracker.config import cache_dir
+
+        return cache_dir("deepseek-fetch") / "_empty-balance"
+
+    @classmethod
+    def _known_empty(cls) -> bool:
+        """Whether this process, or any within `EMPTY_FOR_S`, was told the balance is empty."""
+        if cls._EMPTY.is_set():
+            return True
+        try:
+            age = time.time() - cls._empty_mark().stat().st_mtime
+        except OSError:
+            return False
+        if age < cls.EMPTY_FOR_S:
+            cls._EMPTY.set()
+            return True
+        return False
+
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
@@ -1195,7 +1223,7 @@ class DeepSeekFetcher:
         )
 
     async def fetch(self, url: str) -> FetchResult:
-        if self._EMPTY.is_set():
+        if self._known_empty():
             return self._skip(url, "the DeepSeek account has no balance")
         if self.paywalled(url):
             return self._skip(url, "a subscriber's page; it would return the teaser")
@@ -1234,9 +1262,15 @@ class DeepSeekFetcher:
             )
         if response.status_code == 402 and not self._EMPTY.is_set():
             self._EMPTY.set()
+            try:
+                self._empty_mark().write_text(f"{utcnow():%Y-%m-%d %H:%M} UTC", encoding="utf-8")
+            except OSError as exc:
+                log.debug("could not record the empty balance: %s", exc)
             log.warning(
-                "DeepSeek's fetch tool refused for an empty balance; not asked again this "
-                "run. Top up the DeepSeek account to read pages every other client was refused."
+                "DeepSeek's fetch tool refused for an empty balance; not asked again for "
+                "%.0f hours. Top up the DeepSeek account to read pages every other client "
+                "was refused.",
+                self.EMPTY_FOR_S / 3600,
             )
         if response.status_code != 200 or not isinstance(data, dict):
             error = body.get("error") if isinstance(body, dict) else None

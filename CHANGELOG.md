@@ -50,6 +50,12 @@ initial build of the v1 PRD.
   production the counts fell from 17.6 to 8.2 seconds and the scan from 13.3 to 8.3,
   with every card, count and census identical; the night takes them about thirty
   times. Anything that writes still works its answers out afresh.
+- **An empty DeepSeek balance is asked about once a night, not once a step.** The
+  last fetch rung remembered the refusal only inside one command, and the night runs
+  each step as a command of its own, so every step asked again, was refused again and
+  printed the warning again — 4 to 9 times a night. The refusal is now remembered for
+  twelve hours by every command, so a night asks once and the next night asks again in
+  case the account was topped up.
 - **A value no sentence states is no longer stored as a campus's own.** A claim the
   quote check could not confirm — no sentence offered, one not in the article, or one
   that does not state the value — was a last resort: when nothing quoted stated the

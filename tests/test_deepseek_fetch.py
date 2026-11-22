@@ -121,6 +121,34 @@ def test_an_empty_balance_stands_the_rung_down_for_the_run(tmp_path):
         fetch.DeepSeekFetcher._EMPTY.clear()
 
 
+def test_an_empty_balance_is_believed_by_the_nights_other_commands(tmp_path):
+    """Each step of the night is a process of its own; per-process memory had every
+    one ask again and be refused again, 4 to 9 times a night."""
+    import os
+    import time
+
+    fetch.DeepSeekFetcher._EMPTY.clear()
+    try:
+        with respx.mock() as router:
+            route = router.post(ENDPOINT).respond(
+                402, json={"error": {"message": "Insufficient Balance"}}
+            )
+            asyncio.run(DeepSeekFetcher(_settings(tmp_path)).fetch("https://x.test/a"))
+            fetch.DeepSeekFetcher._EMPTY.clear()  # the next command starts afresh
+            later = asyncio.run(DeepSeekFetcher(_settings(tmp_path)).fetch("https://x.test/b"))
+            assert route.call_count == 1 and "no balance" in later.error
+
+            # Twelve hours on — the next night — it is asked again, in case of a top-up.
+            mark = DeepSeekFetcher._empty_mark()
+            old = time.time() - DeepSeekFetcher.EMPTY_FOR_S - 60
+            os.utime(mark, (old, old))
+            fetch.DeepSeekFetcher._EMPTY.clear()
+            asyncio.run(DeepSeekFetcher(_settings(tmp_path)).fetch("https://x.test/c"))
+            assert route.call_count == 2
+    finally:
+        fetch.DeepSeekFetcher._EMPTY.clear()
+
+
 def test_a_page_it_answered_for_is_never_sent_again(tmp_path):
     """Of 3,385 escalations in the 14 nights to 11-04, 522 were a page already sent:
     a page it cannot read stays failed in the queue and is retried night after night."""
