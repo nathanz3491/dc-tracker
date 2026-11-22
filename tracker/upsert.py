@@ -542,7 +542,22 @@ def _prefer_publication_date(settings: Any = None) -> bool:
 
 
 def claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str, list[_Claim]]:
-    """field -> every claim about it, strongest first."""
+    """field -> every claim about it, strongest first.
+
+    Worked out once per list of citations inside a read-only sweep (`tracker.sweep`);
+    each caller gets its own copy of the dict and its lists.
+    """
+    from tracker import sweep
+
+    kept = sweep.remembered(
+        "claims",
+        (settings, *sources),
+        lambda: _claims_by_field(sources, settings=settings),
+    )
+    return {name: list(claims) for name, claims in kept.items()}
+
+
+def _claims_by_field(sources: list[Source], *, settings: Any = None) -> dict[str, list[_Claim]]:
     out: dict[str, list[_Claim]] = {}
     #: Values whose own sentence was read as another kind of figure
     #: (`_not_this_figure`), per field, for `_fallbacks_of_refused`.

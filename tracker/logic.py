@@ -47,6 +47,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -474,7 +475,16 @@ def check_rules(project: Project) -> list[Finding]:
     Ordered roughly by how much a reader should care. Each rule names both sides,
     because "this project has a problem" is not actionable and "phase says
     operational, construction shows nothing" is.
+
+    Worked out once per row inside a read-only sweep (`tracker.sweep`): the nightly
+    counts and the row's tier card both ask.
     """
+    from tracker import sweep
+
+    return list(sweep.remembered("rules", (project,), lambda: _check_rules(project)))
+
+
+def _check_rules(project: Project) -> list[Finding]:
     out: list[Finding] = []
     events = list(getattr(project, "events", ()) or ())
     risks = list(getattr(project, "risks", ()) or ())
@@ -2388,6 +2398,7 @@ def review(
     only: int | None = None,
     on_examine=None,
     on_audit=None,
+    rows: Sequence[Project] | None = None,
 ) -> Report:
     """Every free check over every project, and optionally the paid ones.
 
@@ -2403,13 +2414,18 @@ def review(
         only: check a single project id.
         on_examine: called with each project before its contradiction read.
         on_audit: called with each project before its evidence audit.
+        rows: every row, already loaded with `models.preload_options` by a caller
+            that holds them — loading them again fetches each collection again.
     """
     # Every collection with the rows, one query each rather than four per row; the
     # checks read the same rows either way (`models.preload_options`).
-    query = select(Project).options(*preload_options())
-    if only is not None:
-        query = query.where(Project.id == only)
-    projects = session.scalars(query).all()
+    if rows is not None and only is None:
+        projects = list(rows)
+    else:
+        query = select(Project).options(*preload_options())
+        if only is not None:
+            query = query.where(Project.id == only)
+        projects = session.scalars(query).all()
 
     report = Report(projects=len(projects))
     for project in projects:

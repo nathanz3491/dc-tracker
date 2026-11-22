@@ -115,7 +115,7 @@ class State:
 def read_state(db: Path, today: dt.date) -> State:
     from sqlalchemy import func, select
 
-    from tracker import audit, capex, clean, logic
+    from tracker import audit, capex, clean, logic, sweep
     from tracker.db import open_db, session_scope
     from tracker.ingest.enrich import select_pipeline
     from tracker.models import IngestUrl, Project, preload_options
@@ -123,13 +123,15 @@ def read_state(db: Path, today: dt.date) -> State:
 
     engine = open_db(db)
     try:
-        with session_scope(engine, commit=False) as session:
+        # Read-only: the findings and the scan share each row's answers (`tracker.sweep`)
+        # and the rows loaded once.
+        with session_scope(engine, commit=False) as session, sweep.memo():
             held = session.scalars(select(Project).options(*preload_options())).all()
             settled: dict[int, set[str]] = {}
             by_row: Counter = Counter()
             by_code: Counter = Counter()
             answerable = 0
-            for finding in logic.review(session).findings:
+            for finding in logic.review(session, rows=held).findings:
                 if finding.project_id not in settled:
                     row = session.get(Project, finding.project_id)
                     settled[finding.project_id] = audit.settled_codes(row) if row else set()
@@ -140,10 +142,10 @@ def read_state(db: Path, today: dt.date) -> State:
                 answerable += int(logic.resolvable(finding))
             pairs = capex.suspected_duplicates(session)
             groups = len(capex.duplicate_groups([p for p in pairs if set(p.kinds) - {"name"}]))
-            sweep = clean.scan(session, suspected=pairs)
+            swept = clean.scan(session, suspected=pairs, rows=held)
             rows = [
                 facts
-                for card in sweep.cards
+                for card in swept.cards
                 if (facts := _row_facts(session, card, by_row, today)) is not None
             ]
             queued = session.scalar(
@@ -153,8 +155,8 @@ def read_state(db: Path, today: dt.date) -> State:
             del held
             return State(
                 rows=rows,
-                tiers=Counter(card.tier for card in sweep.cards),
-                failures=dict(sweep.failures),
+                tiers=Counter(card.tier for card in swept.cards),
+                failures=dict(swept.failures),
                 findings=by_code,
                 answerable=answerable,
                 groups=groups,

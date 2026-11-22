@@ -34,14 +34,16 @@ measurement rather than a wish, and it is why `tests/test_clean.py` carries a
 Hyperion-shaped fixture.
 
 Nothing here writes, and nothing here needs the write lock: the whole free sweep
-over 1,171 rows takes about 4.5 seconds, so there is no cache to keep and no
-progress to store. Where progress *is* stored is `data/runs/clean.jsonl`, because
-the one thing a column cannot be is a time series.
+over 1,467 rows takes about 9 seconds, so there is nothing to store between runs —
+inside one, each row's answers are kept for the sweep (`tracker.sweep`). Where
+progress *is* stored is `data/runs/clean.jsonl`, because the one thing a column
+cannot be is a time series.
 """
 
 from __future__ import annotations
 
 import collections
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Final
@@ -545,14 +547,22 @@ def card(session: Session, project: Project, *, shared: _Shared | None = None) -
 
 
 def scan(
-    session: Session, *, project_ids: list[int] | None = None, suspected: list | None = None
+    session: Session,
+    *,
+    project_ids: list[int] | None = None,
+    suspected: list | None = None,
+    rows: Sequence[Project] | None = None,
 ) -> Sweep:
-    """Every row's card. About 4.5 seconds over the whole database.
+    """Every row's card. About 9 seconds over the 1,467 rows of 2026-11-22.
 
     `suspected` is `capex.suspected_duplicates(session)` when the caller already has
     it — the nightly counts need the pairs themselves too, and they are the same
-    pairs whoever asks for them in one read-only session.
+    pairs whoever asks for them in one read-only session. `rows` likewise: every row
+    already loaded with `models.preload_options`, which a second load would fetch
+    again, collection by collection — nineteen queries and a second.
     """
+    from tracker import sweep as sweep_mod
+
     query = select(Project)
     if project_ids:
         query = query.where(Project.id.in_(project_ids))
@@ -561,19 +571,25 @@ def scan(
     # silent defects, inversions, tranche groups, duplicates, then the cards — used
     # to load every row afresh and lazy-load its collections again: 16,000 queries
     # for one sweep. A read-only sweep sees the same rows either way; this only
-    # stops it reading them five times.
-    projects = session.scalars(query.options(*preload_options())).all()
-    got = _shared(session, project_ids, suspected=suspected)
+    # stops it reading them five times. For the same reason each row's claim map
+    # is worked out once for the sweep rather than once per pass (`tracker.sweep`).
+    projects = (
+        list(rows)
+        if rows is not None and not project_ids
+        else session.scalars(query.options(*preload_options())).all()
+    )
+    with sweep_mod.memo():
+        got = _shared(session, project_ids, suspected=suspected)
 
-    cards: list[CleanCard] = []
-    failures: collections.Counter[str] = collections.Counter()
-    histogram: collections.Counter[int] = collections.Counter()
-    for project in projects:
-        one = card(session, project, shared=got)
-        cards.append(one)
-        histogram[one.tier] += 1
-        for bad in one.failed:
-            failures[bad.key] += 1
+        cards: list[CleanCard] = []
+        failures: collections.Counter[str] = collections.Counter()
+        histogram: collections.Counter[int] = collections.Counter()
+        for project in projects:
+            one = card(session, project, shared=got)
+            cards.append(one)
+            histogram[one.tier] += 1
+            for bad in one.failed:
+                failures[bad.key] += 1
 
     return Sweep(cards=tuple(cards), failures=dict(failures), histogram=dict(histogram))
 

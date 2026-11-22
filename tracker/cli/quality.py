@@ -2353,9 +2353,11 @@ def clean(
     makes it wrong.
     """
     from tracker import clean as clean_mod
+    from tracker import sweep
 
     engine = _read_engine()
-    with session_scope(engine, commit=False) as session:
+    # Read-only throughout, so the sweep and the census share each row's claim map.
+    with session_scope(engine, commit=False) as session, sweep.memo():
         if project_id is not None:
             project = session.get(Project, project_id)
             if project is None:

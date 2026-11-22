@@ -477,24 +477,27 @@ def night_counts(session: Session) -> NightCounts:
     inside the scan). The rows are loaded once with every collection and held until
     the last number is taken; the pairs are computed once and handed to the scan.
     """
-    from tracker import audit, capex, clean, logic
+    from tracker import audit, capex, clean, logic, sweep
 
     # Held, not just loaded: the session keeps rows weakly, so without this list
     # each sweep below would load them all again.
     held = session.scalars(select(Project).options(*preload_options())).all()
 
-    settled: dict[int, set[str]] = {}
-    findings = 0
-    for finding in logic.review(session).findings:
-        if finding.project_id not in settled:
-            row = session.get(Project, finding.project_id)
-            settled[finding.project_id] = audit.settled_codes(row) if row else set()
-        if finding.code not in settled[finding.project_id]:
-            findings += 1
+    # One claim map per row for all three numbers: the findings and the scan both
+    # read every row's claims, and nothing is written in between.
+    with sweep.memo():
+        settled: dict[int, set[str]] = {}
+        findings = 0
+        for finding in logic.review(session, rows=held).findings:
+            if finding.project_id not in settled:
+                row = session.get(Project, finding.project_id)
+                settled[finding.project_id] = audit.settled_codes(row) if row else set()
+            if finding.code not in settled[finding.project_id]:
+                findings += 1
 
-    pairs = capex.suspected_duplicates(session)
-    groups = len(capex.duplicate_groups([p for p in pairs if set(p.kinds) - {"name"}]))
-    below = sum(1 for c in clean.scan(session, suspected=pairs).cards if c.tier < 2)
+        pairs = capex.suspected_duplicates(session)
+        groups = len(capex.duplicate_groups([p for p in pairs if set(p.kinds) - {"name"}]))
+        below = sum(1 for c in clean.scan(session, suspected=pairs, rows=held).cards if c.tier < 2)
     del held
     return NightCounts(findings=findings, groups=groups, below_t2=below)
 

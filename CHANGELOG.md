@@ -41,6 +41,15 @@ initial build of the v1 PRD.
   each question rather than each wave, and one worker is still exactly the serial
   loop. At most three workers' worth of answers wait behind a slow one, which bounds
   what a crash could lose.
+- **The night measures itself in half the time.** The three numbers taken after every
+  step (findings, duplicate groups, rows below T2), the director's reading of the
+  state and `tracker clean` each worked out every row's evidence five or six times —
+  9,003 claim maps and 2,934 rule checks for 1,467 rows — and loaded every row's
+  citations, events and tranches up to three times. A read-only sweep now works each
+  row's answers out once (`tracker/sweep.py`) and loads the rows once. On a copy of
+  production the counts fell from 17.6 to 8.2 seconds and the scan from 13.3 to 8.3,
+  with every card, count and census identical; the night takes them about thirty
+  times. Anything that writes still works its answers out afresh.
 - **A value no sentence states is no longer stored as a campus's own.** A claim the
   quote check could not confirm — no sentence offered, one not in the article, or one
   that does not state the value — was a last resort: when nothing quoted stated the
