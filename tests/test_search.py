@@ -1255,3 +1255,20 @@ def test_an_hour_old_credit_refusal_is_asked_about_again():
     old = time.time() - srch.SerperProvider.CREDIT_GONE_FOR_S - 60
     os.utime(mark, (old, old))
     assert not srch.SerperProvider._credit_gone()
+
+
+def test_serper_searches_share_one_connection_pool():
+    """A fresh connection per search cost ~0.6 s of handshake each, ~900 a night."""
+    assert srch._search_client() is srch._search_client()
+
+
+@respx.mock
+def test_a_kept_connection_the_far_end_closed_is_asked_once_more():
+    route = respx.post(srch.SerperProvider.ENDPOINT).mock(
+        side_effect=[
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+            httpx.Response(200, json={"organic": [{"link": "https://a.example/x"}]}),
+        ]
+    )
+    hits = srch.SerperProvider(settings_with(serper_api_key="k")).search("q")
+    assert [h.url for h in hits] == ["https://a.example/x"] and route.call_count == 2

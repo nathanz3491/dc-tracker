@@ -2298,8 +2298,12 @@ def test_serper_news_asks_the_news_endpoint_for_a_week(monkeypatch):
     get_settings.cache_clear()
     sent = {}
 
-    def fake_post(url, **kw):
-        sent.update(url=url, body=kw["json"])
+    import json as _json
+
+    import respx
+
+    def fake_post(request):
+        sent.update(url=str(request.url), body=_json.loads(request.content))
         return httpx.Response(
             200,
             json={
@@ -2312,11 +2316,11 @@ def test_serper_news_asks_the_news_endpoint_for_a_week(monkeypatch):
                     }
                 ]
             },
-            request=httpx.Request("POST", url),
         )
 
-    monkeypatch.setattr(search.httpx, "post", fake_post)
-    [hit] = search.SerperProvider().news('"Data Center Dynamics"', page=2)
+    with respx.mock() as router:
+        router.post(search.SerperProvider.NEWS_ENDPOINT).mock(side_effect=fake_post)
+        [hit] = search.SerperProvider().news('"Data Center Dynamics"', page=2)
     assert sent["url"] == search.SerperProvider.NEWS_ENDPOINT
     assert sent["body"]["tbs"] == "qdr:w" and sent["body"]["page"] == 2
     assert (hit.date, hit.source) == ("1 day ago", "D")

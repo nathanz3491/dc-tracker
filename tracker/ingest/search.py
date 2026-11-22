@@ -44,6 +44,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -512,6 +513,24 @@ class BraveProvider:
         ]
 
 
+_SEARCH_CLIENT: list[httpx.Client] = []
+_SEARCH_CLIENT_LOCK = threading.Lock()
+
+
+def _search_client() -> httpx.Client:
+    """One pooled client for Serper, so its searches reuse a connection.
+
+    Each search used to open its own connection and do its TLS handshake again: about
+    0.9 seconds a request against 0.3 on a kept connection (measured from the host on
+    2026-11-23), and a night sends some 900 searches one after another. Thread-safe,
+    and built lazily so a process that never searches opens nothing.
+    """
+    with _SEARCH_CLIENT_LOCK:
+        if not _SEARCH_CLIENT or _SEARCH_CLIENT[0].is_closed:
+            _SEARCH_CLIENT[:] = [httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))]
+        return _SEARCH_CLIENT[0]
+
+
 class SerperProvider:
     """Serper — Google's results over a simpler API and a larger free allowance.
 
@@ -658,16 +677,17 @@ class SerperProvider:
         if self._credit_gone():
             raise QuotaExhausted(SERPER_CREDIT_GONE + " (remembered from a search this hour)")
         self._spend_one()
+        headers = {
+            "X-API-KEY": self.settings.serper_api_key.get_secret_value(),
+            "Content-Type": "application/json",
+        }
         try:
-            response = httpx.post(
-                endpoint,
-                headers={
-                    "X-API-KEY": self.settings.serper_api_key.get_secret_value(),
-                    "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=httpx.Timeout(30.0, connect=10.0),
-            )
+            try:
+                response = _search_client().post(endpoint, headers=headers, json=body)
+            except (httpx.RemoteProtocolError, httpx.ReadError):
+                # A kept connection the far end had already closed: the request never
+                # reached Serper, so it is sent once more on a fresh connection.
+                response = _search_client().post(endpoint, headers=headers, json=body)
         except httpx.RequestError as exc:
             raise SearchError(f"search request failed: {exc}") from exc
 

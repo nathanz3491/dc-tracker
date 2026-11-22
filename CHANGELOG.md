@@ -41,6 +41,12 @@ initial build of the v1 PRD.
   each question rather than each wave, and one worker is still exactly the serial
   loop. At most three workers' worth of answers wait behind a slow one, which bounds
   what a crash could lose.
+- **Web searches reuse their connection.** Each search opened a new connection to
+  Serper and did its TLS handshake again — about 0.9 seconds a request against 0.3
+  on a kept connection, measured from the host — and the night sends some 900
+  searches one after another, so about nine minutes a night went on handshakes. They
+  now share one pooled connection, and a search whose kept connection the far end had
+  already closed is sent once more on a fresh one.
 - **The night measures itself in half the time.** The three numbers taken after every
   step (findings, duplicate groups, rows below T2), the director's reading of the
   state and `tracker clean` each worked out every row's evidence five or six times —

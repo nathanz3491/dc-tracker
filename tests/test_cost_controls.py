@@ -120,15 +120,17 @@ def test_the_nights_search_cap_counts_the_ledger_and_refuses_past_it(tmp_path, m
     ledger.write_text(_line(model=spend.SEARCH_MODEL), encoding="utf-8")
     settings = Settings(_env_file=None, serper_api_key="k", spend_ledger=ledger, search_cap=3)
 
-    def post(url, **_kw):
-        return httpx.Response(200, json={"news": []}, request=httpx.Request("POST", url))
+    import respx
 
-    monkeypatch.setattr(httpx, "post", post)
-    provider = SerperProvider(settings)
-    provider.news("a")
-    provider.news("b")
-    with pytest.raises(QuotaExhausted, match="TRACKER_SEARCH_CAP"):
-        provider.news("c")
+    with respx.mock() as router:
+        router.post(SerperProvider.NEWS_ENDPOINT).mock(
+            return_value=httpx.Response(200, json={"news": []})
+        )
+        provider = SerperProvider(settings)
+        provider.news("a")
+        provider.news("b")
+        with pytest.raises(QuotaExhausted, match="TRACKER_SEARCH_CAP"):
+            provider.news("c")
     assert spend.searches(spend.read(ledger)) == 3, "one before, two now, none refused"
 
 
