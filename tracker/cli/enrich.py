@@ -543,7 +543,7 @@ def _gapfill_batch(
 
     The rows go through `gapfill.fill_rows` (`judged.run`): committed per row, a row
     that raises rolled back while the rest go on, the spend ceiling asked before
-    each wave, and the runs overlapping across rows. Rows with nothing left to fill
+    each row starts, and the runs overlapping across rows. Rows with nothing left to fill
     cost nothing at all.
 
     Three things keep the bill down, and all three work by *not asking*:

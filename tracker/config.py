@@ -292,8 +292,8 @@ class Settings(BaseSettings):
     #: A non-streamed reply sends nothing until it is finished, so a connection the
     #: proxy dropped looks exactly like a long answer: the call waited the full ten
     #: minutes, three attempts in a row. It happened 9 to 31 times a night in
-    #: November 2026, and because a pass asks in waves of six, each wait held five
-    #: finished answers idle with it — on 2026-11-20 the conditions step sat 25
+    #: November 2026, and because the passes then asked in waves of six, each wait
+    #: held five finished answers idle with it — on 2026-11-20 the conditions step sat 25
     #: minutes on one page. A streamed reply sends a token every fraction of a second
     #: while it is alive, so silence is a reliable sign it is not. The reply is put
     #: back together into the non-streamed shape, so nothing downstream knows.

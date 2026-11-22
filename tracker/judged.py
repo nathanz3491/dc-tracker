@@ -239,9 +239,9 @@ def run(
             is asked on. The fingerprint is taken again just before the item is
             prepared, after every earlier item was applied, so a decline describes
             what the model was actually shown.
-        projects: the project ids an item reads or writes. Asked when each wave is
-            formed, so a pass whose items move between rows (a merge) answers with
-            where they are now.
+        projects: the project ids an item reads or writes. Asked when the item is
+            about to start, so a pass whose items move between rows (a merge)
+            answers with where they are now.
         failed: builds the result reported for an item that raised; None reports
             nothing beyond the log line.
         limit, again, lazy: how many fresh items to ask; `--again`; whether to walk
@@ -253,8 +253,9 @@ def run(
             follows `commit`). For a caller that commits on its own terms.
         reads_db: `ask` reads the database through the session it is handed.
         stage: the spend ledger's stage label for the asks.
-        room: how many more items may start, asked before each wave; None is no
-            bound and 0 stops the pass (a token budget).
+        room: how many more items may start, asked before each one starts and
+            counted against the items asked and not yet applied; None is no bound,
+            and 0 with nothing out stops the pass (a token budget).
         on_each: called with each item's result as it is applied, for progress.
         on_start: called once the work is chosen, with this run (its `held` and
             `beyond` already counted) and the chosen items, before anything is asked.

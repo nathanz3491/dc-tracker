@@ -56,6 +56,12 @@ initial build of the v1 PRD.
   printed the warning again — 4 to 9 times a night. The refusal is now remembered for
   twelve hours by every command, so a night asks once and the next night asks again in
   case the account was topped up.
+- **The night's log keeps the web requests that failed and drops the ones that
+  worked.** Every request a command made — each page, each robots.txt, each feed —
+  was a line in the log, and those lines were 3,405 of the 9,343 of 2026-11-22 and
+  235,000 of the 516,000 in the file (85 MB). A refused or failed request (403, 429,
+  5xx) is still logged; a successful one is not, since nothing in it is news. `-v`
+  shows them all again.
 - **A value no sentence states is no longer stored as a campus's own.** A claim the
   quote check could not confirm — no sentence offered, one not in the article, or one
   that does not state the value — was a last resort: when nothing quoted stated the

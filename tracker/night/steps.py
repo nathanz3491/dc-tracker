@@ -445,7 +445,7 @@ def commands(step: Step, c: Context) -> list[Command]:
     if k == "conditions":
         # Gated at the step, like every other paid step (`gate`), and inside the
         # command too: `conditions read` asks the night's money ceiling before each
-        # wave of pages (`judged.run`) and says "spend ceiling reached" if it stops.
+        # page starts (`judged.run`) and says "spend ceiling reached" if it stops.
         return [Command(("conditions", "read", "--limit", str(n)))]
     if k == "twins":
         if o.merge:

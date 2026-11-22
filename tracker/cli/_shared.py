@@ -419,6 +419,39 @@ def main_callback(
         format="%(message)s",
         handlers=[RichHandler(console=err, show_time=False, show_path=verbose, markup=False)],
     )
+    _quiet_http_successes(not verbose)
+
+
+class _FailedRequestsOnly(logging.Filter):
+    """httpx's per-request line, kept only when the request was refused or failed.
+
+    httpx logs every request it makes at INFO, a page read and a robots.txt alike, and
+    the night's log is those lines more than anything else: 3,405 of the 9,343 lines
+    of 2026-11-22, and 235,000 of the 516,000 in the file. A 403, a 429 or a 500 says
+    something about a source; a 200 says nothing a later line does not. `-v` keeps
+    them all.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not (
+            isinstance(record.msg, str)
+            and record.msg.startswith("HTTP Request")
+            and isinstance(args, tuple)
+            and len(args) == 5
+        ):
+            return True
+        status = args[3]
+        return not isinstance(status, int) or status >= 400
+
+
+def _quiet_http_successes(quiet: bool) -> None:
+    for name in ("httpx", "httpcore"):
+        logger = logging.getLogger(name)
+        for old in [f for f in logger.filters if isinstance(f, _FailedRequestsOnly)]:
+            logger.removeFilter(old)
+        if quiet:
+            logger.addFilter(_FailedRequestsOnly())
 
 
 @contextlib.contextmanager
