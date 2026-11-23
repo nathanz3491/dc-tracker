@@ -1639,6 +1639,43 @@ class NotifySent(Base):
         return f"<NotifySent {self.signal_key} to account {self.account_id}>"
 
 
+class AccountMail(Base):
+    """One email the console sent about an account, and how it ended (0058).
+
+    Written by `account_mail.send` once the email was tried; read by the morning
+    run, which asks Resend whether the sent ones bounced and reports each failure
+    once (`notify.check_account_mail`, which stamps `reported_at`). `purpose` is
+    `Notice.purpose`: `confirm`, `registered`, `reset`, `approved`, `signup-waiting`.
+    """
+
+    __tablename__ = "account_mail"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("account.id", ondelete="CASCADE")
+    )
+    #: The address it went to, as it was then.
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, nullable=False, server_default=_NOW)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    reported_at: Mapped[dt.datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('sent', 'failed')", name="ck_account_mail_status"),
+        Index("ix_account_mail_created", "created_at"),
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<AccountMail {self.purpose} {self.status} to {self.email!r}>"
+
+
 class ConsoleSession(Base):
     """A console sign-in, kept so a restart does not sign the reader out (0054).
 

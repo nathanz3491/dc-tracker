@@ -39,6 +39,11 @@ class Notice:
     subject: str
     html_body: str
     text_body: str
+    #: What the console's account emails are about, for their record
+    #: (`AccountMail.purpose`): `confirm`, `registered`, `reset`, `approved`,
+    #: `signup-waiting`. Empty for this module's own notice, which the operator sends
+    #: at the terminal and watches go.
+    purpose: str = ""
 
 
 def settings_rows(account: dict[str, Any]) -> list[tuple[str, str]]:

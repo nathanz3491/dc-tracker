@@ -591,6 +591,12 @@ The alert gives each problem once: what happened, the mornings it hit, what it m
 and what to do, with the server's own reply last. Refusals are grouped by address and
 cause, so four mornings of the same refusal are one card with four dates.
 
+The console's own emails are in it too: confirmation links, password resets, "your
+account is ready" and "new sign-up waiting". Each is recorded once tried
+(`account_mail`), and the run checks the past week's the same way. Every one that
+failed or bounced since the last run is named once, with what it means for the
+person waiting.
+
 **The sending domain needs a DMARC record**, as well as the SPF and DKIM records
 Resend asks for when the domain is verified. Since 2026-11-05 Outlook, Hotmail and
 Live refuse mail from a domain without one, however little it sends. `v=DMARC1;

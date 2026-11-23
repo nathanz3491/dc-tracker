@@ -360,6 +360,17 @@ total, and 3 links of one kind per address per hour.
 the morning email's settings — and say so plainly when one is missing. Invites and
 signing in are unaffected.
 
+**An email that never arrived is reported the next morning.** Every email these
+pages send is retried like the morning email, and recorded once it has been tried.
+That covers confirmation links, resets, "your account is ready" (from the admin page
+or `tracker users approve`), and an administrator's "new sign-up waiting". The
+morning run asks Resend whether the sent ones bounced. Its alert to the
+administrators names each one that failed or bounced, once, with what it means for
+the person waiting: a sign-up without its link can sign up again, an approval that
+didn't arrive means telling them yourself. `tracker notify status` lists them under
+*account emails*. Before this, a failure reached only the console's log, and a
+confirmation that never arrived looked like somebody who changed their mind.
+
 **One role, and it is about accounts only.** Every account reads the same
 dataset and keeps its own watchlist. An *admin* also gets the admin page (`/admin`,
 behind the **Admin** button in the header), which does what the `users` commands

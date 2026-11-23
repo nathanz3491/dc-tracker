@@ -769,7 +769,11 @@ def users_approve(
     mailed = False
     if changed and not quiet:
         url = (get_settings().notify_console_url or "").strip() or None
-        mailed = account_mail.send(target, account_mail.approved(url, name))
+        mailed = account_mail.send(
+            target,
+            account_mail.approved(url, name),
+            record=lambda: session_scope(_watch_engine()),
+        )
     if json_mode():
         emit({"email": target, "approved": True, "changed": changed, "ai": ai, "mailed": mailed})
         return
@@ -1610,13 +1614,15 @@ def notify_status(
     The answer to "did they get Tuesday's email?", from the mailer's own record
     rather than from a log line. Times are this machine's, which is the schedule's.
     A run with no finish time died partway through; anybody it did not reach is
-    owed their updates and gets them on the next run. Reads only.
+    owed their updates and gets them on the next run. The console's account emails
+    — confirmation links, password resets, approvals — are listed after the
+    morning's. Reads only.
     """
     import datetime as dt
 
     from tracker import accounts
     from tracker import notify as notify_mod
-    from tracker.models import NotifyDelivery, NotifyRun, utcnow
+    from tracker.models import AccountMail, NotifyDelivery, NotifyRun, utcnow
 
     since = utcnow() - dt.timedelta(days=days)
 
@@ -1628,9 +1634,14 @@ def notify_status(
             select(NotifyRun).where(NotifyRun.started_at >= since).order_by(NotifyRun.id.desc())
         ).all()
         query = select(NotifyDelivery).where(NotifyDelivery.prepared_at >= since)
+        account_query = select(AccountMail).where(AccountMail.created_at >= since)
         if user:
             query = query.where(NotifyDelivery.email.ilike(accounts.normalize_email(user)))
+            account_query = account_query.where(
+                AccountMail.email.ilike(accounts.normalize_email(user))
+            )
         deliveries = session.scalars(query.order_by(NotifyDelivery.id.desc())).all()
+        account_mails = session.scalars(account_query.order_by(AccountMail.id.desc())).all()
 
         if json_mode():
             emit(
@@ -1663,11 +1674,25 @@ def notify_status(
                         }
                         for d in deliveries
                     ],
+                    "account_mail": [
+                        {
+                            "email": m.email,
+                            "purpose": m.purpose,
+                            "status": m.status,
+                            "created_at": m.created_at.isoformat(),
+                            "subject": m.subject,
+                            "message_id": m.message_id,
+                            "attempts": m.attempts,
+                            "error": m.error,
+                            "reported_at": m.reported_at.isoformat() if m.reported_at else None,
+                        }
+                        for m in account_mails
+                    ],
                 }
             )
             return
 
-        if not runs and not deliveries:
+        if not runs and not deliveries and not account_mails:
             console.print(f"[yellow]nothing sent in the last {days} day(s)[/yellow]")
             raise typer.Exit(1)
 
@@ -1700,3 +1725,18 @@ def notify_status(
                 outcome,
             )
         console.print(table)
+
+        if account_mails:
+            table = Table(title="account emails", box=box.SIMPLE_HEAVY, title_style="bold")
+            for column in ("when", "to", "about", "outcome"):
+                table.add_column(column)
+            for m in account_mails:
+                if m.status == "sent":
+                    outcome = f"[green]sent[/green] {escape(m.subject or '')}"
+                else:
+                    told = " [dim](in an alert)[/dim]" if m.reported_at else ""
+                    outcome = (
+                        f"[red]failed[/red] ({m.attempts} tries) {escape(m.error or '')}{told}"
+                    )
+                table.add_row(when(m.created_at), escape(m.email), m.purpose, outcome)
+            console.print(table)

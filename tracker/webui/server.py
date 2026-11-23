@@ -502,11 +502,17 @@ class Console:
         needs to be told to check their inbox. And the sign-up and forgot-password
         answers are worded to say nothing about which addresses exist; a response
         that took longer whenever an email went out would say it anyway.
+
+        The thread also records how the email ended (`account_mail.send`), which is
+        what puts one that never arrived into the next morning's alert.
         """
         from tracker import account_mail
 
         threading.Thread(
-            target=account_mail.send, args=(to, notice), kwargs={"key": key}, daemon=True
+            target=account_mail.send,
+            args=(to, notice),
+            kwargs={"key": key, "record": self.write_session},
+            daemon=True,
         ).start()
 
     def mail_ready(self) -> str | None:

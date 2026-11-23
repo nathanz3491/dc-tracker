@@ -3117,6 +3117,31 @@ def test_notify_send_that_dies_partway_raises_the_outside_alarm(initialized: Pat
     assert posted == ["https://hc-ping.example/abc/fail"]
 
 
+def test_notify_status_lists_the_consoles_account_emails(initialized: Path):
+    from tracker.db import open_db, session_scope
+    from tracker.models import AccountMail, utcnow
+
+    with session_scope(open_db(initialized, readonly=False)) as session:
+        session.add(
+            AccountMail(
+                email="new@example.com",
+                purpose="confirm",
+                status="failed",
+                attempts=4,
+                error="Resend returned HTTP 503",
+                created_at=utcnow(),
+            )
+        )
+
+    result = invoke(initialized, "notify", "status")
+
+    assert result.exit_code == 0, result.output
+    assert "account emails" in result.output
+    assert "new@example.com" in result.output and "HTTP 503" in result.output
+    data = json.loads(invoke(initialized, "--json", "notify", "status").output)
+    assert data["account_mail"][0]["purpose"] == "confirm"
+
+
 def test_notify_preview_is_quiet_for_an_account_watching_nothing(initialized: Path):
     """Exit 1, not a refusal: an account with no watchlist gets no email, and there
     is simply nothing to preview."""

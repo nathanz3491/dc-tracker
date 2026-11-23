@@ -569,3 +569,111 @@ def test_the_panels_follow_the_account_switch(live, mailed, db):
     assert call(address, "/api/dataset", cookie=cookie)[1]["allow_ai"] is True
     status, _, _ = call(address, "/api/infer", "POST", {"project_id": project_id}, cookie=cookie)
     assert status == 400
+
+
+# --- every account email is tried again and recorded ------------------------------
+
+
+def _no_wait(_seconds: float) -> None:
+    """Stands in for `time.sleep`: the waits are policy, not test time."""
+
+
+class _Resend:
+    """Stands in for Resend: `script` is what each post does, in order."""
+
+    def __init__(self, *script) -> None:
+        self.script = list(script)
+        self.keys: list[str | None] = []
+
+    def __call__(self, settings=None):
+        return self
+
+    def send(self, *, to, subject, html_body, text_body, idempotency_key=None):
+        self.keys.append(idempotency_key)
+        step = self.script.pop(0) if self.script else "re_ok"
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+def _mails(db):
+    from tracker.models import AccountMail
+
+    with _session(db) as session:
+        return [
+            (m.email, m.purpose, m.status, m.message_id, m.attempts, m.error, m.account_id)
+            for m in session.scalars(select(AccountMail).order_by(AccountMail.id))
+        ]
+
+
+def test_an_account_email_is_retried_under_one_key_and_recorded(db, monkeypatch):
+    from tracker import account_mail, notify
+
+    resend = _Resend(notify.TransientEmailError("Resend returned HTTP 503"), "re_1")
+    monkeypatch.setattr(notify, "ResendTransport", resend)
+
+    notice = account_mail.approved(CONSOLE_URL, "Boss")
+    assert account_mail.send(ADMIN, notice, record=lambda: _session(db), sleep=_no_wait)
+
+    assert len(resend.keys) == 2 and resend.keys[0] == resend.keys[1] is not None
+    [(email, purpose, status, message_id, attempts, error, account_id)] = _mails(db)
+    assert (email, purpose, status, message_id, attempts, error) == (
+        ADMIN,
+        "approved",
+        "sent",
+        "re_1",
+        2,
+        None,
+    )
+    assert account_id is not None
+
+
+def test_a_failed_account_email_is_recorded_and_never_raises(db, monkeypatch):
+    from tracker import account_mail, notify
+
+    monkeypatch.setattr(
+        notify, "ResendTransport", _Resend(notify.EmailError("Resend returned HTTP 422"))
+    )
+    notice = account_mail.confirm(CONSOLE_URL, "tok")
+    assert not account_mail.send("nobody@example.com", notice, record=lambda: _session(db))
+
+    [(email, purpose, status, _, attempts, error, account_id)] = _mails(db)
+    assert (email, purpose, status, attempts) == ("nobody@example.com", "confirm", "failed", 1)
+    assert "422" in error and account_id is None
+
+
+def test_a_record_that_cannot_be_written_does_not_undo_the_email(db, monkeypatch, caplog):
+    from tracker import account_mail, notify
+
+    monkeypatch.setattr(notify, "ResendTransport", _Resend("re_1"))
+
+    def broken():
+        raise RuntimeError("disk full")
+
+    with caplog.at_level("WARNING"):
+        assert account_mail.send(ADMIN, account_mail.reset(CONSOLE_URL, "tok"), record=broken)
+    assert "could not record" in caplog.text
+
+
+def test_the_console_records_each_email_it_sends(db, monkeypatch):
+    """Through the console's own write session, on the thread it mails from."""
+    from tracker import account_mail, notify
+
+    monkeypatch.setattr(notify, "ResendTransport", _Resend("re_1"))
+    console = Console(db)
+    went = threading.Event()
+    real = account_mail.send
+
+    def send(to, notice, **kw):
+        try:
+            return real(to, notice, **kw)
+        finally:
+            went.set()
+
+    monkeypatch.setattr(account_mail, "send", send)
+    try:
+        console.send_mail(ADMIN, account_mail.pending_for_admin(CONSOLE_URL, "a@example.com", None))
+        assert went.wait(10)
+    finally:
+        console.close()
+    assert [row[1:4] for row in _mails(db)] == [("signup-waiting", "sent", "re_1")]

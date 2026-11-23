@@ -94,6 +94,19 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **An account email that never arrived is now reported the next morning.** The
+  console sends these at any hour: a sign-up's confirmation link, a password reset,
+  "your account is ready", and an administrator's "new sign-up waiting". Each got one
+  attempt, and a failure went to the console's log and nowhere else. So a sign-up
+  whose link never came looked exactly like somebody who changed their mind, and an
+  approval that never reached the person was invisible. Each email is now retried
+  like the morning email (rate limits, provider errors and dropped connections over
+  about 40 seconds, under one key so a retry cannot send twice) and recorded once
+  tried. The morning run asks Resend whether the sent ones bounced. Its alert, and
+  the outside check-in, name each one that failed or bounced, once, with what it
+  means for the person waiting: sign up again, or tell them yourself.
+  `tracker notify status` lists them under *account emails*. New table
+  `account_mail` (migration 0058).
 - **An alarm about the morning email that does not depend on email.** When a
   morning's email failed, the only warning was another email, sent through the same
   Resend account to the administrator's own inbox. So the failures that matter most

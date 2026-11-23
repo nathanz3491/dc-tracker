@@ -65,6 +65,12 @@ nobody would guess — the administrators are emailed about it.
 server can still refuse it. Each run first asks what became of the last week's
 messages (`check_bounces`); a refused one is a failure like any other.
 
+**The console's own emails are reported here too.** A confirmation link, a password
+reset, "your account is ready" and an administrator's "new sign-up waiting" go out
+from the console at any hour, each recorded once tried (`account_mail.send`). Each
+run asks about the past week's the same way, and its alert names every one that
+failed or was refused since the last (`check_account_mail`).
+
 **The alarm cannot travel only by email.** The administrators' alert is itself an
 email, through the same Resend account to their own inboxes, so the failures that
 matter most silence it along with what it reports: Resend refusing everything (a
@@ -114,6 +120,7 @@ from tracker.config import Settings, get_settings
 from tracker.feed import REPORT_WINDOW_DAYS, Digest, Signal, notable
 from tracker.models import (
     Account,
+    AccountMail,
     Condition,
     Exposure,
     NotifyDelivery,
@@ -292,8 +299,9 @@ class Transport(Protocol):
     A protocol rather than a direct call so the tests inject a recorder and never
     open a socket — the same shape as `llm.Extractor`, for the same reason.
 
-    `idempotency_key` is passed by the daily run and never by the account notice.
-    A transport that honours it must deliver a message at most once per key.
+    `idempotency_key` is passed by the daily run and the console's account emails
+    (`account_mail.send`), and never by the operator's account notice. A transport
+    that honours it must deliver a message at most once per key.
     """
 
     def send(
@@ -1604,6 +1612,55 @@ def check_bounces(
     return bounced
 
 
+def check_account_mail(
+    session: Session,
+    transport: Transport,
+    *,
+    now: dt.datetime,
+    sleep: Callable[[float], None] = time.sleep,
+) -> list[AccountMail]:
+    """The console's account emails that failed and nobody was told of, now marked told.
+
+    A confirmation link, a password reset, "your account is ready", an
+    administrator's "new sign-up waiting": the console sends these at any hour,
+    each recorded once tried (`account_mail.send`). This asks Resend about the past
+    :data:`BOUNCE_LOOKBACK` of sent ones exactly as :func:`check_bounces` does for
+    the morning's, then returns every failure not reported yet and stamps
+    `reported_at`, so the alert names each once.
+    """
+    lookup = getattr(transport, "bounce", None)
+    if lookup is not None:
+        recent = session.scalars(
+            select(AccountMail)
+            .where(
+                AccountMail.status == "sent",
+                AccountMail.message_id.is_not(None),
+                AccountMail.message_id != "",
+                AccountMail.created_at >= now - BOUNCE_LOOKBACK,
+            )
+            .order_by(AccountMail.id)
+        ).all()
+        for n, mail in enumerate(recent):
+            if n:
+                sleep(SEND_INTERVAL)
+            reason = lookup(mail.message_id)
+            if reason:
+                mail.status = "failed"
+                mail.error = f"refused by the recipient's server: {reason}"[:2000]
+    failed = list(
+        session.scalars(
+            select(AccountMail)
+            .where(AccountMail.status == "failed", AccountMail.reported_at.is_(None))
+            .order_by(AccountMail.id)
+        ).all()
+    )
+    for mail in failed:
+        mail.reported_at = now
+    if failed:
+        _commit(session, sleep=sleep)
+    return failed
+
+
 # --- one message per person ----------------------------------------------------
 
 
@@ -1649,9 +1706,13 @@ def send_all(
     now = now or utcnow()
     run = None
     bounced: list[NotifyDelivery] = []
+    account_failed: list[AccountMail] = []
     if record:
         # Before composing, so a refused message's updates go in this one.
         bounced = check_bounces(session, transport, now=now, only_email=only_email, sleep=sleep)
+        if only_email is None and alert:
+            # Only where somebody will be told: this marks them reported.
+            account_failed = check_account_mail(session, transport, now=now, sleep=sleep)
         run = NotifyRun(started_at=now)
         session.add(run)
         _commit(session, sleep=sleep)
@@ -1723,7 +1784,7 @@ def send_all(
         run.failed = sum(1 for o in out if o.failed)
         run.skipped = sum(1 for o in out if o.skipped)
         _commit(session, sleep=sleep)
-        found = problems(session, out, bounced)
+        found = problems(session, out, bounced, account_failed)
         alerts = (
             alert_admins(session, transport, out, run=run, found=found, sleep=sleep)
             if alert
@@ -1836,11 +1897,80 @@ def _bounce_problems(bounced: Iterable[NotifyDelivery]) -> list[Problem]:
     return out
 
 
+#: Each account email (`Notice.purpose`) as the object of a sentence, and what its
+#: not arriving means for the person waiting on it.
+_ACCOUNT_MAIL: Final[dict[str, tuple[str, str]]] = {
+    "confirm": (
+        "confirmation link",
+        "They cannot finish signing up without it. If the address looks mistyped there "
+        "is nothing to do: the request is removed after a week. Otherwise they can sign "
+        "up again for a new link.",
+    ),
+    "registered": (
+        '"you already have an account" email',
+        'They tried to sign up with an address that has an account. "Forgot password?" '
+        "on the sign-in page sends them a link.",
+    ),
+    "reset": ("password-reset link", "They can ask for another on the sign-in page."),
+    "approved": ('"your account is ready" email', "They can sign in already; tell them."),
+    "signup-waiting": (
+        '"new sign-up waiting" notice',
+        "See who is waiting on the Admin page.",
+    ),
+}
+
+
+def _account_mail_problems(failed: Iterable[AccountMail]) -> list[Problem]:
+    """One problem per address and kind of account email, however many failed."""
+    groups: dict[tuple[str, str], list[AccountMail]] = {}
+    for mail in failed:
+        groups.setdefault((mail.email, mail.purpose), []).append(mail)
+    out = []
+    for (email, purpose), mails in groups.items():
+        what, fix = _ACCOUNT_MAIL.get(purpose, ("account email", ""))
+        last = mails[-1]
+        error = last.error or ""
+        reply = error.removeprefix("refused by the recipient's server: ")
+        if reply != error:
+            reply = _TRACE.sub("", reply) or reply
+            refusal, known = _refusal(reply)
+            why = refusal if known else "Their mail server refused it after Resend took it."
+            fix = known or fix
+        elif last.attempts:
+            why = f"Resend would not take it, after {_plural(last.attempts, 'attempt')}."
+        else:
+            why = "It was never sent: the email settings on the host are incomplete."
+        title = (
+            f"The {what} to {email} did not arrive"
+            if len(mails) == 1
+            else f"{_plural(len(mails), what)} to {email} did not arrive"
+        )
+        days = (local_time(m.created_at).date() for m in mails)
+        out.append(
+            Problem(
+                title=title,
+                why=why,
+                fix=fix or None,
+                said=reply or None,
+                dates=tuple(dict.fromkeys(f"{d:%b} {d.day}" for d in days)),
+            )
+        )
+    return out
+
+
 def problems(
-    session: Session, outcomes: list[Outcome], bounced: Iterable[NotifyDelivery] = ()
+    session: Session,
+    outcomes: list[Outcome],
+    bounced: Iterable[NotifyDelivery] = (),
+    account: Iterable[AccountMail] = (),
 ) -> list[Problem]:
-    """What an administrator needs to hear about this run, in plain words."""
+    """What an administrator needs to hear about this run, in plain words.
+
+    `account` is the console's account emails that failed since the last run
+    (:func:`check_account_mail`).
+    """
     found = _bounce_problems(bounced)
+    found += _account_mail_problems(account)
     found += [
         Problem(
             title=f"Could not send to {o.email}",
@@ -2141,6 +2271,7 @@ __all__ = [
     "TransientEmailError",
     "Transport",
     "alert_admins",
+    "check_account_mail",
     "check_bounces",
     "check_in_words",
     "choose",

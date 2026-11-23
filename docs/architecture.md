@@ -136,6 +136,12 @@ a plaintext code in it would be a live credential in every copy. Mailed links
 `TRACKER_NOTIFY_CONSOLE_URL`, never from the request's Host header. See
 [the console](console-and-export.md#three-ways-in) for the whole flow.
 
+The emails themselves are the console's other write. Each one it sends (a link,
+an approval, an administrator's "new sign-up waiting") becomes an `account_mail`
+row once it has been tried, recorded on the mail thread rather than in the request,
+so nobody at a form waits on it. The next morning's email run reports any that
+failed or bounced.
+
 ### The one write, and why it does not break the split
 
 `POST /api/watch` adds or drops a row of `watch` — a statement about whose news the

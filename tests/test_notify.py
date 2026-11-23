@@ -17,6 +17,7 @@ from sqlalchemy import select
 from tracker import accounts, notify, watchlist
 from tracker.feed import Digest, Signal
 from tracker.models import (
+    AccountMail,
     Event,
     Exposure,
     NotifyDelivery,
@@ -783,6 +784,81 @@ def test_a_quiet_crawler_is_named_but_the_email_still_checks_in_well(session):
     send(session, Recorder(), heartbeat=beat)
     [(verdict, words)] = beat.calls
     assert verdict == "ok" and "- Nothing fetched for 3 days" in words
+
+
+def _account_mail(session, *, email="new@example.com", purpose="confirm", **kw):
+    row = AccountMail(email=email, purpose=purpose, created_at=kw.pop("created_at", utcnow()), **kw)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def test_a_failed_account_email_is_in_the_next_alert_and_only_that_one(session):
+    """A confirmation link that never arrived used to reach the console's log alone."""
+    _admin(session)
+    row = _account_mail(session, status="failed", attempts=4, error="Resend returned HTTP 503")
+    post, beat = Recorder(), Beat()
+
+    send(session, post, heartbeat=beat)
+
+    [alert] = [m for m in post.sent if m["to"] == "admin@example.com"]
+    assert alert["subject"] == "dc-tracker: The confirmation link to new@example.com did not arrive"
+    assert "after 4 attempts" in alert["text"] and "sign up again" in alert["text"]
+    assert row.reported_at is not None
+    assert beat.calls[-1][0] == "fail"
+
+    later = Recorder()
+    send(session, later, now=utcnow() + dt.timedelta(days=1))
+    assert later.sent == [], "told once"
+
+
+def test_an_account_email_refused_downstream_is_found_and_reported(session):
+    _admin(session)
+    row = _account_mail(session, status="sent", message_id="acct_1", attempts=1)
+    post = Bounces({"acct_1": OUTLOOK})
+
+    send(session, post)
+
+    assert row.status == "failed" and "DMARC" in row.error
+    [alert] = [m for m in post.sent if m["to"] == "admin@example.com"]
+    assert "The confirmation link to new@example.com did not arrive" in alert["subject"]
+    assert "_dmarc" in alert["text"]
+
+
+def test_a_run_for_one_person_leaves_account_emails_for_the_morning(session):
+    _admin(session)
+    row = _account_mail(session, status="failed", attempts=1, error="HTTP 422")
+    send(session, Recorder(), only_email="admin@example.com")
+    assert row.reported_at is None
+
+
+def test_account_emails_that_failed_together_are_one_problem():
+    rows = [
+        AccountMail(
+            email="ann@example.com",
+            purpose="reset",
+            status="failed",
+            attempts=4,
+            error="Resend returned HTTP 503",
+            created_at=dt.datetime(2026, 11, 23, 3, 0),
+        )
+        for _ in range(2)
+    ]
+    rows.append(
+        AccountMail(
+            email="bob@example.com",
+            purpose="approved",
+            status="failed",
+            attempts=0,
+            error="TRACKER_RESEND_API_KEY is not set",
+            created_at=dt.datetime(2026, 11, 23, 3, 0),
+        )
+    )
+    reset, approved = notify._account_mail_problems(rows)
+    assert reset.title == "2 password-reset links to ann@example.com did not arrive"
+    assert reset.dates == ("Nov 23",) and reset.mail
+    assert approved.title == 'The "your account is ready" email to bob@example.com did not arrive'
+    assert "never sent" in approved.why
 
 
 def test_a_dry_run_does_not_check_in(session):
