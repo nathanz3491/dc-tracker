@@ -1981,7 +1981,34 @@ def problems(
                     fix="Check the overnight loop on the host: `tracker loop`.",
                 )
             )
+    found += _sign_ups_paused(session)
     return found
+
+
+def _sign_ups_paused(session: Session) -> list[Problem]:
+    """A problem when the sign-up form has stopped taking new addresses.
+
+    It stops at `accounts.MAX_UNCONFIRMED` sign-ups waiting on their link, so a
+    stream of made-up addresses cannot bounce the account into a suspension. It also
+    means real people are being turned away until those requests clear, which an
+    administrator can do sooner than the week it takes on its own.
+    """
+    from tracker import accounts
+
+    waiting = accounts.unconfirmed_count(session)
+    if waiting < accounts.MAX_UNCONFIRMED:
+        return []
+    return [
+        Problem(
+            title="Sign-ups are paused",
+            why=f"{_plural(waiting, 'sign-up')} wait on their confirmation link, the most "
+            "the form lets wait at once, so it is turning new people away. A real person "
+            "confirms within minutes; requests that sit for a day are usually made-up "
+            "addresses, whose confirmation emails bounce.",
+            fix="If they look made up, delete them on the Admin page or with "
+            "`tracker users rm <address>`. They are removed after a week anyway.",
+        )
+    ]
 
 
 def _problem_block(problem: Problem) -> str:

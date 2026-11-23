@@ -16,7 +16,7 @@ There are two ways in.
 > [!NOTE]
 > The page says the same thing whether or not the address already has an account, so it cannot be used to find out who has one. If you already had an account, the email you receive says so and offers a password reset instead.
 
-An unconfirmed request is removed after a week. If the console cannot send email at all, it says so and asks you to get an invite code instead.
+An unconfirmed request is removed after a week. If the console cannot send email at all, it says so and asks you to get an invite code instead. If too many requests are already waiting to be confirmed, the page says sign-ups are paused: try again in a few days, or ask for an invite code.
 
 ## Signing in
 

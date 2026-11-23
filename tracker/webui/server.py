@@ -2040,6 +2040,16 @@ class Handler(BaseHTTPRequestHandler):
                     to, notice = None, None
         except accounts.Throttled:
             to, notice = None, None
+        except accounts.SignUpsFull as exc:
+            # Said plainly, and the same for every address: nothing was sent, so "check
+            # your inbox" would leave a real person waiting for an email that is not
+            # coming. `reason` sends the page to the invite-code field, which still works.
+            log.info(
+                "console: sign-up from %s refused: %d requests already wait on their link",
+                client,
+                accounts.MAX_UNCONFIRMED,
+            )
+            return self._json({"error": str(exc), "reason": "full"}, status=503)
         except accounts.AccountError as exc:
             # A bad address or a short password: a mistake to show, not a guess.
             return self._json({"error": str(exc)}, status=400)
@@ -3049,7 +3059,8 @@ class Handler(BaseHTTPRequestHandler):
             "note": "Body: {email, password, name?, code?, next?}. Without a code the "
             "address is confirmed by a mailed link and an administrator approves the "
             "account; answers the same sentence whether or not the address was new. A "
-            "refusal because sign-ups are closed carries `reason`: mail_off or no_admin.",
+            "refusal because sign-ups are closed carries `reason`: mail_off, no_admin, "
+            "or full (too many sign-ups already wait on their confirmation link).",
         },
         "POST /api/confirm": {
             "answers": "spends a confirmation link and tells the administrators",

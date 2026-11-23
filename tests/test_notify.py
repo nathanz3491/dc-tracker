@@ -818,6 +818,16 @@ def test_account_emails_that_failed_together_are_one_problem():
     assert "never sent" in approved.why
 
 
+def test_the_alert_says_when_sign_ups_are_paused(session):
+    """Turning real people away for a week is something an administrator can end."""
+    assert not any(p.title == "Sign-ups are paused" for p in notify.problems(session, []))
+    for n in range(accounts.MAX_UNCONFIRMED):
+        accounts.sign_up(session, f"n{n}@example.com", "correct horse")
+    [paused] = [p for p in notify.problems(session, []) if p.title == "Sign-ups are paused"]
+    assert f"{accounts.MAX_UNCONFIRMED} sign-ups wait" in paused.why
+    assert "tracker users rm" in paused.fix
+
+
 # --- the template ----------------------------------------------------------------
 
 

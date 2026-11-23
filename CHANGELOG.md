@@ -94,6 +94,18 @@ initial build of the v1 PRD.
 
 ### Added
 
+- **The public sign-up form can no longer get the email account suspended.** Anyone
+  could sign up, and each sign-up mails a confirmation link to an address nobody has
+  shown works. A made-up address bounces, the budget allowed 60 such emails an hour,
+  and Resend may shut an account down over a 4% bounce rate "without warning". At
+  this console's few emails a day, a handful of fake sign-ups was enough, and the
+  account was already at 7% from November's Outlook refusals. A real person confirms
+  within minutes (the first sign-up through the form took 17 seconds); a made-up
+  address never does. So once three sign-ups wait on their link, the form answers
+  "Sign-ups are paused", the same for every address and with nothing mailed, until
+  one is confirmed or expires after a week. At most three made-up addresses a week
+  can now bounce. The morning alert says when the form is paused, deleting fake
+  requests on the Admin page reopens it, and an invite code still works throughout.
 - **An account email that never arrived is now reported the next morning.** The
   console sends these at any hour: a sign-up's confirmation link, a password reset,
   "your account is ready", and an administrator's "new sign-up waiting". Each got one

@@ -95,6 +95,19 @@ MAX_LINKS_PER_HOUR: Final = 3
 #: A sign-up nobody confirmed is deleted after this, freeing the address.
 UNCONFIRMED_DAYS: Final = 7
 
+#: Sign-ups that may wait on their confirmation link at once, across the console.
+#:
+#: **What it protects is the email itself.** A confirmation link goes to an address
+#: nobody has shown works, and one that does not exist bounces. Resend may shut an
+#: account down over a 4% bounce rate, and at this console's few emails a day a
+#: handful of bounces is past it, so the form could be used to stop every email the
+#: tracker sends. A real person confirms within minutes (the first sign-up through
+#: the form took 17 seconds); a made-up address never does. So past this many
+#: requests waiting, the form takes no new ones until one is confirmed or expires
+#: (`UNCONFIRMED_DAYS`): however often somebody presses the button, at most this
+#: many made-up addresses a week can bounce.
+MAX_UNCONFIRMED: Final = 3
+
 
 class AccountError(ValueError):
     """Something an operator did wrong, with a message written for them."""
@@ -102,6 +115,10 @@ class AccountError(ValueError):
 
 class Throttled(AccountError):
     """This address has been sent enough links for now."""
+
+
+class SignUpsFull(AccountError):
+    """`MAX_UNCONFIRMED` sign-ups already wait on their link; the form takes no more."""
 
 
 # --- passwords -------------------------------------------------------------
@@ -721,6 +738,30 @@ def expire_unconfirmed(session: Session) -> int:
     return len(stale)
 
 
+def unconfirmed_count(session: Session) -> int:
+    """Sign-ups from the form still waiting on their link, younger than `UNCONFIRMED_DAYS`."""
+    cutoff = utcnow() - dt.timedelta(days=UNCONFIRMED_DAYS)
+    return (
+        session.scalar(
+            select(func.count())
+            .select_from(Account)
+            .where(
+                Account.self_signup.is_(True),
+                Account.email_verified_at.is_(None),
+                Account.approved_at.is_(None),
+                Account.created_at >= cutoff,
+            )
+        )
+        or 0
+    )
+
+
+SIGN_UPS_FULL: Final = (
+    "Sign-ups are paused for now. Try again in a few days, or ask whoever runs this "
+    "console for an invite code."
+)
+
+
 def sign_up(session: Session, email: str, password: str, *, name: str | None = None) -> SignUp:
     """Ask for an account without an invite. Raises `AccountError` on bad input.
 
@@ -728,10 +769,16 @@ def sign_up(session: Session, email: str, password: str, *, name: str | None = N
     approves it, and it starts without the model panels. Submitting again for an
     address still unconfirmed replaces the password and sends a fresh link, so a
     sign-up somebody else started with your address cannot hold it.
+
+    Raises `SignUpsFull` when `MAX_UNCONFIRMED` sign-ups already wait on their link,
+    for every address alike and before the address is looked up, so the refusal says
+    nothing about which addresses have accounts.
     """
     key = normalize_email(email)
     check_password_length(password)
     expire_unconfirmed(session)
+    if unconfirmed_count(session) >= MAX_UNCONFIRMED:
+        raise SignUpsFull(SIGN_UPS_FULL)
     holder = session.scalar(select(Account).where(Account.email_key == key))
     if holder is not None and not _unconfirmed_signup(holder):
         # The one scrypt the other branch spends, so the response time does not say
@@ -869,10 +916,13 @@ __all__ = [
     "MAX_EMAIL_LEN",
     "MAX_LINKS_PER_HOUR",
     "MAX_PASSWORD_LEN",
+    "MAX_UNCONFIRMED",
     "MIN_PASSWORD_LEN",
+    "SIGN_UPS_FULL",
     "UNCONFIRMED_DAYS",
     "AccountError",
     "SignUp",
+    "SignUpsFull",
     "Throttled",
     "admins",
     "any_exist",
@@ -911,6 +961,7 @@ __all__ = [
     "stamp_for",
     "status",
     "touch",
+    "unconfirmed_count",
     "update",
     "verify",
     "verify_password",

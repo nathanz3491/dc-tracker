@@ -105,6 +105,36 @@ def test_an_address_is_sent_only_so_many_links_an_hour(db):
             accounts.issue_link(session, row, "confirm")
 
 
+def test_past_the_cap_the_form_takes_no_new_sign_up(db):
+    """Made-up addresses never confirm, and their emails bounce; past the cap the
+    form stops mailing new ones, so it cannot bounce the account into a suspension."""
+    with _session(db) as session:
+        for n in range(accounts.MAX_UNCONFIRMED):
+            accounts.sign_up(session, f"n{n}@example.com", PASSWORD)
+        with pytest.raises(accounts.SignUpsFull, match="paused"):
+            accounts.sign_up(session, "late@example.com", PASSWORD)
+        with pytest.raises(accounts.SignUpsFull, match="paused"):
+            accounts.sign_up(session, ADMIN, PASSWORD)  # the same answer for a taken address
+        assert accounts.unconfirmed_count(session) == accounts.MAX_UNCONFIRMED
+        assert accounts.by_email(session, "late@example.com") is None
+
+
+def test_a_confirmed_or_week_old_request_frees_its_place(db):
+    with _session(db) as session:
+        made = [
+            accounts.sign_up(session, f"n{n}@example.com", PASSWORD)
+            for n in range(accounts.MAX_UNCONFIRMED)
+        ]
+        accounts.confirm_email(session, made[0].token)
+        assert accounts.sign_up(session, "next@example.com", PASSWORD).pending is not None
+
+        made[1].pending.created_at = utcnow() - dt.timedelta(
+            days=accounts.UNCONFIRMED_DAYS, hours=1
+        )
+        session.flush()
+        assert accounts.sign_up(session, "later@example.com", PASSWORD).pending is not None
+
+
 def test_an_expired_confirmation_link_is_refused(db):
     with _session(db) as session:
         made = accounts.sign_up(session, "new@example.com", PASSWORD)
@@ -429,14 +459,35 @@ def test_without_mail_set_up_the_forms_say_so(live, monkeypatch, db):
         get_settings.cache_clear()
 
 
-def test_one_visitor_cannot_mail_without_limit(live, mailed):
+def test_one_visitor_cannot_mail_without_limit(live, mailed, monkeypatch):
     address, console = live
+    # The visitor's budget alone, not the cap on sign-ups waiting for their link.
+    monkeypatch.setattr(accounts, "MAX_UNCONFIRMED", 100)
     for i in range(console.gate.mail_max + 3):
         status, _, _ = call(
             address, "/api/signup", "POST", {"email": f"n{i}@example.com", "password": PASSWORD}
         )
         assert status == 200, "the answer never changes"
     assert len(mailed) == console.gate.mail_max
+
+
+def test_a_full_form_says_so_plainly_and_mails_nobody(live, mailed, monkeypatch):
+    """Nothing is sent, so "check your inbox" would leave somebody waiting for nothing.
+    The refusal is the same whether or not the address has an account."""
+    address, _ = live
+    monkeypatch.setattr(accounts, "MAX_UNCONFIRMED", 1)
+    status, _, _ = call(
+        address, "/api/signup", "POST", {"email": "first@example.com", "password": PASSWORD}
+    )
+    assert status == 200 and len(mailed) == 1
+
+    for email in ("second@example.com", ADMIN):
+        status, body, _ = call(
+            address, "/api/signup", "POST", {"email": email, "password": PASSWORD}
+        )
+        assert (status, body["reason"]) == (503, "full")
+        assert body["error"] == accounts.SIGN_UPS_FULL
+    assert len(mailed) == 1
 
 
 def test_past_the_mail_budget_a_sign_up_writes_nothing(live, mailed, db):

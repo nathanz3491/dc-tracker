@@ -355,6 +355,17 @@ like invite codes. The forms share the sign-in lockout, a mistyped or guessed li
 counts toward it, and mail is budgeted: 5 emails an hour per visitor, 60 an hour in
 total, and 3 links of one kind per address per hour.
 
+**At most three sign-ups wait on their link at once** (`accounts.MAX_UNCONFIRMED`).
+A confirmation goes to an address nobody has shown works, and a made-up one bounces.
+Resend may shut an account down over a 4% bounce rate, and at this console's few
+emails a day that is a handful of bounces, which would stop every email the tracker
+sends. A real person confirms within minutes. So with three requests waiting, the
+form answers *Sign-ups are paused*, the same for every address and with nothing
+mailed, until one is confirmed or expires after a week. However often somebody
+presses the button, at most three made-up addresses a week can bounce. The morning
+alert says when the form is paused, and deleting fake requests on the Admin page
+reopens it sooner. An invite code still works throughout.
+
 **Without email set up, there is no sign-up and no reset.** Both need
 `TRACKER_NOTIFY_CONSOLE_URL`, `TRACKER_RESEND_API_KEY` and `TRACKER_NOTIFY_FROM` —
 the morning email's settings — and say so plainly when one is missing. Invites and
