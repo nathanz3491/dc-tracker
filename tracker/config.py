@@ -673,6 +673,18 @@ class Settings(BaseSettings):
     #: the public console's URL, so it has no default in a public repo.
     notify_console_url: str = ""
 
+    #: A monitor outside this machine that `notify send` checks in with after each
+    #: full run: a POST here when every email went, to `<url>/fail` with what went
+    #: wrong when one did not (`notify.Heartbeat`, healthchecks.io's protocol).
+    #:
+    #: **The alarm that does not depend on the email.** The administrators' alert is
+    #: an email through the same Resend account, so a dead key, a paused account or
+    #: an inbox refusing our domain silences it with everything else, and a run that
+    #: never starts says nothing. The monitor alarms by its own channel on a failure
+    #: or when no check-in arrives. Unset, nothing checks in. A secret: anyone holding
+    #: the URL can check in, so it lives in `.env` and is never logged.
+    notify_heartbeat_url: SecretStr | None = None
+
     #: Random fraction added to an LLM retry's backoff. 0 restores the old fixed
     #: delay.
     #:

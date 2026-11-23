@@ -596,6 +596,22 @@ Resend asks for when the domain is verified. Since 2026-11-05 Outlook, Hotmail a
 Live refuse mail from a domain without one, however little it sends. `v=DMARC1;
 p=none` at `_dmarc.<domain>` is enough to be accepted.
 
+**The alarm about the email cannot be only an email.** The administrators' alert
+goes through the same Resend account to their own inboxes, so it is silenced by
+the failures that matter most: Resend refusing everything (a revoked key, a paused
+account, a long outage), an administrator's provider refusing our domain, as
+Outlook did for four mornings in 2026-11, and a run that never starts or dies
+partway. With `TRACKER_NOTIFY_HEARTBEAT_URL` set, every full run also checks in
+with a monitor outside the machine, using healthchecks.io's protocol (free):
+a success, or a failure that lists what went wrong. Failures include a message
+Resend would not take, one a server refused, an alert that could not be sent,
+and a run that could not start or stopped partway. The monitor alarms by its own
+email or push on a failure, or when no check-in arrives by the end of its grace
+period. Schedule the check for the run's time (08:00) with about 30 minutes'
+grace. The check-in names mail providers, never people (`…@outlook.com`). A refusal
+by a recipient's server is learnt the next morning, like the alert's. A run for one
+person (`--user`) does not check in.
+
 `notify status` is the answer to "did they get Tuesday's email?" — from the
 mailer's own record rather than a log line.
 

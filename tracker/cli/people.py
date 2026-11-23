@@ -1488,6 +1488,11 @@ def notify_send(
     about the past week's. Exit 2 when anybody failed, 1 when nobody was sent
     anything, 0 otherwise.
 
+    **With `TRACKER_NOTIFY_HEARTBEAT_URL` set, the full run checks in with a monitor
+    outside this machine** — a success, or a failure naming what went wrong, a
+    start that failed or a run that died — so an alarm still reaches you when email
+    is what broke. A run with `--user` does not check in.
+
     `notify preview` shows one person's message first, for free; `notify status`
     shows what went out.
     """
@@ -1526,26 +1531,40 @@ def notify_send(
             console.print("[dim]nothing would be sent[/dim]")
         return
 
+    # Only the full run checks in: one person's resend says nothing about the morning.
+    heartbeat = notify_mod.Heartbeat.from_settings(settings) if user is None else None
     try:
         transport = notify_mod.ResendTransport(settings)
     except notify_mod.EmailError as exc:
+        if heartbeat is not None:
+            heartbeat.fail(
+                "dc-tracker morning email could not start: "
+                + (str(exc).strip().splitlines() or ["the email settings are incomplete"])[0]
+            )
         _fail(str(exc))
         return
 
-    with _explain_db_locks(), session_scope(_watch_engine()) as session:
-        outcomes = notify_mod.send_all(
-            session,
-            transport=transport,
-            console_url=console_url,
-            only_email=user,
-            force=force,
-        )
-        # The confirmation email promises an unconfirmed request is removed after a
-        # week. A sign-up also sweeps them, but a quiet console may see none for a
-        # month; this run is daily, so it is what keeps the promise.
-        from tracker import accounts
+    try:
+        with _explain_db_locks(), session_scope(_watch_engine()) as session:
+            outcomes = notify_mod.send_all(
+                session,
+                transport=transport,
+                console_url=console_url,
+                only_email=user,
+                force=force,
+                heartbeat=heartbeat,
+            )
+            # The confirmation email promises an unconfirmed request is removed after
+            # a week. A sign-up also sweeps them, but a quiet console may see none for
+            # a month; this run is daily, so it is what keeps the promise.
+            from tracker import accounts
 
-        swept = accounts.expire_unconfirmed(session)
+            swept = accounts.expire_unconfirmed(session)
+    except Exception as exc:
+        # A run that dies partway is the one the alert email cannot report.
+        if heartbeat is not None:
+            heartbeat.fail(f"dc-tracker morning email stopped partway: {type(exc).__name__}")
+        raise
     if swept and not json_mode():
         console.print(f"[dim]removed {swept} sign-up(s) nobody confirmed within a week[/dim]")
 

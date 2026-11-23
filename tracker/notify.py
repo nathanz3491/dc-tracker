@@ -65,6 +65,15 @@ nobody would guess — the administrators are emailed about it.
 server can still refuse it. Each run first asks what became of the last week's
 messages (`check_bounces`); a refused one is a failure like any other.
 
+**The alarm cannot travel only by email.** The administrators' alert is itself an
+email, through the same Resend account to their own inboxes, so the failures that
+matter most silence it along with what it reports: Resend refusing everything (a
+revoked key, a paused account, a long outage), an administrator's provider refusing
+our domain, and a run that never starts. Each full run therefore also tells a
+monitor outside this machine how it ended (:class:`Heartbeat`,
+`TRACKER_NOTIFY_HEARTBEAT_URL`), and the monitor raises its own alarm, by its own
+channel, on a failure or when no check-in arrives.
+
 **Rendering is separate from sending, and pure.** The `render*` functions take
 data and return strings; they open no socket and read no settings. That is what
 lets the whole template be tested offline, and it is why `notify preview` shows
@@ -152,6 +161,16 @@ SEND_INTERVAL: Final[float] = 0.25
 
 #: A crawler that has fetched nothing for this long makes every email a quiet one.
 STALE_CRAWL_HOURS: Final[int] = 48
+
+#: Tries for one check-in with the outside monitor, and the waits between them. A
+#: monitor that hears nothing raises its alarm, so a check-in lost to one dropped
+#: connection would be a false alarm; two retries make that rare.
+CHECK_IN_ATTEMPTS: Final[int] = 3
+CHECK_IN_BACKOFF: Final[tuple[float, ...]] = (5.0, 20.0)
+
+#: An address in a check-in's text. The monitor is somebody else's service, so it
+#: is told which provider, never whose mailbox (:func:`redact`).
+_ADDRESS = re.compile(r"[\w.+-]+@(?=[\w-]+(?:\.[\w-]+)+)")
 
 #: How many blockers the quiet-day email names per project before it points at
 #: the page for the rest.
@@ -1426,14 +1445,40 @@ def deliver(
 
     Raises the last `EmailError` when the message cannot be delivered.
     """
-    key = message.idempotency_key()
+    return send_with_retries(
+        transport,
+        to=message.email,
+        subject=message.subject,
+        html_body=message.html_body,
+        text_body=message.text_body,
+        key=message.idempotency_key(),
+        sleep=sleep,
+    )
+
+
+def send_with_retries(
+    transport: Transport,
+    *,
+    to: str,
+    subject: str,
+    html_body: str,
+    text_body: str,
+    key: str,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[str, int]:
+    """Post one message under one idempotency key, retrying what clears by itself.
+
+    Returns (Resend's id, attempts). Raises the last `EmailError`, its `attempts`
+    set, when the message cannot be delivered. :func:`deliver` is this for the
+    morning's messages.
+    """
     for attempt in range(1, SEND_ATTEMPTS + 1):
         try:
             message_id = transport.send(
-                to=message.email,
-                subject=message.subject,
-                html_body=message.html_body,
-                text_body=message.text_body,
+                to=to,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body,
                 idempotency_key=key,
             )
             return message_id or "", attempt
@@ -1444,7 +1489,7 @@ def deliver(
             wait = BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
             if exc.retry_after is not None:
                 wait = max(wait, min(exc.retry_after, MAX_RETRY_AFTER))
-            log.warning("send to %s failed (%s); retrying in %.0fs", message.email, exc, wait)
+            log.warning("send to %s failed (%s); retrying in %.0fs", to, exc, wait)
             sleep(wait)
         except EmailError as exc:
             exc.attempts = attempt
@@ -1572,6 +1617,7 @@ def send_all(
     record: bool = True,
     force: bool = False,
     alert: bool = True,
+    heartbeat: Heartbeat | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[Outcome]:
     """Send each person today's one message, and remember what was sent.
@@ -1579,6 +1625,11 @@ def send_all(
     **The loop is over people, not signals.** Fourteen changes on somebody's
     watchlist is one email with fourteen cards, never fourteen emails, and a
     day with none is one email saying what to watch for.
+
+    **`heartbeat` hears how a recorded run ended**, after the alert: a check-in
+    when every message went, a failure naming what did not (:class:`Heartbeat`).
+    Only `notify send`'s full run passes one; a run for one person is not the
+    morning's.
 
     **Each person is committed on their own**, straight after their message goes,
     so a crash halfway down the list keeps the record of everybody already sent,
@@ -1672,8 +1723,15 @@ def send_all(
         run.failed = sum(1 for o in out if o.failed)
         run.skipped = sum(1 for o in out if o.skipped)
         _commit(session, sleep=sleep)
-        if alert:
-            alert_admins(session, transport, out, run=run, bounced=bounced, sleep=sleep)
+        found = problems(session, out, bounced)
+        alerts = (
+            alert_admins(session, transport, out, run=run, found=found, sleep=sleep)
+            if alert
+            else []
+        )
+        if heartbeat is not None:
+            went_well, words = check_in_words(out, found, alerts)
+            (heartbeat.ok if went_well else heartbeat.fail)(words)
     return out
 
 
@@ -1697,6 +1755,9 @@ class Problem:
     said: str | None = None
     #: Which mornings it hit, as "Nov 6".
     dates: tuple[str, ...] = ()
+    #: Whether it is mail not reaching somebody, which the outside check-in reports
+    #: as a failure. A quiet crawler is not: the email works, and says so itself.
+    mail: bool = True
 
 
 #: What a refusing server's reply means and what to do about it, tried in order
@@ -1799,6 +1860,7 @@ def problems(
                     why="Every email is a quiet one until the crawler runs again, and a "
                     "reader cannot tell that from a quiet day.",
                     fix="Check the overnight loop on the host: `tracker loop`.",
+                    mail=False,
                 )
             )
     return found
@@ -1874,12 +1936,17 @@ def alert_admins(
     *,
     run: NotifyRun | None = None,
     bounced: Iterable[NotifyDelivery] = (),
+    found: list[Problem] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[Outcome]:
-    """Email every enabled administrator when this run has something to report."""
+    """Email every enabled administrator when this run has something to report.
+
+    `found` is the run's :func:`problems` when the caller already has them.
+    """
     from tracker import accounts
 
-    found = problems(session, outcomes, bounced)
+    if found is None:
+        found = problems(session, outcomes, bounced)
     if not found:
         return []
     now = utcnow()
@@ -1940,10 +2007,119 @@ def alert_admins(
     return out
 
 
+# --- telling somebody outside, when email is what broke ------------------------
+
+
+def redact(text: str) -> str:
+    """`ann@example.com` becomes `…@example.com`: which provider, never whose mailbox."""
+    return _ADDRESS.sub("…@", text)
+
+
+class Heartbeat:
+    """A monitor outside this machine, told how each morning run ended.
+
+    **Why outside, and why not one more email.** The administrators' alert goes
+    through the same Resend account to their own inboxes. Resend refusing everything
+    (a revoked key, a paused account, an outage longer than the retries) silences it
+    along with the email it is about; so does an administrator's provider refusing
+    our domain, as Outlook did for four mornings in 2026-11; and a run that never
+    starts sends nothing at all. A monitor such as healthchecks.io expects one
+    check-in a morning and alarms by its own email or push when one says "failed" or
+    none arrives, so none of the three can silence it.
+
+    **The protocol is healthchecks.io's**, which Better Stack's heartbeats share: a
+    POST to the URL says the run went well, to `<URL>/fail` that it did not, and the
+    body is a few lines saying what happened. No address is sent: :func:`redact`
+    leaves the provider (`…@outlook.com`) and drops the person.
+
+    **A check-in that cannot get through never fails the run.** It is retried, then
+    logged; the monitor's own "nothing arrived" alarm is the backstop. The URL is the
+    secret — anyone holding it can check in — so it is never logged.
+    """
+
+    def __init__(self, url: str, *, sleep: Callable[[float], None] = time.sleep) -> None:
+        self.url = url.strip().rstrip("/")
+        self.sleep = sleep
+
+    @classmethod
+    def from_settings(cls, settings: Settings | None = None) -> Heartbeat | None:
+        """The configured monitor; None when `TRACKER_NOTIFY_HEARTBEAT_URL` is unset."""
+        secret = (settings or get_settings()).notify_heartbeat_url
+        url = secret.get_secret_value().strip() if secret is not None else ""
+        return cls(url) if url else None
+
+    def ok(self, summary: str) -> bool:
+        """The run went well. Returns whether the monitor heard."""
+        return self._post(self.url, summary)
+
+    def fail(self, summary: str) -> bool:
+        """The run did not go well; `summary` says how. Returns whether the monitor heard."""
+        return self._post(f"{self.url}/fail", summary)
+
+    def _post(self, url: str, summary: str) -> bool:
+        body = redact(summary)[:10_000].encode()
+        problem = ""
+        for attempt in range(1, CHECK_IN_ATTEMPTS + 1):
+            try:
+                response = httpx.post(
+                    url,
+                    content=body,
+                    headers={"Content-Type": "text/plain; charset=utf-8"},
+                    timeout=httpx.Timeout(15.0, connect=10.0),
+                )
+            except httpx.RequestError as exc:
+                # The exception's own text can carry the URL, and the URL is the secret.
+                problem = type(exc).__name__
+            else:
+                if response.status_code < 400:
+                    return True
+                problem = f"HTTP {response.status_code}"
+                if response.status_code < 500 and response.status_code != 429:
+                    log.warning(
+                        "the outside monitor refused the check-in (%s): check "
+                        "TRACKER_NOTIFY_HEARTBEAT_URL",
+                        problem,
+                    )
+                    return False
+            if attempt < CHECK_IN_ATTEMPTS:
+                self.sleep(CHECK_IN_BACKOFF[min(attempt - 1, len(CHECK_IN_BACKOFF) - 1)])
+        log.warning(
+            "the outside check-in did not get through (%s); the monitor raises its own "
+            "alarm when no check-in arrives",
+            problem,
+        )
+        return False
+
+
+def check_in_words(
+    outcomes: list[Outcome], found: list[Problem], alerts: list[Outcome]
+) -> tuple[bool, str]:
+    """(went well, what to tell the monitor) for one run.
+
+    It went well unless mail failed to reach somebody — a message Resend would not
+    take, one a recipient's server refused, or the administrators' alert itself. A
+    quiet crawler is named but is not a failure: the email works and carries it.
+    """
+    sent = sum(1 for o in outcomes if o.sent)
+    failed = sum(1 for o in outcomes if o.failed)
+    skipped = sum(1 for o in outcomes if o.skipped)
+    lines = [f"dc-tracker morning email: {sent} sent, {failed} failed, {skipped} skipped."]
+    lines += [f"- {problem.title}" for problem in found]
+    lost = sum(1 for a in alerts if a.failed)
+    if lost:
+        lines.append(f"- the alert to {_plural(lost, 'administrator')} could not be sent")
+    went_well = not lost and not any(problem.mail for problem in found)
+    if not went_well:
+        lines.append("What went out, and why not: `tracker notify status` on the host.")
+    return went_well, "\n".join(lines)
+
+
 __all__ = [
     "BACKOFF_SECONDS",
     "BOUNCE_LOOKBACK",
     "CATCH_UP_DAYS",
+    "CHECK_IN_ATTEMPTS",
+    "CHECK_IN_BACKOFF",
     "CLEARED",
     "EASES",
     "FIRST_WINDOW",
@@ -1956,6 +2132,7 @@ __all__ = [
     "TOKENS",
     "WIDTH",
     "EmailError",
+    "Heartbeat",
     "Message",
     "Outcome",
     "Problem",
@@ -1965,6 +2142,7 @@ __all__ = [
     "Transport",
     "alert_admins",
     "check_bounces",
+    "check_in_words",
     "choose",
     "compose",
     "deliver",
@@ -1975,6 +2153,7 @@ __all__ = [
     "page_url",
     "problems",
     "quiet_subject",
+    "redact",
     "render",
     "render_quiet",
     "render_quiet_text",
@@ -1982,6 +2161,7 @@ __all__ = [
     "rule_cards",
     "rules_subject",
     "send_all",
+    "send_with_retries",
     "sent_keys",
     "subject_for",
     "watched_projects",

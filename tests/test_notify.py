@@ -24,6 +24,7 @@ from tracker.models import (
     NotifySent,
     Project,
     Risk,
+    Source,
     utcnow,
 )
 
@@ -686,6 +687,178 @@ def test_a_dry_run_and_an_old_message_are_not_looked_up(session):
     assert post.asked == []
     send(session, post, now=utcnow() + notify.BOUNCE_LOOKBACK + dt.timedelta(days=1))
     assert post.asked == []
+
+
+# --- the outside check-in ----------------------------------------------------------
+
+
+class Beat:
+    """Stands in for the outside monitor: remembers each check-in."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def ok(self, summary: str) -> bool:
+        self.calls.append(("ok", summary))
+        return True
+
+    def fail(self, summary: str) -> bool:
+        self.calls.append(("fail", summary))
+        return True
+
+
+class Down(Recorder):
+    """Resend refusing everything: a revoked key, a paused account."""
+
+    def send(self, *, to, subject, html_body, text_body, idempotency_key=None) -> str:
+        raise notify.EmailError("Resend rejected the key (HTTP 401).")
+
+
+def _admin(session):
+    admin = accounts.create(session, "admin@example.com", "correct horse")
+    admin.is_admin = True
+    return admin
+
+
+def test_a_run_where_everybody_was_sent_checks_in_well(session):
+    _reader(session)
+    _milestone(session, _project(session))
+    beat = Beat()
+    send(session, Recorder(), heartbeat=beat)
+    [(verdict, words)] = beat.calls
+    assert verdict == "ok"
+    assert words.startswith("dc-tracker morning email: 1 sent, 0 failed")
+
+
+def test_a_refused_message_is_a_failed_check_in_that_names_it(session):
+    _admin(session)
+    _reader(session, "client@example.com")
+    _milestone(session, _project(session))
+    beat = Beat()
+    send(session, Refuses("client@example.com"), heartbeat=beat)
+    [(verdict, words)] = beat.calls
+    assert verdict == "fail"
+    assert "- Could not send to client@example.com" in words
+    assert "tracker notify status" in words
+
+
+def test_when_resend_refuses_everything_the_lost_alert_is_told_outside(session):
+    """The failure the alert email cannot report: it goes through the same Resend."""
+    _admin(session)
+    _reader(session)
+    _milestone(session, _project(session))
+    beat = Beat()
+    send(session, Down(), heartbeat=beat)
+    [(verdict, words)] = beat.calls
+    assert verdict == "fail"
+    assert "the alert to 1 administrator could not be sent" in words
+
+
+def test_a_refusal_found_the_next_morning_is_a_failed_check_in(session):
+    """Outlook refusing our domain: the alert to an Outlook inbox is refused too."""
+    _reader(session)
+    _milestone(session, _project(session))
+    send(session, Recorder())
+    [delivery] = session.scalars(select(NotifyDelivery)).all()
+    beat = Beat()
+    post = Bounces({delivery.message_id: OUTLOOK})
+    send(session, post, heartbeat=beat, now=utcnow() + dt.timedelta(days=1))
+    [(verdict, words)] = beat.calls
+    assert verdict == "fail" and "was refused" in words
+
+
+def test_a_quiet_crawler_is_named_but_the_email_still_checks_in_well(session):
+    project = _project(session)
+    session.add(
+        Source(
+            project_id=project.id,
+            url="https://example.com/a",
+            source_type="trade_press",
+            fetched_at=utcnow() - dt.timedelta(days=3, hours=1),
+        )
+    )
+    _reader(session)
+    _milestone(session, project)
+    beat = Beat()
+    send(session, Recorder(), heartbeat=beat)
+    [(verdict, words)] = beat.calls
+    assert verdict == "ok" and "- Nothing fetched for 3 days" in words
+
+
+def test_a_dry_run_does_not_check_in(session):
+    _reader(session)
+    _milestone(session, _project(session))
+    beat = Beat()
+    send(session, Recorder(), record=False, heartbeat=beat)
+    assert beat.calls == []
+
+
+def _monitor(monkeypatch, *answers):
+    """Stands in for the monitor's server: each check-in gets the next answer."""
+    posted: list[dict] = []
+    replies = list(answers)
+
+    def post(url, *, content, headers, timeout):
+        posted.append({"url": url, "body": content.decode(), "headers": headers})
+        reply = replies.pop(0) if replies else 200
+        if isinstance(reply, Exception):
+            raise reply
+        return httpx.Response(reply)
+
+    monkeypatch.setattr(notify.httpx, "post", post)
+    return posted
+
+
+def test_the_check_in_is_healthchecks_protocol_and_names_no_one(monkeypatch):
+    posted = _monitor(monkeypatch)
+    beat = notify.Heartbeat("https://hc-ping.example/abc/", sleep=no_wait)
+    assert beat.ok("1 sent")
+    assert beat.fail("- 1 email to ann.lee@mail.example was refused")
+    assert [p["url"] for p in posted] == [
+        "https://hc-ping.example/abc",
+        "https://hc-ping.example/abc/fail",
+    ]
+    assert posted[1]["body"] == "- 1 email to …@mail.example was refused"
+    assert posted[1]["headers"]["Content-Type"].startswith("text/plain")
+
+
+def test_a_dropped_check_in_is_retried(monkeypatch):
+    posted = _monitor(monkeypatch, httpx.ConnectError("reset"), 503, 200)
+    beat = notify.Heartbeat("https://hc-ping.example/abc", sleep=no_wait)
+    assert beat.ok("fine") is True
+    assert len(posted) == 3
+
+
+def test_a_check_in_that_never_gets_through_is_logged_without_its_url(monkeypatch, caplog):
+    """The URL is the secret: anyone holding it can check in."""
+    failures = [httpx.ConnectError("https://hc-ping.example/s3cret")] * notify.CHECK_IN_ATTEMPTS
+    posted = _monitor(monkeypatch, *failures)
+    beat = notify.Heartbeat("https://hc-ping.example/s3cret", sleep=no_wait)
+    with caplog.at_level("WARNING"):
+        assert beat.fail("down") is False
+    assert len(posted) == notify.CHECK_IN_ATTEMPTS
+    assert "ConnectError" in caplog.text and "s3cret" not in caplog.text
+
+
+def test_a_wrong_check_in_url_is_not_retried(monkeypatch, caplog):
+    posted = _monitor(monkeypatch, 404)
+    beat = notify.Heartbeat("https://hc-ping.example/wrong", sleep=no_wait)
+    with caplog.at_level("WARNING"):
+        assert beat.ok("fine") is False
+    assert len(posted) == 1 and "TRACKER_NOTIFY_HEARTBEAT_URL" in caplog.text
+
+
+def test_no_check_in_url_means_no_monitor():
+    from pydantic import SecretStr
+
+    from tracker.config import Settings
+
+    assert notify.Heartbeat.from_settings(Settings(notify_heartbeat_url=None)) is None
+    assert notify.Heartbeat.from_settings(Settings(notify_heartbeat_url=SecretStr(" "))) is None
+    beat = notify.Heartbeat.from_settings(
+        Settings(notify_heartbeat_url=SecretStr("https://hc-ping.example/x/"))
+    )
+    assert beat is not None and beat.url == "https://hc-ping.example/x"
 
 
 # --- the template ----------------------------------------------------------------
