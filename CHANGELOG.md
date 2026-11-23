@@ -102,26 +102,24 @@ initial build of the v1 PRD.
   approval that never reached the person was invisible. Each email is now retried
   like the morning email (rate limits, provider errors and dropped connections over
   about 40 seconds, under one key so a retry cannot send twice) and recorded once
-  tried. The morning run asks Resend whether the sent ones bounced. Its alert, and
-  the outside check-in, name each one that failed or bounced, once, with what it
-  means for the person waiting: sign up again, or tell them yourself.
-  `tracker notify status` lists them under *account emails*. New table
-  `account_mail` (migration 0058).
-- **An alarm about the morning email that does not depend on email.** When a
-  morning's email failed, the only warning was another email, sent through the same
-  Resend account to the administrator's own inbox. So the failures that matter most
-  silenced it: Resend refusing everything (a revoked key, a paused account, a long
-  outage), the administrator's provider refusing our domain (which Outlook did for
-  four mornings in 2026-11), and a run that never started or died partway. Now
-  `notify send` checks in with a monitor outside the machine after every full run.
-  It sends a success, or a failure naming what went wrong: a message Resend would
-  not take, one a recipient's server refused, an alert that could not be sent, a run
-  that could not start or stopped partway. The monitor (healthchecks.io's protocol,
-  free) alarms by its own email or push on a failure, or when no check-in arrives at
-  all. The check-in names a mail provider, never a person (`…@outlook.com`). A quiet
-  crawler is listed but does not count as a failure, since the email still reports it
-  itself. Set `TRACKER_NOTIFY_HEARTBEAT_URL`; unset, nothing checks in. A run for one
-  person (`--user`) never checks in.
+  tried. The morning run asks Resend whether the sent ones bounced. Its alert names
+  each one that failed or bounced, once, with what it means for the person waiting:
+  sign up again, or tell them yourself. `tracker notify status` lists them under
+  *account emails*. New table `account_mail` (migration 0058).
+- **When the morning email breaks, somebody now hears about it.** The only warning
+  was an alert sent by the run itself, through the same Resend account, to the one
+  administrator's inbox. A run that never started, or died partway, said nothing at
+  all. Neither did a run whose alert failed along with the email it was about. And
+  when Outlook refused our domain for four mornings in 2026-11, the alert went to that
+  same Outlook inbox. Now the console, which runs all day, reads the mailer's record
+  after `TRACKER_NOTIFY_DEADLINE` (08:30). If the run did not happen, did not finish,
+  or could not send its alert, the console alerts in its place, once a day, and tries
+  again hourly while Resend is refusing. Every alert also goes to each
+  `TRACKER_NOTIFY_ALERT_TO` address, a mailbox at another provider. Nothing new to
+  sign up for: it uses only what the tracker already runs on. The machine being down
+  is left to Cloudflare's Tunnel Health Alert, since the tunnel is already
+  Cloudflare's. A first version (v7.5.3) checked in with healthchecks.io instead; it
+  was replaced before anybody configured it, so nothing depends on an outside service.
 - **A person now judges a random sample of what each night writes.** Nothing
   measured whether the values the loop writes are right. The answer key only says a
   night broke none of 228 values already verified — values on the rows corrected

@@ -595,6 +595,19 @@ Chinese-language deliverables out of the repo; these are the console's user
 documentation and ship with it, which is why they sit under `tracker/webui/docs/`
 rather than matching `docs/*.zh-CN.md`.
 
+## The watch on the morning email
+
+A published console that can send email also watches the morning email
+(`tracker/mailwatch.py`), because the run cannot report its own absence. After
+`TRACKER_NOTIFY_DEADLINE` (08:30, this machine's time) it checks the mailer's
+record every 15 minutes. If today's run never started, started but has not finished
+after half an hour, or could not send its own alert, the console sends that alert
+itself. It goes to the administrators and every `TRACKER_NOTIFY_ALERT_TO` address,
+once a day. One it cannot send is tried again an hour later. A console on a laptop,
+reading a copy of the database, does not watch. See the email section of
+[analysis.md](analysis.md#sending-it-tracker-notify) for what it covers and what it
+leaves to Cloudflare's tunnel alert.
+
 ## The status page
 
 One more public site on the same server, on its own hostname from `.env`

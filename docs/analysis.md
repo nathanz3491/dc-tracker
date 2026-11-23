@@ -602,21 +602,27 @@ Resend asks for when the domain is verified. Since 2026-11-05 Outlook, Hotmail a
 Live refuse mail from a domain without one, however little it sends. `v=DMARC1;
 p=none` at `_dmarc.<domain>` is enough to be accepted.
 
-**The alarm about the email cannot be only an email.** The administrators' alert
-goes through the same Resend account to their own inboxes, so it is silenced by
-the failures that matter most: Resend refusing everything (a revoked key, a paused
-account, a long outage), an administrator's provider refusing our domain, as
-Outlook did for four mornings in 2026-11, and a run that never starts or dies
-partway. With `TRACKER_NOTIFY_HEARTBEAT_URL` set, every full run also checks in
-with a monitor outside the machine, using healthchecks.io's protocol (free):
-a success, or a failure that lists what went wrong. Failures include a message
-Resend would not take, one a server refused, an alert that could not be sent,
-and a run that could not start or stopped partway. The monitor alarms by its own
-email or push on a failure, or when no check-in arrives by the end of its grace
-period. Schedule the check for the run's time (08:00) with about 30 minutes'
-grace. The check-in names mail providers, never people (`…@outlook.com`). A refusal
-by a recipient's server is learnt the next morning, like the alert's. A run for one
-person (`--user`) does not check in.
+**The alert has to reach somebody even when email is what broke**, and it is an
+email itself, sent through the same Resend account. Two things keep it from failing
+along with what it reports, with nothing added beyond what the tracker already uses:
+
+- **A second inbox.** Every alert goes to each `TRACKER_NOTIFY_ALERT_TO` address as
+  well as the administrators. From 2026-11-06 to 11-09 Outlook refused our domain,
+  and the only alert went to that same Outlook inbox. A mailbox at another provider
+  still hears it.
+- **The console watches the run** (`tracker/mailwatch.py`). Three things the run
+  cannot report: it never started, it died partway, or its own alert could not be
+  sent. The console is a separate process that runs all day. After
+  `TRACKER_NOTIFY_DEADLINE` (08:30) it reads the mailer's record and alerts the same
+  people in the run's place, once a day. An alert it cannot send is tried again an
+  hour later, so one lost to a Resend outage arrives once Resend is back. Only the
+  published console watches: a laptop's copy of the database never had today's run.
+
+What the tracker cannot report about itself: the machine being down takes the console
+with it. Cloudflare's **Tunnel Health Alert** (Notifications, on every plan) covers
+that, since the tunnel is already there. And while Resend sends nothing at all,
+nothing sent through Resend can say so. The morning email not arriving is the sign,
+and the console's alert follows when Resend is back.
 
 `notify status` is the answer to "did they get Tuesday's email?" — from the
 mailer's own record rather than a log line.

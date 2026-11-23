@@ -4160,7 +4160,7 @@ def serve(
     `published` is True behind a tunnel, and makes the console require a sign-in
     for as long as it runs — see `Console.published`.
     """
-    from tracker import accounts
+    from tracker import accounts, mailwatch
     from tracker.config import get_settings
 
     settings = get_settings()
@@ -4205,6 +4205,14 @@ def serve(
         log.info(
             "status: checking %d public address(es) every %ds", len(addresses), prober.interval_s
         )
+    # The watch on the morning email, only on the published console that can mail:
+    # a laptop's console reads a copy of the database, whose "today" never had a run.
+    watch = None
+    due = mailwatch.deadline(settings.notify_deadline)
+    if published and due is not None and console.mail_ready() is not None:
+        watch = mailwatch.Watchdog(read=console.read_session, write=console.write_session, due=due)
+        watch.start()
+        log.info("mail watch: checks the morning email from %s", due.strftime("%H:%M"))
 
     url = f"http://{host}:{port}/"
     log.info("console on %s", url)
@@ -4217,6 +4225,8 @@ def serve(
     finally:
         if prober is not None:
             prober.stop()
+        if watch is not None:
+            watch.stop()
         httpd.server_close()
         console.close()
 
