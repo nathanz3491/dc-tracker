@@ -33,6 +33,22 @@ initial build of the v1 PRD.
 
 ### Changed
 
+- **`tracker loop` is redrawn in the style of the host's login banner, and shows the
+  night as a line of time.** The old page was one boxed column of sections, and its
+  picture of the night was a single bar grouped by kind of phase, which could not say
+  when anything ran. Now the left column says the night in words (state, phase or why
+  it stopped, who chose the steps) over a meter per allowance, each with "used /
+  ceiling" and a percentage. The right column is one strip from the night's start to
+  now, coloured by the phase running at each moment, with the clock above it, the
+  start of each round below it, and each kind of phase with its time and share. The
+  tables follow, each under a title, a note and a rule; the box is gone. On a terminal
+  narrower than 119 columns the time line goes under the meters. Colours are Meridian's
+  own tokens in 24-bit colour: a terminal reached over ssh announces only 256, which
+  is why the page was drawn in hand-picked substitutes, but the terminals it is
+  reached from show the real ones, as the login banner already assumes. macOS's own
+  Terminal keeps the 256, as does `--palette 256` for any terminal where the guess is
+  wrong; a pipe and `NO_COLOR` stay colourless. The bars now move by the half cell
+  (`tracker/loopstatus.py`, `tracker/cli/loop.py`, `theme.Look`).
 - **A model call on a dead connection gives up after three minutes of silence, not
   ten.** Model replies were sent whole, so nothing arrived until an answer was
   finished and a connection the proxy had dropped looked exactly like a long answer:

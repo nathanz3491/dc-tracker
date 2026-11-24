@@ -70,31 +70,58 @@ def test_the_phase_under_way_is_the_last_one_open():
     assert phase is not None and phase.name == "free" and phase.ended is None
 
 
-def _draw(nights, state, now):
-    out = Console(width=120, file=io.StringIO(), color_system=None, legacy_windows=False)
-    out.print(loopstatus.render(nights, state, now=now))
+def _draw(nights, state, now, width=120, **how):
+    out = Console(width=width, file=io.StringIO(), color_system=None, legacy_windows=False)
+    out.print(loopstatus.render(nights, state, now=now, width=width, **how))
     return out.file.getvalue()
 
 
-def test_render_a_running_night_shows_its_bars_phase_and_history():
+def test_render_a_running_night_shows_its_meters_phase_and_history():
     state = loopstatus.Live(running=True, cny=11.25, tokens=18_000_000, searches=500)
     page = _draw(_nights(), state, dt.datetime(2026, 11, 3, 0, 20))
-    assert "RUNNING" in page
-    assert "Now in free for 9m" in page
-    assert "¥11.25 of tonight's ¥45.00; ¥33.75 still available" in page
-    assert "25%" in page and "18.0M of 88.5M" in page
-    assert "Where the time went" in page and "■ enrich" in page
+    assert "● running · 6h 18m so far" in page
+    assert "Phase     free · 9m · dates, geo" in page
+    assert "¥11.25 / ¥45.00   25%" in page and "18.0M / 88.5M" in page
     assert "12 more" in page and "57 fewer" in page
     assert "Round 2 so far" in page
     assert "The last 2 nights" in page and "fixed point" in page and "still running" in page
     assert "━" in page and "─" in page
 
 
+def test_the_night_is_drawn_as_a_line_of_time_beside_the_meters():
+    """The clock above the strip, the rounds under it, each kind of phase with its share."""
+    state = loopstatus.Live(running=True, cny=11.25, tokens=18_000_000, searches=500)
+    lines = _draw(_nights(), state, dt.datetime(2026, 11, 3, 0, 20)).splitlines()
+    [title] = [n for n, line in enumerate(lines) if "Where the time went" in line]
+    assert "nightly loop" in lines[title], "both columns start on the same row"
+    assert "18:01 → now · 6h 18m" in lines[title]
+    clock, strip, rounds = (line[-loopstatus.PANEL_W :] for line in lines[title + 2 : title + 5])
+    assert clock.startswith("18:01") and clock.endswith("now") and "21:00" in clock
+    assert strip == "█" * loopstatus.PANEL_W, "a phase was running the whole night"
+    assert rounds.startswith("╵round 1") and rounds.rstrip().endswith("╵2")
+    assert any("■ duplicates" in line and "4h 40m  74%" in line for line in lines)
+
+
+def test_a_narrow_terminal_gets_the_time_line_under_the_meters():
+    state = loopstatus.Live(running=True, cny=11.25)
+    lines = _draw(_nights(), state, dt.datetime(2026, 11, 3, 0, 20), width=90).splitlines()
+    [title] = [n for n, line in enumerate(lines) if "Where the time went" in line]
+    assert "nightly loop" not in lines[title] and "Rounds" in lines[title - 2]
+    assert max(len(line.rstrip()) for line in lines) <= 90
+
+
 def test_render_a_night_cut_off_says_so():
     nights = _nights()
     page = _draw(nights, loopstatus.Live(running=False), dt.datetime(2026, 11, 3, 9))
-    assert "CUT OFF" in page and "cut off" in page
+    assert "✗ cut off · last heard of at 00:10" in page
+    assert "by a reset, a power cut or a kill" in page
     assert "so far" not in page  # the phase list is for a night under way
+
+
+def test_a_finished_night_says_why_it_stopped():
+    page = _draw(_nights()[:1], loopstatus.Live(running=False), dt.datetime(2026, 11, 2, 9))
+    assert "✓ finished · took 3h 30m" in page
+    assert "Stopped   fixed point · the rounds moved nothing more" in page
 
 
 def test_a_spend_line_says_which_ceiling_stopped_the_night():
@@ -106,7 +133,31 @@ def test_a_spend_line_says_which_ceiling_stopped_the_night():
 
 def test_ascii_bars_for_a_console_that_cannot_draw_lines():
     assert loopstatus.bar(0.5, 10, ascii_only=True).plain == "=====-----"
-    assert loopstatus.bar(0.001, 10).plain == "━─────────"  # a sliver still shows
+    assert loopstatus.bar(0.25, 10).plain == "━━╸───────"  # to the half cell
+    assert loopstatus.bar(0.001, 10).plain == "╸─────────"  # a sliver still shows
+    state = loopstatus.Live(running=True, cny=11.25)
+    page = _draw(_nights(), state, dt.datetime(2026, 11, 3, 0, 20), ascii_only=True)
+    assert "* running | 6h 18m so far" in page and "'round 1" in page
+    assert not set("━╸─█■·→▲▼●▶✓✗╵…") & set(page)
+
+
+def test_the_palette_follows_what_the_terminal_can_show(monkeypatch):
+    """24-bit colour over ssh, where the terminal announces 256; never down a pipe."""
+    from tracker import theme
+    from tracker.cli import loop
+
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    plain = Console(file=io.StringIO(), color_system=None)
+    monkeypatch.setattr(loop, "console", plain)
+    assert loop._screen(loop.Palette.truecolor) == (plain, theme.XTERM), "no colour stays none"
+    limited = Console(file=io.StringIO(), color_system="256", force_terminal=True)
+    monkeypatch.setattr(loop, "console", limited)
+    screen, look = loop._screen(loop.Palette.auto)
+    assert screen.color_system == "truecolor" and look is theme.MERIDIAN
+    assert loop._screen(loop.Palette.xterm) == (limited, theme.XTERM)
+    monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
+    assert loop._screen(loop.Palette.auto) == (limited, theme.XTERM)
+    assert loop._screen(loop.Palette.truecolor)[1] is theme.MERIDIAN, "asked for by name"
 
 
 def test_cli_reads_the_log_beside_the_database(tmp_path, monkeypatch):
@@ -191,8 +242,8 @@ def test_the_mornings_line_on_rules_for_a_place_is_read_and_shown():
     )
     assert night.complete and night.stop is None, "the line ends nothing and stops nothing"
     page = _draw(nights, loopstatus.Live(running=False), dt.datetime(2026, 11, 6, 20))
-    assert "rules for a place: 38 saved page(s) read: 4 rule(s) kept (1 new); 23" in page
-    assert "rules for a place" not in _draw(
+    assert "Rules for a place  38 saved page(s) read: 4 rule(s) kept (1 new); 23" in page
+    assert "Rules for a place" not in _draw(
         _nights(), loopstatus.Live(running=False), dt.datetime(2026, 11, 3, 9)
     ), "a night before the rules shows no such line"
 
@@ -219,12 +270,13 @@ def test_render_shows_the_director_its_spend_steps_and_referee(tmp_path):
     ]  # fmt: skip
     state = loopstatus.Live(running=True, cny=5.0, director_cny=0.8, steps=steps)
     page = _draw(_directed(), state, dt.datetime(2026, 11, 6, 19, 30))
-    assert "Steps chosen by the director until it failed at 19:00" in page
-    assert "¥0.80 of its own ¥5" in page
+    assert "Steps by  the director until 19:00 · then fixed" in page
+    assert "it failed: a check-in ran past 15 minutes" in page
+    assert "Director  " in page and "¥0.80 / ¥5" in page
     assert "Step by step" in page and "+6 below" in page
     assert "(expected +4)" in page and "failed (exit 1)" in page
     assert "The referee" in page and "2 change(s)" in page
-    assert "accuracy: answer key: 1 became right" in page
+    assert "Accuracy" in page and "answer key: 1 became right" in page
     assert "director, fell back" in page, "the history says who chose each night"
 
 

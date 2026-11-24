@@ -264,9 +264,11 @@ caffeinate -i scripts/overnight.sh --hours 10
 ```
 
 `tracker loop` draws where the latest night has got to, on the host: money, tokens,
-searches, time and rounds used as bars against the night's ceilings, the work left
-against the start, each round's time, cost and effect, the phase under way, and the
-nights before it (`--watch 30` redraws every 30 seconds; `--json` for scripts).
+searches, time and rounds used as meters against the night's ceilings, the night as a
+line of time coloured by the phase that was running, the work left against the start,
+each round's time, cost and effect, the phase under way, and the nights before it
+(`--watch 30` redraws every 30 seconds; `--json` for scripts; `--palette 256` if the
+colours come out wrong on a terminal without 24-bit colour).
 `scripts/overnight.sh --status` prints the raw round lines from any other shell, with or
 without a venv, and `scripts/overnight.sh --help` lists every option (the same as
 `python -m tracker.overnight run --help`). Each round runs the free phases, then `audit` (a T1 gate, and cheap),

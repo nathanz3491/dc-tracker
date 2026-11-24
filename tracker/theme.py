@@ -13,6 +13,7 @@ down from them.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 #: Meridian's `.dark` tokens, by their CSS names without the leading `--`.
@@ -80,6 +81,52 @@ BOLD_PRIMARY: Final = f"bold {PRIMARY}"
 def badge(role: str) -> str:
     """A filled label (RUNNING, FINISHED) in a role's colour, dark text on it."""
     return f"bold {INK} on {role}"
+
+
+# --- the two looks of `tracker loop` ----------------------------------------------------
+#
+# `tracker loop` takes its style from the host's login banner: Meridian's own tokens
+# where the terminal shows 24-bit colour, and the hand-picked 256 above where it does
+# not, where the tokens would be squeezed into the pinks and olives described there.
+
+
+@dataclass(frozen=True)
+class Look:
+    primary: str
+    foreground: str
+    muted: str
+    #: Rules, and the unused part of a bar.
+    track: str
+    success: str
+    warning: str
+    danger: str
+    #: One colour per kind of phase on the night's time line, longest first.
+    chart: tuple[str, ...]
+
+
+#: Meridian's dark tokens as they are.
+MERIDIAN: Final = Look(
+    primary=TOKENS["primary"],
+    foreground=TOKENS["foreground"],
+    muted=TOKENS["muted-foreground"],
+    track=TOKENS["input"],
+    success=TOKENS["success"],
+    warning=TOKENS["warning"],
+    danger=TOKENS["danger"],
+    chart=tuple(TOKENS[f"chart-{n}"] for n in range(1, 6)),
+)
+
+#: The 256-colour roles above.
+XTERM: Final = Look(
+    primary=PRIMARY,
+    foreground=FOREGROUND,
+    muted=MUTED,
+    track=TRACK,
+    success=SUCCESS,
+    warning=WARNING,
+    danger=DANGER,
+    chart=CHART,
+)
 
 
 def textual_theme():
