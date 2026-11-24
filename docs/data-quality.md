@@ -554,6 +554,20 @@ values moved, all read by hand. It stays narrow because the obvious markers misf
 one campus's own total, and a data center's demand is described beside a power plant
 in most sentences about it.
 
+**A rule can be right about the money and still miss most of the sentences.** On
+2026-11-24 the purchase rule knew only "acquired … for $X", and every rule of the kind
+read only figures written with "$". Of the statements behind stored investment, 13
+were prices in another tense or as a noun, and once those were read, the same rows
+turned out to hold the price in further wordings too ("set to pay $90 million for",
+"this $670M transaction", "for a total transaction value of approximately $1.5
+billion"). Covering them emptied 11 stored figures on a copy of production. All 35
+newly refused sentences were read by hand as prices or fund-raises, and the answer
+key stayed at 200 right. Three candidates were measured and dropped. Bonds stay out,
+for the reason above. "Two data centers" stood beside four stored figures and never
+meant two campuses' sum: it meant one site's buildings, or a list of other campuses.
+Lawsuit wording stood beside nine stored figures, and each was the campus's own
+total.
+
 **A ruling is about a value, not a field.** Of the wrong answers whose right value had
 been read, 7 held it on a citation ruled out while it said something else; a re-read
 changed the claim to the right value and the ruling stayed. Re-reads now carry a

@@ -88,6 +88,8 @@ def test_a_possible_scaling_is_a_ceiling_not_the_plan(quote, value, expected):
             True,
         ),
         ("an investment of about $2 billion", 2e9, "investment_usd", True),
+        # Written in words, read the same.
+        ("nearly USD 3 billion planned campus investment", 3e9, "investment_usd", True),
         ("roughly 45 MW of IT load", 45, "mw_planned", True),
         ("around 1,200 megawatts", 1200, "mw_planned", True),
         ("a 1,300 MW campus", 1300, "mw_planned", False),

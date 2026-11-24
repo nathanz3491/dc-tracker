@@ -164,6 +164,21 @@ from tracker.ingest.crawl import wider_kind
             "investment_usd",
             None,
         ),
+        # A figure written in words is read like one with its "$".
+        (
+            "a plan to invest 10 billion dollars across several campuses in the state",
+            1e10,
+            "investment_usd",
+            "covers_more",
+        ),
+        # One site's two buildings are the campus, not more than it.
+        (
+            "Nebius has said publicly its total investment ranges from $13 billion to $15 billion "
+            "for two data centers and possibly a third on the site.",
+            13e9,
+            "investment_usd",
+            None,
+        ),
     ],
 )
 def test_a_figure_for_more_than_the_campus_is_named(quote, value, field, expected):

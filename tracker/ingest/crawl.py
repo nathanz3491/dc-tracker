@@ -2035,6 +2035,28 @@ def _implausible_investment(claims: dict[str, Any]) -> str | None:
 #: A dollar figure, as the sentence writes it: "$8.3 billion", "$8.1 B", "$573 million".
 _MONEY = r"\$\s?\d[\d.,]*\s*(?:billion|million|bn|mn|b|m)?\b"
 
+#: A dollar figure written without the sign: "63.5 million dollars", "USD 11bn", "17
+#: billion USD". Every rule below reads only "$" figures, so until 2026-11-24 "acquired
+#: the building ... for 63.5 million dollars" passed all of them. `_dollar_signs`
+#: rewrites these to the "$" form before any rule reads the sentence.
+_WORD_FIGURE = re.compile(
+    r"(?<![$\w.,])(\d[\d,]*(?:\.\d+)?)(?:\s*(billion|million|bn|mn))?\s+(?:u\.?s\.?\s+)?dollars\b"
+    r"|\busd\s*(\d[\d,]*(?:\.\d+)?)(?:\s*(billion|million|bn|mn|b|m)\b)?"
+    r"|(?<![$\w.,])(\d[\d,]*(?:\.\d+)?)\s*(billion|million|bn|mn)\s+usd\b"
+)
+
+
+def _dollar_signs(text: str) -> str:
+    """`text` with each dollar figure written in words given its "$" (`_WORD_FIGURE`)."""
+
+    def signed(match: re.Match[str]) -> str:
+        number = match.group(1) or match.group(3) or match.group(5)
+        unit = match.group(2) or match.group(4) or match.group(6)
+        return f"${number} {unit}" if unit else f"${number}"
+
+    return _WORD_FIGURE.sub(signed, text)
+
+
 #: Wording that makes the money directly beside it an extrapolation or a projection —
 #: somebody's arithmetic, not a figure a builder, a buyer or a filing committed to.
 #: Positional: the hedge must sit within the clause before the figure. "Potential"
@@ -2082,17 +2104,56 @@ _ABOUT = (
 #: What somebody paid for land, a building or a company. "Acquired ... for $X",
 #: "paid $X", "a $X acquisition". "For a $10 billion data center project" is not
 #: matched: the article between them is what separates a price from a project.
+#:
+#: Every tense, and the noun. On 2026-11-24 eight campuses' stored investment was a
+#: price only the past tense had been matched for: "has agreed to acquire ... for
+#: $58.1m", "agreed to purchase four data centers ... for $670 million", "is buying a
+#: 40-acre ... campus for $81.5 million", "completed the acquisition of two industrial
+#: properties ... for $60 million", "set to pay $90 million for", "this $670M
+#: transaction". Building, developing or expanding between the purchase and the figure
+#: makes the figure the project's cost ("plans to acquire land and build a data center
+#: for $500 million"), so none may stand there (`_NO_BUILDING`). The verb, not the
+#: noun: "acquired the building ... for 63.5 million dollars" is a purchase. A
+#: company's "Inc." does not end the sentence, and a press release's two names with
+#: their tickers can put 150 characters between the purchase and its price.
+_NO_BUILDING = (
+    r"(?:\b(?:inc|corp|co|ltd|llc|lp|plc)\.|"
+    r"(?!\b(?:build|builds|built|building (?:a|an|the|new|out|its|their)|"
+    r"construct(?:s|ed|ing|ion)?|develop(?:s|ed|ing)?|expand(?:s|ed|ing)?|expansion)\b)"
+    r"[^.;$]){0,160}?"
+)
+#: How a price follows its purchase: "for $X", "for a total transaction value of
+#: approximately $X", 'for "approximately $X"', "in a deal valued at about $X".
+_FOR_PRICE = (
+    r"\b(?:for|in an? (?:deal|transaction) (?:valued at|worth))\s+"
+    r"(?:a (?:total )?(?:transaction |purchase |deal )?(?:value|price|consideration) of\s+)?"
+    r"[\"“]?"
+)
 _PURCHASE_MONEY = re.compile(
-    r"\b(?:acquired|acquires|bought|buys|purchased|purchases|sold|sells)\b[^.;$]{0,100}?"
-    r"\bfor\s+"
+    r"\b(?:acquire[ds]?|acquiring|bought|buys?|buying|purchase[ds]?|purchasing|"
+    r"sold|sells?|selling)\b"
+    + _NO_BUILDING
+    + _FOR_PRICE
     + _ABOUT
     + _MONEY
-    + r"|\b(?:paid|pays|paying|purchase price of|sale price of)\s+"
+    + r"|\b(?:acquisition|sale) of\b"
+    + _NO_BUILDING
+    + _FOR_PRICE
     + _ABOUT
     + _MONEY
+    + r"|\b(?:paid|pays?|paying|purchase price of|sale price of|plunked down|shelled out|"
+    r"forked (?:out|over))\s+"
+    + _ABOUT
+    + _MONEY
+    # An offer names what it is for: "offered $90M for the 108-acre Hawthorne Race
+    # Course". Not "offered $120 million in tax incentives for the project".
+    + r"|\b(?:offered|offers?|bid|bids)\s+"
+    + _ABOUT
+    + _MONEY
+    + r"(?:\s+in cash)?\s+for\b"
     + r"|"
     + _MONEY
-    + r"(?:\s+[\w-]+){0,2}?\s+(?:acquisition|purchase|buyout)\b"
+    + r"(?:\s+[\w-]+){0,2}?\s+(?:acquisition|purchase|buyout|sale|transaction)\b"
 )
 
 #: A loan or a financing round: the borrowed share of a cost, not the cost. Bonds are
@@ -2101,13 +2162,15 @@ _PURCHASE_MONEY = re.compile(
 #:
 #: "Financing to $X" is a running total: "this brings the total Red Oak campus
 #: financing to $2.65 billion" was DataBank Red Oak's stored investment on 2026-11-12.
+#: Money still to be raised is borrowed too: "plans to raise $3.5 billion ... including
+#: leveraged loans and high-yield bonds" was TeraWulf Horse Cave's on 2026-11-24.
 _FINANCING_MONEY = re.compile(
     _MONEY
     + r"(?:\s+(?:in|of))?(?:\s+[\w-]+){0,2}?\s+(?:financing|loans?|credit facility|debt)\b"
     + r"|\b(?:loans?|financing|credit facility) (?:of|worth|totaling|totalling|to)\s+"
     + _ABOUT
     + _MONEY
-    + r"|\b(?:secured|raised|raises|obtained)\s+"
+    + r"|\b(?:secured|raised|raises|raise|raising|obtained)\s+"
     + _ABOUT
     + _MONEY
 )
@@ -2185,7 +2248,7 @@ def money_kind(quote: str | None, value: Any = None) -> str | None:
     """
     if not quote:
         return None
-    text = " ".join(str(quote).lower().split())
+    text = _dollar_signs(" ".join(str(quote).lower().split()))
     try:
         claimed = float(value) if value is not None and not isinstance(value, bool) else None
     except (TypeError, ValueError):
@@ -2213,7 +2276,9 @@ def money_kind(quote: str | None, value: Any = None) -> str | None:
 _MW_FIGURE = re.compile(r"\b(\d[\d,]*(?:\.\d+)?)\s*-?\s*(gw|mw|gigawatts?|megawatts?)\b")
 
 #: A figure for more than one campus. "Two" only with "campuses": "the two sites"
-#: is how a corridor or a split campus is described too.
+#: is how a corridor or a split campus is described too. "Two data centers" is not
+#: here at all: beside the four stored figures it stood next to on 2026-11-24 it meant
+#: one site's buildings, or a list of other campuses, never a sum.
 _MANY_SITES = re.compile(
     r"\b(?:multiple|several|both|three|four|five|six|\d+) "
     r"(?:new |separate |data[- ]cent(?:er|re) )*(?:campuses|sites|locations)\b"
@@ -2357,6 +2422,8 @@ def wider_kind(quote: str | None, value: Any, field: str) -> str | None:
     if claimed <= 0:
         return None
     text = " ".join(str(quote).lower().split())
+    if field == "investment_usd":
+        text = _dollar_signs(text)
     figures = [
         (before, after)
         for amount, before, after in _clause_figures(text, field)
@@ -2428,6 +2495,8 @@ def stated_roughly(quote: str | None, value: Any, field: str) -> bool:
     if claimed <= 0:
         return False
     text = " ".join(str(quote).lower().split())
+    if field == "investment_usd":
+        text = _dollar_signs(text)
     figures = [
         (amount, before)
         for amount, before, _ in _clause_figures(text, field)

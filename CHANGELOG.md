@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First working version. Nothing has been released yet, so everything below is the
 initial build of the v1 PRD.
 
+### Fixed
+
+- **A purchase price no longer counts as a campus's investment however the sentence
+  words it.** The rule that keeps a price paid for land, buildings or a company out of
+  a campus's investment knew only the past tense ("acquired … for $X"). On
+  2026-11-24, 11 campuses' stored investment was still a purchase price written
+  another way: "has agreed to acquire … for $58.1m", "is buying … for $81.5 million",
+  "completed the acquisition of … for $60 million", "set to pay $90 million for",
+  "this $670M transaction", "in a deal valued at about $1.5 billion". One more held
+  money still to be raised ("plans to raise $3.5 billion"). Every rule about what kind
+  of money a sentence states now also reads a figure written in words ("63.5 million
+  dollars", "USD 11bn"), which all of them missed before. Measured on a copy of
+  production: those 11 values go empty, every one of the 35 newly refused sentences
+  was read by hand as a price or a fund-raise, and the answer key stays at 200 right.
+  Refusing bonds, "two data centers" or lawsuit wording was measured as well and
+  rejected: each time, those described the campus's own figure. The figures stay on
+  their campuses as 待确认 evidence. The night's `backfill scope` and `backfill derive`
+  apply the rule the first night after it deploys (`crawl.money_kind`,
+  `_PURCHASE_MONEY`, `_FOR_PRICE`, `_NO_BUILDING`, `_FINANCING_MONEY`,
+  `_dollar_signs`).
+
 ### Changed
 
 - **A model call on a dead connection gives up after three minutes of silence, not

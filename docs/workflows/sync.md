@@ -771,8 +771,19 @@ cost" and the developer's own "estimated cost" are not enough — that is how or
 planned budgets are reported — the hedge must be on the figure claimed, and bonds are
 never financing here, because a county's revenue bonds are usually issued for a
 project's whole cost. A running total counts as financing too ("this brings the total
-Red Oak campus financing to $2.65 billion"). The same rule re-runs over stored claims
-every night in `backfill scope`; a stored value moves when its row is next re-derived.
+Red Oak campus financing to $2.65 billion"), and so does money still to be raised
+("plans to raise $3.5 billion"). A price is read in every tense and as a noun, however
+it follows the purchase: "has agreed to acquire … for $58.1m", "is buying … for $81.5
+million", "completed the acquisition of … for a total transaction value of
+approximately $1.5 billion", "set to pay $90 million for", "offered $90M for", "this
+$670M transaction", "in a deal valued at about $1.5 billion". Until 2026-11-24 only
+"acquired … for" was read, and 11 campuses' stored investment was a price written one
+of the other ways. Building, developing or expanding between the purchase and the
+figure makes it the project's cost ("plans to acquire land and build a data center
+for $500 million"), so that is not a price. Every one of these rules also reads a
+figure written in words ("63.5 million dollars", "USD 11bn"); before that date, none
+did. The same rule re-runs over stored claims every night in `backfill scope`; a
+stored value moves when its row is next re-derived.
 
 **A figure for more than the campus is never the campus's value either.** "A $22.3
 billion energy infrastructure campus", a power station converted into "an energy and
@@ -1107,7 +1118,7 @@ Touching any of these means the poster is in scope. Re-render with
 | Settle | `tracker/derive.py` — `run`; `tracker/keys.py` — `sync`; `tracker/companies.py` — `sync`, `attach`; `tracker/facts.py` — `rebuild`; `tracker/upsert.py` — `recompute_confidence`, `recompute_parties`, `apply_mw_basis` |
 | Parties, and what fills them without a crawl | `tracker/parties.py` — `rebuild` (copies an ended role from `party_tenure`, migration 0044), `reconcile`, `parties_by_key`, `_inferred_parties`, `split_names`, `same_company_names`, `known_keys` |
 | Which kind of megawatt a figure is | `tracker/ingest/crawl.py` — `axis_gate`, `_BASIS_MARKERS`; `tracker/vocab.py` — `basis_from_quote`, `BASIS_WINDOW`; `tracker/backfill.py` — `derive_basis`; `tracker/gapfill.py` — `_fact_axes` |
-| Money that is not spending on the site, and figures for more than the campus | `tracker/ingest/crawl.py` — `money_kind`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FINANCING_MONEY`, `_OTHER_MONEY`, `wider_kind`, `_clause_figures`, `_INFRASTRUCTURE_FOR_IT`, `_OPERATIONS`, `_MW_IS_PLANT`, `_EXPANSION_CEILING`, `stated_roughly`, `_ROUGHLY`, `online_kind`, `_BUILD_OUT`, `_FIRST_PART`, `construction_not_of_the_campus`; `tracker/vocab.py` — `MONEY_REFUSALS`, `READING_REFUSALS` (`build_out`); `tracker/upsert.py` — `_not_this_figure`, `_fallbacks_of_refused`, `rank_claims`, `rough_claims`, `hold_out_early_stops`; `tracker/backfill.py` — `regate_scope`, `_regate_money`, `regate_phases`; `tracker/capex.py` — `_demoted_investment` |
+| Money that is not spending on the site, and figures for more than the campus | `tracker/ingest/crawl.py` — `money_kind`, `_dollar_signs`, `_WORD_FIGURE`, `_SPECULATIVE_MONEY`, `_CONTRACT_MONEY`, `_PURCHASE_MONEY`, `_FOR_PRICE`, `_NO_BUILDING`, `_FINANCING_MONEY`, `_OTHER_MONEY`, `wider_kind`, `_clause_figures`, `_INFRASTRUCTURE_FOR_IT`, `_OPERATIONS`, `_MW_IS_PLANT`, `_EXPANSION_CEILING`, `stated_roughly`, `_ROUGHLY`, `online_kind`, `_BUILD_OUT`, `_FIRST_PART`, `construction_not_of_the_campus`; `tracker/vocab.py` — `MONEY_REFUSALS`, `READING_REFUSALS` (`build_out`); `tracker/upsert.py` — `_not_this_figure`, `_fallbacks_of_refused`, `rank_claims`, `rough_claims`, `hold_out_early_stops`; `tracker/backfill.py` — `regate_scope`, `_regate_money`, `regate_phases`; `tracker/capex.py` — `_demoted_investment` |
 | A citation's date: the article's, never the watch's sighting | `tracker/upsert.py` — `upsert_record` (`_published_at`); `tracker/dates.py` — `_propagate`; `tracker/ingest/crawl.py` — `record_url` |
 | A filing's date: SEC's record, never its page | `tracker/ingest/edgar.py` — `parse_filing_url`, `FilingDates`, `dates_of`; `tracker/ingest/crawl.py` — `run` (`filing_dates=`), `_filing_dates`, `_dated`; `tracker/upsert.py` — `upsert_record` (`read_dates=`); `tracker/dates.py` — `_ask_sec`, `_undated_filings`; `tracker/cli/quality.py` — `_backfill_dates` |
 | A month, quarter or half written as 1 January; a season or hedge read as its year | `tracker/normalize.py` — `period_named_in_quote`, `_named_before`, `_MONTH_THEN_YEAR`, `_QUARTER_THEN_YEAR`, `_HALF_THEN_YEAR`, `_HEDGE_THEN_YEAR`, `precision_in_quote`; `tracker/delays.py` — `period_end`; `tracker/gapfill.py` — `_fact_axes`; `tracker/ingest/crawl.py` — `build_records`, after `evidence_gate`; `tracker/backfill.py` — `derive_date_precision` |

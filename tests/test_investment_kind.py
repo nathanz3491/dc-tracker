@@ -145,6 +145,96 @@ from tracker.ingest.crawl import money_kind
             2e9,
             None,
         ),
+        # Every tense and the noun of a purchase, however the price follows it. On
+        # 2026-11-24 eleven campuses' stored investment was one of these.
+        (
+            "Cologix has agreed to acquire vXchnge's CA-01 data center campus in Santa Clara, "
+            "California for $58.1m, which it will rename as SV1.",
+            58.1e6,
+            "purchase_price",
+        ),
+        (
+            "Digital Realty is buying a 40-acre suburban Chicago office campus for $81.5 million",
+            81.5e6,
+            "purchase_price",
+        ),
+        (
+            "WhiteFiber has completed the acquisition of two industrial properties in Yadkin "
+            "County, North Carolina, for $60 million in cash.",
+            60e6,
+            "purchase_price",
+        ),
+        (
+            "MARA Holdings, Inc. today announced that it has entered into a definitive agreement "
+            "to acquire Long Ridge Energy & Power LLC from FTAI Infrastructure Inc. (NASDAQ: FIP) "
+            "for a total transaction value of approximately $1.5 billion.",
+            1.5e9,
+            "purchase_price",
+        ),
+        (
+            "MARA has agreed to buy Long Ridge Energy & Power in a deal valued at about $1.5 "
+            "billion.",
+            1.5e9,
+            "purchase_price",
+        ),
+        (
+            'MARA will acquire Long Ridge Energy for "approximately $1.5 billion," including debt.',
+            1.5e9,
+            "purchase_price",
+        ),
+        (
+            "Digital Realty Trust is set to pay $90 million for the 108-acre Hawthorne Race Course",
+            9e7,
+            "purchase_price",
+        ),
+        ("The unknown buyer that offered $90M for the 108-acre race course", 9e7, "purchase_price"),
+        (
+            "this $670M transaction added four data centers to DataBank's footprint",
+            6.7e8,
+            "purchase_price",
+        ),
+        ("The $90 million sale closed on 2 September 2026.", 9e7, "purchase_price"),
+        (
+            "The Brookfield subsidiary plunked down $97 million in cash for two data centers",
+            97e6,
+            "purchase_price",
+        ),
+        (
+            "CoreSite acquired the buildings from private equity and investment firm GI Partners "
+            "for $100 million",
+            1e8,
+            "purchase_price",
+        ),
+        # A figure written in words is money too.
+        (
+            "RagingWire acquired the building from SunPower in September 2019 for 63.5 million "
+            "dollars.",
+            63.5e6,
+            "purchase_price",
+        ),
+        ("Analysts estimate the campus will cost USD 20bn.", 20e9, "speculative"),
+        # Money still to be raised is borrowed.
+        (
+            "TeraWulf plans to raise $3.5 billion led by Morgan Stanley, including leveraged "
+            "loans and high-yield bonds, to expand its campus",
+            3.5e9,
+            "financing",
+        ),
+        # Building between the purchase and the price makes it the project's cost.
+        ("The company plans to acquire land and build a data center for $500 million.", 5e8, None),
+        (
+            "It will purchase the site and begin construction of the facility for $2 billion",
+            2e9,
+            None,
+        ),
+        # Money for the site, written in words.
+        ("Google will invest 17 billion dollars in Laramie County.", 17e9, None),
+        # An offer of something else than a price.
+        (
+            "the county offered $120 million in tax incentives for the project",
+            1.2e8,
+            "not_spending",
+        ),
     ],
 )
 def test_money_that_is_not_spending_is_named(quote, value, expected):
