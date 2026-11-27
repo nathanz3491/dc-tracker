@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 from tracker import blocks as blocks_mod
+from tracker import delays
 
 HELD: Final = "held"
 REPORTED: Final = "reported"
@@ -205,9 +206,15 @@ def _phase_not_behind_tranches(projects: list[Any], _context: Any) -> list[Viola
 
 
 def _announced_before_online(projects: list[Any], _context: Any) -> list[Violation]:
+    """Read the way `logic` reads it: the online date's whole period has to end first."""
     out = []
     for p in projects:
-        if p.first_announced and p.expected_online and p.expected_online < p.first_announced:
+        if (
+            p.first_announced
+            and p.expected_online
+            and delays.period_end(p.expected_online, p.expected_online_precision)
+            < p.first_announced
+        ):
             out.append(
                 Violation(
                     p.id,

@@ -12,6 +12,13 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **An online date given only as a year no longer reads as earlier than the
+  announcement in the same year.** "2025" is stored as 1 January 2025, so a campus
+  due online in 2025 and announced in July 2025 was reported as coming online before
+  it was announced, and on 2026-11-25 the night's agent cleared Meta Prometheus's
+  correct online date to settle it. The check, and the nightly invariant that counts
+  the same thing, now require the whole year (or quarter, or month) the online date
+  names to end before the announcement.
 - **A purchase price no longer counts as a campus's investment however the sentence
   words it.** The rule that keeps a price paid for land, buildings or a company out of
   a campus's investment knew only the past tense ("acquired … for $X"). On

@@ -176,6 +176,29 @@ def test_a_date_cannot_precede_the_announcement(session):
     assert "online_before_announced" not in _codes(forwards)
 
 
+def test_a_coarse_online_date_is_read_as_its_whole_period(session):
+    """Meta Prometheus: online "2025", announced July 2025. Not a contradiction."""
+    same_year = _project(
+        session,
+        name="A",
+        first_announced=dt.date(2025, 7, 1),
+        first_announced_precision="month",
+        expected_online=dt.date(2025, 1, 1),
+        expected_online_precision="year",
+    )
+    assert "online_before_announced" not in _codes(same_year)
+
+    quarter_over = _project(
+        session,
+        name="B",
+        first_announced=dt.date(2025, 7, 1),
+        expected_online=dt.date(2025, 4, 1),
+        expected_online_precision="quarter",
+    )
+    (finding,) = [f for f in logic.check_rules(quarter_over) if f.code == "online_before_announced"]
+    assert "Q2 2025" in finding.summary
+
+
 # --- the phase against what is underneath it ------------------------------------
 
 

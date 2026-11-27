@@ -785,16 +785,24 @@ def _check_rules(project: Project) -> list[Finding]:
     out.extend(_check_stored_against_evidence(project))
 
     # --- the dates against each other ----------------------------------------
+    # The whole period the online date names has to end before the announcement.
+    # "2025" is stored as 2025-01-01, so comparing the stored days called Meta
+    # Prometheus (online 2025, announced July 2025) impossible on 2026-11-25, and the
+    # resolver cleared a correct date. The announcement is read at its stored day,
+    # the earliest it can be, so a finding means no reading of the two agrees.
     if (
         project.first_announced
         and project.expected_online
-        and project.expected_online < project.first_announced
+        and delays.period_end(project.expected_online, project.expected_online_precision)
+        < project.first_announced
     ):
         add(
             "online_before_announced",
             ERROR,
-            f"expected online {project.expected_online} is before it was first "
-            f"announced on {project.first_announced}",
+            "expected online "
+            f"{delays.stated(project.expected_online, project.expected_online_precision)} "
+            "is before it was first announced in "
+            f"{delays.stated(project.first_announced, project.first_announced_precision)}",
             ("expected_online", "first_announced"),
             "usually a year misread from a source, or two campuses conflated",
         )
