@@ -729,6 +729,10 @@ class Rollup:
     #: #1608's 3 MW on 2026-10-19, a figure one quoted tranche states.
     planned_from: tuple[str, ...] = ()
     built_from: tuple[str, ...] = ()
+    #: Top-level parts of the campus, still going, that state no quoted capacity —
+    #: neither their own nor through the parts inside them. While any is left,
+    #: `mw_planned` above is the sum of some of the campus, not of all of it.
+    unsized: tuple[str, ...] = ()
 
 
 def placeable(
@@ -1447,6 +1451,13 @@ def rollup(blocks: list[Any], nested: Structure | None = None) -> Rollup:
         k for k in tree.in_placed if tree.remainder.get(k) and tree.remainder[k].confirmed > 0
     ]
     built_from = [k for k in contributing if tree.remainder[k].live > 0]
+    unsized = tuple(
+        sorted(
+            k
+            for k in tree.placed_roots
+            if tree.status[k] not in BLOCK_TERMINAL and tree.eff[k].confirmed <= 0
+        )
+    )
 
     # Which buyer the tranches name, largest first, for `reconcile`'s fill and the
     # disclosure. Every counted tranche that names one, as before the tree — a buyer
@@ -1489,6 +1500,7 @@ def rollup(blocks: list[Any], nested: Structure | None = None) -> Rollup:
         generation=generation,
         planned_from=tuple(sorted(contributing)),
         built_from=tuple(sorted(built_from)),
+        unsized=unsized,
     )
 
 
@@ -2036,7 +2048,9 @@ def reconcile(project: Any) -> list[str]:
     **It may fill a null, never overwrite a cited figure** — `mw_planned`, `mw_built`
     and `customer`. That is the guarantee which makes this safe over an existing
     database: a project with no blocks is untouched, so rows predating this are
-    unaffected and the "9 of 12" count can only go up.
+    unaffected and the "9 of 12" count can only go up. `mw_planned` is filled only
+    when every part still going states a size (`Rollup.unsized` is empty): the sum
+    of the parts that do is otherwise a piece of the campus filed as all of it.
 
     `phase` is the one exception, on purpose. It is a ladder, not a sum: two tranches
     both `serving` cannot add up to something further along, so the double-counting
@@ -2084,7 +2098,20 @@ def reconcile(project: Any) -> list[str]:
     notes: list[str] = []
 
     if got.mw_planned is not None:
-        if project.mw_planned is None:
+        if project.mw_planned is None and got.unsized:
+            # A sum of some parts is not the campus. Google Haskell County (#1844)
+            # had nine tranches, one with a figure (JNR2A, 200 MW), and on 2026-11-25
+            # the empty campus total became 200 MW against an answer key that says
+            # none is published. Every part has to state a size before the sum fills.
+            labels = sorted(b.label for b in project.blocks if b.block_key in got.unsized)
+            shown = ", ".join(labels[:3]) + (
+                f" and {len(labels) - 3} more" if len(labels) > 3 else ""
+            )
+            notes.append(
+                f"tranches state {got.mw_planned:g} MW, but {shown} state no capacity; "
+                "left the campus figure empty — the sum covers only part of the campus"
+            )
+        elif project.mw_planned is None:
             project.mw_planned = got.mw_planned
         elif got.mw_planned > project.mw_planned:
             notes.append(

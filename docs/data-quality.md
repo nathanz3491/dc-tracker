@@ -208,7 +208,10 @@ of investment, 6,699 MW planned and 812 MW built — among them $450B on one Mic
 campus whose only article gives that figure for the whole Stargate programme. For
 the seven claim-owned fields (`upsert.CLAIM_OWNED_FIELDS`) no live claim now means
 no value, the tranche and party reconciles may still refill it from their own
-citations, and a rule's decision line in the notes records what was cleared. So
+citations, and a rule's decision line in the notes records what was cleared. The
+tranches refill a planned capacity only when every part of the campus still going
+states a size: one tranche of nine with a figure is part of the campus, and on
+2026-11-25 Google Haskell County took that tranche's 200 MW as its whole. So
 `value_without_evidence` fires only between a citation going away and the next
 `backfill derive`, which answers it.
 

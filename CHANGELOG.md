@@ -12,6 +12,15 @@ initial build of the v1 PRD.
 
 ### Fixed
 
+- **A campus's planned capacity is no longer filled from a few of its tranches.**
+  When no source gives a campus total, the sum of its tranches stood in for one even
+  when most tranches had no figure: Google Haskell County became 200 MW on
+  2026-11-25 from one of its nine parts, against an answer key that says no total
+  is published. The sum now fills the campus only when every part still going states
+  a size, and the notes say which parts did not. On the 2026-11-27 copy 16
+  campuses lose such a total (Amazon New Albany's 240 MW was one phase of eight
+  groups of buildings); the answer key gains one right answer and loses none, and
+  `logic check` reports four fewer contradictions.
 - **An online date given only as a year no longer reads as earlier than the
   announcement in the same year.** "2025" is stored as 1 January 2025, so a campus
   due online in 2025 and announced in July 2025 was reported as coming online before

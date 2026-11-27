@@ -525,7 +525,41 @@ def test_reconcile_still_fills_a_null_total(session):
     assert row.mw_planned == 300.0
 
 
-def test_reconcile_discloses_a_built_figure_the_tranches_exceed(session):
+def test_reconcile_leaves_the_total_empty_when_a_part_states_no_size(session):
+    """Google Haskell County (#1844): one tranche of nine had a figure, and it became
+    the campus's. A part still going with no size means the sum is not the campus;
+    one that stopped does not."""
+    from tracker import blocks as blocks_mod
+    from tracker.models import CapacityBlock, Project
+
+    def campus(name, tranches):
+        row = Project(
+            name=name,
+            company="Google",
+            city="Haskell",
+            state="TX",
+            dedup_key=f"google|{name}",
+            phase="construction",
+        )
+        for key, mw, status in tranches:
+            row.blocks.append(CapacityBlock(block_key=key, label=key, mw=mw, status=status))
+        session.add(row)
+        session.flush()
+        return row
+
+    partial = campus(
+        "partial", [("jnr2a", 200.0, "under_construction"), ("thelma", None, "under_construction")]
+    )
+    notes = blocks_mod.reconcile(partial)
+    assert partial.mw_planned is None
+    assert any("thelma state no capacity" in n for n in notes), notes
+
+    stopped = campus(
+        "stopped", [("jnr2a", 200.0, "under_construction"), ("thelma", None, "cancelled")]
+    )
+    blocks_mod.reconcile(stopped)
+    assert stopped.mw_planned == 200.0
+
     """`mw_built` carried the other half of the Hyperion mistake, found second.
 
     The fix was applied to `mw_planned` and the next clause went on raising
@@ -535,7 +569,6 @@ def test_reconcile_discloses_a_built_figure_the_tranches_exceed(session):
     lowered `mw_built` to what the claims support, and this raised it straight back.
     """
     from tracker import blocks as blocks_mod
-    from tracker.models import CapacityBlock, Project
 
     row = Project(
         name="Restated",
